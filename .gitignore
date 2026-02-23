@@ -1,0 +1,72 @@
+# ══════════════════════════════════════════════
+# Ghost Protocol — .gitignore
+# ══════════════════════════════════════════════
+
+# ── 🔑 보안: 절대 커밋 금지 ──────────────────
+.env
+.env.local
+.env.production
+.env.staging
+!.env.example
+accounts.json
+*.pem
+*.key
+secrets.json
+
+# ── 📦 데이터 & DB ───────────────────────────
+data/
+*.db
+*.sqlite
+*.sqlite3
+*.csv
+*.jsonl
+
+# ── 🐍 Python ────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.egg
+*.egg-info/
+dist/
+build/
+*.spec
+*.whl
+*.so
+
+# ── 🖥️ 빌드 아티팩트 ──────────────────────────
+*.exe
+*.pkg
+*.dmg
+error_screenshot_*.png
+
+# ── 📓 Jupyter ───────────────────────────────
+.ipynb_checkpoints/
+*.ipynb
+
+# ── 🌐 가상환경 ───────────────────────────────
+venv/
+.venv/
+env/
+.env/
+ENV/
+
+# ── 🛠️ IDE & 에디터 ──────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── 🗂️ 임시 파일 ─────────────────────────────
+*.log
+*.tmp
+*.bak
+nul
+
+# ── 🎭 Playwright ────────────────────────────
+playwright-report/
+test-results/
