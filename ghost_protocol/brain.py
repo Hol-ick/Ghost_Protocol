@@ -1,7 +1,7 @@
 """Ghost Protocol v5.0 — Gemini-powered post generation.
 
 Pipeline:
-  .env (GEMINI_API_KEY) → genai.configure()
+  .env (GEMINI_API_KEY) → genai.Client(api_key=...)
   DB (winner posts)     → Few-shot examples (content ≤ 300 chars)
   DB (recent posts)     → Context injection ("gallery mood")
                               ↓
@@ -10,6 +10,7 @@ Pipeline:
 Model: gemini-2.5-flash (무료 티어 최적)
 Safety: BLOCK_NONE (전 카테고리 검열 해제)
 Output: XML tag regex parsing (JSON 대비 에러 방지)
+SDK: google-genai (google.genai) — 신규 공식 SDK
 """
 
 import json
@@ -17,7 +18,8 @@ import os
 import re
 from typing import Optional
 
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from dotenv import load_dotenv
 
 from . import database
@@ -34,10 +36,10 @@ MODEL_NAME = "gemini-2.5-flash"
 # Safety Settings: 전 카테고리 검열 해제
 # ══════════════════════════════════════════════
 SAFETY_SETTINGS = [
-    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+    types.SafetySetting(category="HARM_CATEGORY_HARASSMENT",        threshold="BLOCK_NONE"),
+    types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH",       threshold="BLOCK_NONE"),
+    types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="BLOCK_NONE"),
+    types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="BLOCK_NONE"),
 ]
 
 # ══════════════════════════════════════════════
@@ -130,7 +132,7 @@ class GhostBrain:
     """DC Inside 스타일 게시글 생성기 -- Gemini 2.5 Flash 고정."""
 
     def __init__(self, api_key: Optional[str] = None):
-        """Gemini 클라이언트 초기화.
+        """Gemini 클라이언트 초기화 (google.genai 신규 SDK).
 
         Args:
             api_key: Gemini API key (None이면 .env에서 GEMINI_API_KEY 로딩)
@@ -141,12 +143,7 @@ class GhostBrain:
                 "Gemini API Key가 없습니다. "
                 ".env 파일에 GEMINI_API_KEY를 설정하거나 사이드바에 입력하세요."
             )
-        genai.configure(api_key=key)
-        self.model = genai.GenerativeModel(
-            model_name=MODEL_NAME,
-            safety_settings=SAFETY_SETTINGS,
-            system_instruction=SYSTEM_PROMPT_BASE,
-        )
+        self._client = genai.Client(api_key=key)
         self.model_name = MODEL_NAME
 
     # ══════════════════════════════════════════════
@@ -235,14 +232,16 @@ class GhostBrain:
             )
 
         try:
-            config = genai.GenerationConfig(
+            _cfg = types.GenerateContentConfig(
+                system_instruction=SYSTEM_PROMPT_BASE,
+                safety_settings=SAFETY_SETTINGS,
                 temperature=0.9,
                 max_output_tokens=50,
             )
-            response = self.model.generate_content(
-                prompt,
-                generation_config=config,
-                safety_settings=SAFETY_SETTINGS,
+            response = self._client.models.generate_content(
+                model=MODEL_NAME,
+                contents=prompt,
+                config=_cfg,
             )
             # 디버깅: 원시 응답 출력
             raw_text = response.text.strip()
@@ -380,17 +379,19 @@ class GhostBrain:
 
         prompt = "\n\n---\n\n".join(parts)
 
-        # ── Gemini API 호출 (명시적 GenerationConfig + 429 안전 처리) ──
-        config = genai.GenerationConfig(
+        # ── Gemini API 호출 (GenerateContentConfig + 429 안전 처리) ──
+        _cfg = types.GenerateContentConfig(
+            system_instruction=SYSTEM_PROMPT_BASE,
+            safety_settings=SAFETY_SETTINGS,
             max_output_tokens=2048,
             temperature=0.9,
         )
 
         try:
-            response = self.model.generate_content(
-                prompt,
-                generation_config=config,
-                safety_settings=SAFETY_SETTINGS,
+            response = self._client.models.generate_content(
+                model=MODEL_NAME,
+                contents=prompt,
+                config=_cfg,
             )
         except Exception as e:
             if self._is_rate_limit_error(e):

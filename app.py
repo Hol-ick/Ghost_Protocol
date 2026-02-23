@@ -455,7 +455,7 @@ with st.sidebar:
     )
 
     st.divider()
-    if st.button("🔄 스탯 초기화", use_container_width=True):
+    if st.button("🔄 스탯 초기화", width="stretch"):
         st.session_state.posts_success = 0
         st.session_state.posts_failed = 0
         st.session_state.swarm_log = []
@@ -515,7 +515,7 @@ _fire_disabled = not has_any_key or not (swarm_topic or "").strip()
 st.markdown('<div class="fire-btn">', unsafe_allow_html=True)
 fire_clicked = st.button(
     "🔥  FIRE  —  폭격 개시",
-    use_container_width=True,
+    width="stretch",
     type="primary",
     disabled=_fire_disabled,
 )
