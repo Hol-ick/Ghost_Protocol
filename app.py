@@ -429,7 +429,9 @@ async def _status_callback(text: str, is_alert: bool):
     _safe_state_set("status_text", text)
 
 
-async def _run_scrape(gallery_id: str, time_limit_hours: float, headless: bool):
+async def _run_scrape(
+    gallery_id: str, time_limit_hours: float, headless: bool, gallery_type: str = "mgallery"
+):
     scraper = GalleryScraper(headless=headless)
     try:
         _safe_state_set("status_text", "INITIALIZING...")
@@ -439,6 +441,7 @@ async def _run_scrape(gallery_id: str, time_limit_hours: float, headless: bool):
             log=_log_callback,
             progress=_progress_callback,
             status_cb=_status_callback,
+            gallery_type=gallery_type,
         )
         _safe_state_set("total_posts", scraper.stats_posts_scraped)
         _safe_state_set("total_comments", scraper.stats_comments_scraped)
@@ -453,11 +456,15 @@ async def _run_scrape(gallery_id: str, time_limit_hours: float, headless: bool):
         _safe_state_set("scan_complete", True)
 
 
-def _thread_target(gallery_id: str, time_limit_hours: float, headless: bool):
+def _thread_target(
+    gallery_id: str, time_limit_hours: float, headless: bool, gallery_type: str = "mgallery"
+):
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
-        loop.run_until_complete(_run_scrape(gallery_id, time_limit_hours, headless))
+        loop.run_until_complete(
+            _run_scrape(gallery_id, time_limit_hours, headless, gallery_type)
+        )
     finally:
         loop.close()
 
@@ -530,9 +537,23 @@ with st.sidebar:
     gallery_id = st.text_input(
         "🎯 Gallery ID",
         value="stockus",
-        help="DC Inside 갤러리 ID",
+        help="DC Inside 갤러리 ID (예: stockus, universe, baseball_new9)",
         disabled=st.session_state.is_scanning,
     )
+
+    _gallery_type_map = {
+        "마이너 (mgallery)": "mgallery",
+        "정규 (board)": "board",
+        "미니 (mini)": "mini",
+    }
+    _gallery_type_label = st.selectbox(
+        "🏷️ 갤러리 타입",
+        options=list(_gallery_type_map.keys()),
+        index=0,
+        help="정규 갤러리(예: universe)는 'board', 마이너 갤러리(예: stockus)는 'mgallery'",
+        disabled=st.session_state.is_scanning,
+    )
+    gallery_type = _gallery_type_map[_gallery_type_label]
 
     tone_map = {
         "🧊 냉소적 (Cynical)": "cynical",
@@ -715,7 +736,7 @@ with col_main:
         st.session_state.gallery_id_last = gallery_id
         t = threading.Thread(
             target=_thread_target,
-            args=(gallery_id, time_limit, headless),
+            args=(gallery_id, time_limit, headless, gallery_type),
             daemon=True,
         )
         add_script_run_ctx(t)
@@ -901,7 +922,7 @@ with col_main:
                         post_log_container.code(log_text, language="text")
                         add_log(msg)
 
-                    poster = GhostPoster(headless=headless, gallery_type="mgallery")
+                    poster = GhostPoster(headless=headless, gallery_type=gallery_type)
                     loop = asyncio.new_event_loop()
                     try:
                         post_result = loop.run_until_complete(
@@ -967,6 +988,7 @@ with col_main:
                                 log=_log_callback,
                                 progress=_progress_callback,
                                 status_cb=_status_callback,
+                                gallery_type=gallery_type,
                             )
                         )
                         scan_loop.close()
@@ -1012,7 +1034,7 @@ with col_main:
 
                     # 4) auto_post
                     swarm_log(f"[SWARM {wave}] 🚀 자동 포스팅 시작...")
-                    poster = GhostPoster(headless=headless, gallery_type="mgallery")
+                    poster = GhostPoster(headless=headless, gallery_type=gallery_type)
                     post_loop = asyncio.new_event_loop()
                     try:
                         post_result = post_loop.run_until_complete(

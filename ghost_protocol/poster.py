@@ -16,7 +16,7 @@ from typing import Callable, Optional
 
 from playwright.async_api import async_playwright
 
-from .config import USER_AGENTS
+from .config import USER_AGENTS, WRITE_URL_PATTERNS, get_write_url
 
 # ══════════════════════════════════════════════
 # 계정 관리
@@ -24,13 +24,6 @@ from .config import USER_AGENTS
 ACCOUNTS_PATH = os.path.join(
     os.path.dirname(os.path.dirname(__file__)), "accounts.json"
 )
-
-# 글쓰기 URL 패턴 (갤러리 타입별)
-WRITE_URL_PATTERNS = {
-    "board": "https://gall.dcinside.com/board/write/?id={gallery_id}",
-    "mgallery": "https://gall.dcinside.com/mgallery/board/write/?id={gallery_id}",
-    "mini": "https://gall.dcinside.com/mini/board/write/?id={gallery_id}",
-}
 
 LOGIN_URL = "https://sign.dcinside.com/login"
 
@@ -317,10 +310,8 @@ class GhostPoster:
             log(f"[POSTER] ☕ 로그인 후 세션 안정화 대기 중... ({_session_jitter}ms)")
         await page.wait_for_timeout(_session_jitter)
 
-        # 글쓰기 페이지 이동
-        write_url = WRITE_URL_PATTERNS.get(
-            self._gallery_type, WRITE_URL_PATTERNS["mgallery"]
-        ).format(gallery_id=gallery_id)
+        # 글쓰기 페이지 이동 — 타입별 URL 동적 생성
+        write_url = get_write_url(self._gallery_type, gallery_id)
 
         if log:
             log(f"[POSTER] 📄 글쓰기 페이지 이동 중... ({self._gallery_type}/{gallery_id})")

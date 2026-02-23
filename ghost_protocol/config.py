@@ -11,22 +11,53 @@ DB_PATH = os.path.join(DATA_DIR, "ghost_protocol.db")
 # ──────────────────────────────────────────────
 # DC Inside URL patterns
 # ──────────────────────────────────────────────
+
+# 갤러리 타입별 목록(list) URL
 GALLERY_PATTERNS = {
-    "board": "https://gall.dcinside.com/board/lists/?id={gallery_id}",
+    "board":    "https://gall.dcinside.com/board/lists/?id={gallery_id}",
     "mgallery": "https://gall.dcinside.com/mgallery/board/lists/?id={gallery_id}",
-    "mini": "https://gall.dcinside.com/mini/board/lists/?id={gallery_id}",
+    "mini":     "https://gall.dcinside.com/mini/board/lists/?id={gallery_id}",
 }
 
+# 갤러리 타입별 글보기(view) URL
 POST_URL_PATTERNS = {
-    "board": "https://gall.dcinside.com/board/view/?id={gallery_id}&no={post_id}",
+    "board":    "https://gall.dcinside.com/board/view/?id={gallery_id}&no={post_id}",
     "mgallery": "https://gall.dcinside.com/mgallery/board/view/?id={gallery_id}&no={post_id}",
-    "mini": "https://gall.dcinside.com/mini/board/view/?id={gallery_id}&no={post_id}",
+    "mini":     "https://gall.dcinside.com/mini/board/view/?id={gallery_id}&no={post_id}",
+}
+
+# 갤러리 타입별 글쓰기(write) URL — poster.py / app.py 공유
+WRITE_URL_PATTERNS = {
+    "board":    "https://gall.dcinside.com/board/write/?id={gallery_id}",
+    "mgallery": "https://gall.dcinside.com/mgallery/board/write/?id={gallery_id}",
+    "mini":     "https://gall.dcinside.com/mini/board/write/?id={gallery_id}",
 }
 
 # Redirect-based gallery detection: 메이저 갤러리 URL로 접속 후 리다이렉트 확인
 GALLERY_DETECT_URL = "https://gall.dcinside.com/board/lists/?id={gallery_id}"
 # DC Inside 메인 페이지 (갤러리 없으면 여기로 튕김)
 DC_MAIN_URL = "https://gall.dcinside.com"
+
+# ──────────────────────────────────────────────
+# URL 헬퍼 — 타입별 동적 URL 생성
+# ──────────────────────────────────────────────
+
+def get_list_url(gallery_type: str, gallery_id: str) -> str:
+    """갤러리 목록 URL 생성 (board / mgallery / mini 자동 분기)."""
+    pattern = GALLERY_PATTERNS.get(gallery_type, GALLERY_PATTERNS["mgallery"])
+    return pattern.format(gallery_id=gallery_id)
+
+
+def get_write_url(gallery_type: str, gallery_id: str) -> str:
+    """글쓰기 URL 생성 (board / mgallery / mini 자동 분기)."""
+    pattern = WRITE_URL_PATTERNS.get(gallery_type, WRITE_URL_PATTERNS["mgallery"])
+    return pattern.format(gallery_id=gallery_id)
+
+
+def get_view_url(gallery_type: str, gallery_id: str, post_id: str) -> str:
+    """글 보기 URL 생성 (board / mgallery / mini 자동 분기)."""
+    pattern = POST_URL_PATTERNS.get(gallery_type, POST_URL_PATTERNS["mgallery"])
+    return pattern.format(gallery_id=gallery_id, post_id=post_id)
 
 # ──────────────────────────────────────────────
 # Anti-crawling & Stealth

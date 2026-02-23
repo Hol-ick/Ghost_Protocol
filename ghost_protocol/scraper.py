@@ -944,6 +944,7 @@ class GalleryScraper:
         log: Optional[LogCallback] = None,
         progress: Optional[ProgressCallback] = None,
         status_cb: Optional[StatusCallback] = None,
+        gallery_type: Optional[str] = None,
     ) -> int:
         """v1.6 파이프라인 — 시간 기반 수집 + Memory Dedup.
 
@@ -954,6 +955,8 @@ class GalleryScraper:
         Args:
             time_limit_hours: >0이면 시간 기반 수집 (페이지 무제한, 날짜 초과 시 중단)
                               0이면 기존 num_pages 기반 수집
+            gallery_type: 'board' / 'mgallery' / 'mini' 명시 시 자동 탐지 스킵
+                          None이면 Playwright redirect 분석으로 자동 탐지
         """
         self._stop_flag = False
         self._block_count = 0
@@ -987,9 +990,17 @@ class GalleryScraper:
                 await log(f"> Mode: {mode_str} | Workers: {PARALLEL_WORKERS}")
                 await log(f"> Stream save: {self._stream.posts_path}")
 
-            gtype = await self.detect_gallery_type(gallery_id, log)
-            if not gtype:
-                return 0
+            # gallery_type이 UI에서 명시 지정된 경우 자동 탐지 스킵
+            if gallery_type and gallery_type in ("board", "mgallery", "mini"):
+                gtype = gallery_type
+                self.gallery_type = gtype
+                self.gallery_id = gallery_id
+                if log:
+                    await log(f"[DETECT] 수동 지정 타입: {gtype} (자동 탐지 스킵)")
+            else:
+                gtype = await self.detect_gallery_type(gallery_id, log)
+                if not gtype:
+                    return 0
 
             database.init_db()
 
