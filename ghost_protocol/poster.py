@@ -7,6 +7,7 @@ Pipeline:
   log_callback  → real-time UI logging
 """
 
+import asyncio
 import json
 import os
 import random
@@ -93,11 +94,16 @@ class GhostPoster:
         self._page = None
 
     async def _take_death_cam(self, log: Optional[Callable] = None) -> None:
-        """에러 직전 스크린샷 캡처 (Death Cam)."""
+        """에러 직전 스크린샷 캡처 (Death Cam) — logs/screenshots/ 저장."""
         if not self._page:
             return
         try:
-            fname = f"error_screenshot_{int(time.time())}.png"
+            # logs/screenshots/ 폴더 자동 생성
+            screenshots_dir = os.path.join(
+                os.path.dirname(os.path.dirname(__file__)), "logs", "screenshots"
+            )
+            os.makedirs(screenshots_dir, exist_ok=True)
+            fname = os.path.join(screenshots_dir, f"error_screenshot_{int(time.time())}.png")
             await self._page.screenshot(path=fname)
             if log:
                 log(f"[POSTER] 📸 에러 화면 스크린샷 저장 완료: {fname}")
@@ -136,6 +142,19 @@ class GhostPoster:
                 "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
             )
             self._page = await self._context.new_page()
+
+            # ── JS 팝업 자동 감지 & 닫기 리스너 ──
+            # IP 차단, 비밀번호 오류, CAPTCHA 등 alert/confirm 팝업 방어
+            async def _handle_dialog(dialog):
+                try:
+                    msg = dialog.message
+                    if log:
+                        log(f"[POSTER] ⚠️ 팝업 감지 (자동 닫기): {msg[:100]}")
+                    await dialog.dismiss()
+                except Exception:
+                    pass
+
+            self._page.on("dialog", lambda d: asyncio.ensure_future(_handle_dialog(d)))
 
             if log:
                 mode = "Headless" if self._headless else "Visible"
@@ -190,7 +209,11 @@ class GhostPoster:
 
         try:
             await page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=15000)
-            await page.wait_for_timeout(1500)
+            # Jitter: 페이지 로드 후 인간적인 정착 딜레이
+            _jitter = int(random.uniform(2000, 4500))
+            if log:
+                log(f"[POSTER] ⏳ 페이지 안정화 대기... ({_jitter}ms)")
+            await page.wait_for_timeout(_jitter)
         except Exception as e:
             if log:
                 log(f"[POSTER] [ERROR] 로그인 페이지 로드 실패: {str(e)[:100]}")
@@ -198,15 +221,17 @@ class GhostPoster:
             return False
 
         if log:
-            log("[POSTER] ⌨️ 아이디 입력 중 (visible + fill)...")
+            log("[POSTER] ⌨️ 아이디 입력 중 (human typing, delay=100ms)...")
 
         try:
             id_input = page.locator(
                 "input[placeholder='식별 코드'], #user_id"
             ).locator("visible=true").first
             await id_input.click()
-            await id_input.fill(user_id)
-            await page.wait_for_timeout(300)
+            # fill() → type(): 인간의 타이핑 속도 모방 (100ms/char)
+            await id_input.type(user_id, delay=100)
+            # Jitter: 필드 간 이동 전 짧은 휴식
+            await page.wait_for_timeout(int(random.uniform(400, 900)))
         except Exception as e:
             if log:
                 log(f"[POSTER] [ERROR] 아이디 셀렉터 실패: {str(e)[:100]}")
@@ -214,15 +239,17 @@ class GhostPoster:
             return False
 
         if log:
-            log("[POSTER] ⌨️ 비밀번호 입력 중 (visible + fill)...")
+            log("[POSTER] ⌨️ 비밀번호 입력 중 (human typing, delay=100ms)...")
 
         try:
             pw_input = page.locator(
                 "input[placeholder='비밀번호'], input[type='password']"
             ).locator("visible=true").first
             await pw_input.click()
-            await pw_input.fill(password)
-            await page.wait_for_timeout(300)
+            # fill() → type(): 인간의 타이핑 속도 모방 (100ms/char)
+            await pw_input.type(password, delay=100)
+            # Jitter: 로그인 버튼 클릭 전 짧은 생각하는 시간
+            await page.wait_for_timeout(int(random.uniform(600, 1500)))
         except Exception as e:
             if log:
                 log(f"[POSTER] [ERROR] 비밀번호 셀렉터 실패: {str(e)[:100]}")
@@ -237,7 +264,8 @@ class GhostPoster:
                 "button, input[type='submit'], .btn_login"
             ).filter(has_text="로그인")
             await login_btn.first.click()
-            await page.wait_for_timeout(3000)
+            # Jitter: 로그인 후 서버 응답 대기 (인간적인 속도)
+            await page.wait_for_timeout(int(random.uniform(3000, 5000)))
         except Exception as e:
             if log:
                 log(f"[POSTER] [ERROR] 로그인 버튼(텍스트: '로그인') 클릭 실패: {str(e)[:100]}")
@@ -283,11 +311,11 @@ class GhostPoster:
         if not page:
             raise RuntimeError("Browser not started. Call start_browser() first.")
 
-        # ── WAF 우회: 로그인 후 세션 안정화 딜레이 ──
-        waf_delay = random.randint(2000, 4000)
+        # ── Jitter: 로그인 후 세션 안정화 (가변 딜레이) ──
+        _session_jitter = int(random.uniform(2000, 4500))
         if log:
-            log(f"[POSTER] ☕ 로그인 후 세션 안정화를 위해 잠시 대기 중... ({waf_delay}ms)")
-        await page.wait_for_timeout(waf_delay)
+            log(f"[POSTER] ☕ 로그인 후 세션 안정화 대기 중... ({_session_jitter}ms)")
+        await page.wait_for_timeout(_session_jitter)
 
         # 글쓰기 페이지 이동
         write_url = WRITE_URL_PATTERNS.get(
@@ -298,26 +326,56 @@ class GhostPoster:
             log(f"[POSTER] 📄 글쓰기 페이지 이동 중... ({self._gallery_type}/{gallery_id})")
 
         try:
-            await page.goto(write_url, wait_until="domcontentloaded", timeout=15000)
-            await page.wait_for_timeout(2000)
+            await page.goto(write_url, wait_until="domcontentloaded", timeout=20000)
         except Exception as e:
             if log:
                 log(f"[POSTER] [ERROR] 글쓰기 페이지 로드 실패: {str(e)[:100]}")
             await self._take_death_cam(log)
             return False
 
+        # ── WAF/Cloudflare 빈 화면 방어 ──
+        # "Just a moment..." 페이지가 뜨면 최대 15초 대기하며 우회 완료 대기
+        _waf_start = time.time()
+        _waf_passed = False
+        while time.time() - _waf_start < 15:
+            try:
+                _page_content = await page.content()
+                _is_waf = (
+                    "just a moment" in _page_content.lower()
+                    or len(_page_content) < 1500
+                )
+                if not _is_waf:
+                    _waf_passed = True
+                    break
+                if log:
+                    log("[POSTER] 🛡️ WAF/Cloudflare 감지 — 우회 대기 중...")
+            except Exception:
+                break
+            await page.wait_for_timeout(2000)
+
+        if not _waf_passed:
+            if log:
+                log("[POSTER] ⚠️ WAF 우회 타임아웃 (15초) — 계속 진행 시도...")
+
+        # Jitter: 페이지 렌더링 완료 후 인간적인 정착 딜레이
+        _render_jitter = int(random.uniform(1500, 3000))
+        await page.wait_for_timeout(_render_jitter)
+
         if log:
             log("[POSTER] ✍️ 갤러리 글쓰기 페이지 로드 완료")
 
-        # 제목 입력
+        # ── 제목 입력 ──
         if log:
             log(f"[POSTER] 📝 제목 입력 중: '{title[:30]}...'")
+
+        # Jitter: #subject 클릭 전 짧은 마우스 이동 시뮬레이션
+        await page.wait_for_timeout(int(random.uniform(500, 1200)))
 
         try:
             subject_input = page.locator("#subject")
             await subject_input.click()
-            await subject_input.type(title, delay=80)
-            await page.wait_for_timeout(500)
+            await subject_input.type(title, delay=int(random.uniform(70, 120)))
+            await page.wait_for_timeout(int(random.uniform(400, 800)))
         except Exception as e:
             if log:
                 log(f"[POSTER] [ERROR] #subject 셀렉터 실패: {str(e)[:100]}")
@@ -400,9 +458,13 @@ class GhostPoster:
         if log:
             log("[POSTER] ⌨️ 본문 타이핑 시작...")
 
+        # Jitter: 에디터 포커스 후 타이핑 시작 전 짧은 멈춤
+        await page.wait_for_timeout(int(random.uniform(800, 1800)))
+
         try:
-            await page.keyboard.type(content, delay=100)
-            await page.wait_for_timeout(1000)
+            await page.keyboard.type(content, delay=int(random.uniform(80, 130)))
+            # Jitter: 타이핑 완료 후 검토하는 척 멈춤
+            await page.wait_for_timeout(int(random.uniform(1000, 2500)))
         except Exception as e:
             if log:
                 log(f"[POSTER] [ERROR] 본문 타이핑 중 에러: {str(e)[:100]}")
@@ -417,10 +479,14 @@ class GhostPoster:
         if log:
             log("[POSTER] 🚀 등록 버튼 클릭 중...")
 
+        # Jitter: 제출 버튼 클릭 전 마지막 망설임 딜레이
+        await page.wait_for_timeout(int(random.uniform(1200, 2800)))
+
         try:
             submit_btn = page.locator(".btn_blue.btn_svc.write")
             await submit_btn.click()
-            await page.wait_for_timeout(3000)
+            # Jitter: 서버 처리 + 페이지 전환 대기
+            await page.wait_for_timeout(int(random.uniform(3000, 5000)))
         except Exception as e:
             if log:
                 log(f"[POSTER] [ERROR] .btn_blue.btn_svc.write 클릭 실패: {str(e)[:100]}")

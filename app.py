@@ -308,6 +308,38 @@ st.markdown("""
         background-color: #F2EFE9 !important;
         color: #C8A97E !important;
     }
+
+    /* ═══ 19. Latest Updates Feed (우측 실시간 로그 패널) ═══ */
+    .latest-feed {
+        overflow-y: auto !important;
+        font-family: 'JetBrains Mono', 'Fira Code', monospace !important;
+        font-size: 0.72rem !important;
+        line-height: 1.55 !important;
+        color: #8C8478 !important;
+        background: #FAF9F7 !important;
+        border: 1px solid #E5E0D8 !important;
+        border-radius: 10px !important;
+        padding: 10px 12px !important;
+    }
+    .feed-item {
+        padding: 5px 2px !important;
+        border-bottom: 1px solid #F0EDE8 !important;
+        word-break: break-word !important;
+    }
+    .feed-item:last-child { border-bottom: none !important; }
+    .feed-item.ferr { color: #C0392B !important; font-weight: 600 !important; }
+    .feed-item.fok  { color: #6B7A64 !important; }
+    .feed-item.finfo{ color: #5B7FAF !important; }
+    .feed-title {
+        font-size: 0.7rem !important;
+        font-weight: 700 !important;
+        text-transform: uppercase !important;
+        letter-spacing: 1.5px !important;
+        color: #C8A97E !important;
+        margin-bottom: 8px !important;
+        padding-bottom: 6px !important;
+        border-bottom: 1px solid #E5E0D8 !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -466,6 +498,24 @@ def render_log_html(logs: list, max_lines: int = 80, height: int = 300) -> str:
     return f'<div class="log-box" style="height:{height}px;">{content}</div>'
 
 
+def render_feed_html(logs: list, max_lines: int = 150, height_px: int = 680) -> str:
+    """우측 Latest Updates 피드 HTML 렌더링 — 세로형 실시간 로그."""
+    parts = []
+    for line in reversed(logs[-max_lines:]):
+        css = "feed-item"
+        if any(kw in line for kw in ("ERROR", "BLOCK", "FAIL", "ERR", "❌", "실패")):
+            css = "feed-item ferr"
+        elif any(kw in line for kw in ("OK", "DONE", "COMPLETE", "✅", "🎉", "성공", "완료")):
+            css = "feed-item fok"
+        elif any(kw in line for kw in ("⌨️", "🔑", "📄", "🌐", "WAVE", "🧠", "🎲", "📡")):
+            css = "feed-item finfo"
+        parts.append(f'<div class="{css}">{_html.escape(line)}</div>')
+    body = "\n".join(parts) if parts else (
+        '<div class="feed-item" style="color:#ccc;font-style:italic">No events yet.</div>'
+    )
+    return f'<div class="latest-feed" style="height:{height_px}px;">{body}</div>'
+
+
 # ══════════════════════════════════════════════
 # Sidebar
 # ══════════════════════════════════════════════
@@ -572,31 +622,40 @@ if _total_p > 0:
     except Exception:
         pass
 
-mc1, mc2, mc3 = st.columns(3)
+mc1, mc2, mc3, mc4 = st.columns(4)
 with mc1:
     st.markdown(
         f'<div class="metric-card">'
-        f'<div class="mc-icon">📝</div>'
-        f'<div class="mc-label">AI Generated Posts</div>'
-        f'<div class="mc-value">{st.session_state.ai_posts_count}</div>'
+        f'<div class="mc-icon">🔍</div>'
+        f'<div class="mc-label">총 스캔 수</div>'
+        f'<div class="mc-value">{st.session_state.total_posts:,}</div>'
         f'</div>',
         unsafe_allow_html=True,
     )
 with mc2:
     st.markdown(
         f'<div class="metric-card">'
-        f'<div class="mc-icon">💬</div>'
-        f'<div class="mc-label">AI Generated Comments</div>'
-        f'<div class="mc-value">{st.session_state.ai_comments_count}</div>'
+        f'<div class="mc-icon">🤖</div>'
+        f'<div class="mc-label">AI 침투율</div>'
+        f'<div class="mc-value">{_ai_share_pct}%</div>'
         f'</div>',
         unsafe_allow_html=True,
     )
 with mc3:
     st.markdown(
         f'<div class="metric-card">'
-        f'<div class="mc-icon">🤖</div>'
-        f'<div class="mc-label">AI Share in Gallery</div>'
-        f'<div class="mc-value">{_ai_share_pct}%</div>'
+        f'<div class="mc-icon">🚀</div>'
+        f'<div class="mc-label">포스팅 성공</div>'
+        f'<div class="mc-value">{st.session_state.ai_posts_count}</div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+with mc4:
+    st.markdown(
+        f'<div class="metric-card">'
+        f'<div class="mc-icon">🕵️</div>'
+        f'<div class="mc-label">봇 탐지</div>'
+        f'<div class="mc-value">{st.session_state.bot_suspects}</div>'
         f'</div>',
         unsafe_allow_html=True,
     )
@@ -613,14 +672,14 @@ if st.session_state.is_scanning:
         st.progress(0, text="Collecting post list...")
 
 # ══════════════════════════════════════════════
-# Two-Column Bento Grid
+# SLA Dashboard — [3 : 1] Bento Grid
 # ══════════════════════════════════════════════
-col_left, col_right = st.columns(2, gap="medium")
+col_main, col_log = st.columns([3, 1])
 
 # ─────────────────────────────────────────────
-# LEFT COLUMN: STEP 1 (Scan) + STEP 2 (Brain)
+# MAIN COLUMN (3): STEP 1 → STEP 2 → STEP 3
 # ─────────────────────────────────────────────
-with col_left:
+with col_main:
 
     # ── STEP 1: SCAN ──
     st.markdown(
@@ -716,16 +775,13 @@ with col_left:
             add_log("[APP] 🎲 AI 주제 추천 요청 중...")
             try:
                 database.init_db()
-                # 핫 키워드 추출
                 wc = extract_hot_keywords(st.session_state.posts_data, top_n=10)
                 hot_kw = [w for w, _ in wc]
-
                 with st.spinner("🎲 분석 중..."):
                     brain = GhostBrain(api_key=st.session_state.brain_api_key or None)
                     topic = brain.suggest_topic(
                         gallery_id=gid, keywords=hot_kw if hot_kw else None,
                     )
-                # spinner 밖에서 state 업데이트 후 rerun (2번 클릭 버그 방지)
                 st.session_state.suggested_topic = topic
                 add_log(f"[APP] ✅ 추천된 주제: {topic}")
                 st.rerun()
@@ -742,7 +798,6 @@ with col_left:
             add_log(f"[APP] 🧠 글 생성 시작: '{neural_topic[:30]}'")
             try:
                 database.init_db()
-                # 핫 키워드 추출 (본문 살 붙이기용)
                 _gen_wc = extract_hot_keywords(st.session_state.posts_data, top_n=10)
                 _gen_kw = [w for w, _ in _gen_wc]
                 with st.spinner("🧠 Generating..."):
@@ -753,7 +808,6 @@ with col_left:
                         length=selected_length,
                         keywords=_gen_kw if _gen_kw else None,
                     )
-                # spinner 밖에서 state 업데이트 후 rerun
                 st.session_state.brain_result = result
                 st.session_state.brain_error = ""
                 st.session_state.edit_title = result.get("title", "")
@@ -769,7 +823,6 @@ with col_left:
         if st.session_state.brain_error:
             st.error(f"⚠️ {st.session_state.brain_error}")
 
-        # 수정 가능 필드
         if st.session_state.brain_result:
             st.session_state.edit_title = st.text_input(
                 "✏️ 제목", value=st.session_state.edit_title, key="inp_title",
@@ -787,11 +840,6 @@ with col_left:
 
     st.markdown('</div>', unsafe_allow_html=True)
 
-# ─────────────────────────────────────────────
-# RIGHT COLUMN: STEP 3 (Post) + Log Viewer
-# ─────────────────────────────────────────────
-with col_right:
-
     # ── STEP 3: POST ──
     st.markdown(
         '<div class="bento">'
@@ -799,8 +847,6 @@ with col_right:
         unsafe_allow_html=True,
     )
 
-    # ── Swarm Mode 토글 ──
-    st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
     swarm_on = st.checkbox("🔥 Swarm Mode (연속 폭격)", value=False)
     swarm_count = 1
     if swarm_on:
@@ -811,7 +857,7 @@ with col_right:
     if not has_content and not swarm_on:
         st.caption("Step 2에서 글을 생성하면 활성화됩니다.")
     elif not swarm_on and has_content:
-        # Preview
+        # Preview Card
         safe_t = _html.escape(st.session_state.edit_title)
         safe_c = _html.escape(st.session_state.edit_content)
         st.markdown(
@@ -853,6 +899,7 @@ with col_right:
                         st.session_state.post_logs.append(msg)
                         log_text = "\n".join(reversed(st.session_state.post_logs[-50:]))
                         post_log_container.code(log_text, language="text")
+                        add_log(msg)
 
                     poster = GhostPoster(headless=headless, gallery_type="mgallery")
                     loop = asyncio.new_event_loop()
@@ -900,6 +947,7 @@ with col_right:
                     st.session_state.swarm_log.append(msg)
                     txt = "\n".join(reversed(st.session_state.swarm_log[-80:]))
                     swarm_log_container.code(txt, language="text")
+                    add_log(msg)
 
                 brain = GhostBrain(api_key=st.session_state.brain_api_key or None)
                 database.init_db()
@@ -907,7 +955,7 @@ with col_right:
                 for wave in range(1, swarm_count + 1):
                     swarm_log(f"═══ WAVE {wave}/{swarm_count} ═══")
 
-                    # 1) 증분 스캔 (최근 10분, 1페이지)
+                    # 1) 증분 스캔 (최근 10분)
                     swarm_log(f"[SWARM {wave}] 📡 증분 스캔 시작 (최근 10분)...")
                     try:
                         scan_loop = asyncio.new_event_loop()
@@ -915,7 +963,7 @@ with col_right:
                         scan_total = scan_loop.run_until_complete(
                             scraper.run_full_scrape(
                                 gallery_id=gid,
-                                time_limit_hours=10 / 60,  # 10분
+                                time_limit_hours=10 / 60,
                                 log=_log_callback,
                                 progress=_progress_callback,
                                 status_cb=_status_callback,
@@ -926,7 +974,6 @@ with col_right:
                     except Exception as e:
                         swarm_log(f"[SWARM {wave}] ⚠️ 스캔 실패: {str(e)[:60]}")
 
-                    # DB 데이터 리로드
                     try:
                         all_p = database.get_all_posts(gid)
                         st.session_state.posts_data = all_p[:100]
@@ -984,7 +1031,6 @@ with col_right:
                     else:
                         swarm_log(f"[SWARM {wave}] ❌ 포스팅 실패: {post_result['message']}")
 
-                    # 5) 대기 (마지막 wave가 아닌 경우만)
                     if wave < swarm_count:
                         wait_sec = random.randint(60, 180)
                         swarm_log(f"[SWARM] ☕ {wait_sec}초 대기 중... (다음 WAVE {wave + 1})")
@@ -999,83 +1045,98 @@ with col_right:
 
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # ── LOG VIEWER ──
+# ─────────────────────────────────────────────
+# RIGHT LOG COLUMN (1): Latest Updates Feed
+# ─────────────────────────────────────────────
+with col_log:
     st.markdown(
-        '<div class="bento">'
-        '<span class="step-hdr step-hdr-log">📟 실시간 로그</span>',
+        '<div class="bento" style="position:sticky;top:0;">'
+        '<div class="feed-title">📡 Latest Updates</div>',
         unsafe_allow_html=True,
     )
 
-    logs = st.session_state.logs
-    if logs:
-        st.markdown(render_log_html(logs, height=300), unsafe_allow_html=True)
-        st.caption(f"{len(logs)} entries · newest first")
-    else:
-        st.caption("스캔을 시작하면 로그가 표시됩니다.")
+    # scan + post + swarm 로그 통합 (시간순 최신 150개)
+    _combined_logs = (
+        list(st.session_state.logs)
+        + list(st.session_state.post_logs)
+        + list(st.session_state.swarm_log)
+    )
+    _combined_logs = _combined_logs[-150:]
 
+    st.markdown(
+        render_feed_html(_combined_logs, height_px=680),
+        unsafe_allow_html=True,
+    )
+    if _combined_logs:
+        st.caption(f"{len(_combined_logs)} events · newest first")
     st.markdown('</div>', unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════
-# 하단: Data Viewer (접이식)
+# 하단: 수집 이력 모니터링 테이블 (Full-width)
 # ══════════════════════════════════════════════
-with st.expander("📊 수집 데이터 상세", expanded=False):
-    tab_p, tab_c, tab_chart = st.tabs(["📋 Posts", "💬 Comments", "📈 Chart"])
+st.markdown("---")
+st.markdown("### 📊 수집 이력 모니터링")
 
-    with tab_p:
-        pdata = st.session_state.posts_data
-        if pdata:
-            df = pd.DataFrame(pdata)
-            dcols = [c for c in [
-                "post_id", "title", "author", "author_type",
-                "views", "recommends", "is_winner", "created_at",
-            ] if c in df.columns]
-            if dcols:
-                st.dataframe(df[dcols], use_container_width=True, height=350)
-                st.caption(f"{len(df)} posts")
+tab_p, tab_c, tab_chart = st.tabs(["📋 Posts", "💬 Comments", "📈 Chart"])
+
+with tab_p:
+    pdata = st.session_state.posts_data
+    if pdata:
+        df = pd.DataFrame(pdata)
+        dcols = [c for c in [
+            "post_id", "title", "author", "author_type",
+            "views", "recommends", "is_winner", "created_at",
+        ] if c in df.columns]
+        if dcols:
+            st.dataframe(df[dcols], use_container_width=True, height=350)
+            st.caption(f"{len(df)} posts")
+    else:
+        st.info("No posts yet. 스캔을 실행하면 데이터가 표시됩니다.")
+
+with tab_c:
+    try:
+        database.init_db()
+        comments = database.get_all_comments(gid)
+        if comments:
+            df_c = pd.DataFrame(comments[:200])
+            ccols = [c for c in [
+                "post_id", "author", "content", "is_reply", "created_at"
+            ] if c in df_c.columns]
+            if ccols:
+                st.dataframe(df_c[ccols], use_container_width=True, height=350)
+                st.caption(f"{len(comments)} comments (최대 200개 표시)")
         else:
-            st.info("No posts yet.")
-
-    with tab_c:
-        try:
-            database.init_db()
-            comments = database.get_all_comments(gid)
-            if comments:
-                df_c = pd.DataFrame(comments[:200])
-                ccols = [c for c in [
-                    "post_id", "author", "content", "is_reply", "created_at"
-                ] if c in df_c.columns]
-                if ccols:
-                    st.dataframe(df_c[ccols], use_container_width=True, height=350)
-        except Exception:
             st.info("No comments yet.")
+    except Exception:
+        st.info("No comments yet.")
 
-    with tab_chart:
-        pdata = st.session_state.posts_data
-        if pdata:
-            df_t = pd.DataFrame(pdata)
-            if "scraped_at" in df_t.columns:
-                df_t["scraped_at"] = pd.to_datetime(df_t["scraped_at"], errors="coerce")
-                df_t = df_t.dropna(subset=["scraped_at"]).sort_values("scraped_at")
-                if not df_t.empty:
-                    df_t["cumulative"] = range(1, len(df_t) + 1)
-                    fig = px.area(
-                        df_t, x="scraped_at", y="cumulative",
-                        labels={"scraped_at": "Time", "cumulative": "Posts"},
-                    )
-                    fig.update_traces(
-                        line=dict(color="#6B7A64", width=2),
-                        fillcolor="rgba(107, 122, 100, 0.08)",
-                    )
-                    fig.update_layout(
-                        paper_bgcolor="#F9F8F6", plot_bgcolor="#FFFFFF",
-                        font=dict(color="#5A5A5A"),
-                        xaxis=dict(gridcolor="#E5E0D8"),
-                        yaxis=dict(gridcolor="#E5E0D8"),
-                        margin=dict(t=10, b=30, l=40, r=20), height=300,
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("Awaiting data...")
+with tab_chart:
+    pdata = st.session_state.posts_data
+    if pdata:
+        df_t = pd.DataFrame(pdata)
+        if "scraped_at" in df_t.columns:
+            df_t["scraped_at"] = pd.to_datetime(df_t["scraped_at"], errors="coerce")
+            df_t = df_t.dropna(subset=["scraped_at"]).sort_values("scraped_at")
+            if not df_t.empty:
+                df_t["cumulative"] = range(1, len(df_t) + 1)
+                fig = px.area(
+                    df_t, x="scraped_at", y="cumulative",
+                    labels={"scraped_at": "Time", "cumulative": "Posts"},
+                )
+                fig.update_traces(
+                    line=dict(color="#6B7A64", width=2),
+                    fillcolor="rgba(107, 122, 100, 0.08)",
+                )
+                fig.update_layout(
+                    paper_bgcolor="#F9F8F6", plot_bgcolor="#FFFFFF",
+                    font=dict(color="#5A5A5A"),
+                    xaxis=dict(gridcolor="#E5E0D8"),
+                    yaxis=dict(gridcolor="#E5E0D8"),
+                    margin=dict(t=10, b=30, l=40, r=20), height=300,
+                )
+                st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("Awaiting data...")
 
 # ── Auto-refresh ──
 if st.session_state.is_scanning:
