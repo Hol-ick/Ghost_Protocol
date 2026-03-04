@@ -147,7 +147,7 @@ class GhostPoster:
                 except Exception:
                     pass
 
-            self._page.on("dialog", lambda d: asyncio.ensure_future(_handle_dialog(d)))
+            self._page.on("dialog", lambda d: asyncio.get_event_loop().create_task(_handle_dialog(d)))
 
             if log:
                 mode = "Headless" if self._headless else "Visible"
@@ -158,18 +158,31 @@ class GhostPoster:
             raise
 
     async def close_browser(self, log: Optional[Callable] = None) -> None:
-        """브라우저 종료."""
+        """브라우저 종료.
+
+        중첩 try-finally 구조로 browser.close()가 예외를 던져도
+        playwright.stop()이 반드시 실행되도록 보장 (Flaw #3 수정).
+        """
         if log:
             log("[POSTER] 🔒 브라우저 종료 중...")
 
-        if self._browser:
-            await self._browser.close()
-        if self._playwright:
-            await self._playwright.stop()
-        self._browser = None
-        self._playwright = None
-        self._context = None
-        self._page = None
+        try:
+            if self._browser:
+                await self._browser.close()
+        except Exception as e:
+            if log:
+                log(f"[POSTER] ⚠️ 브라우저 종료 예외 (무시하고 계속): {str(e)[:80]}")
+        finally:
+            try:
+                if self._playwright:
+                    await self._playwright.stop()
+            except Exception as e:
+                if log:
+                    log(f"[POSTER] ⚠️ Playwright 종료 예외 (무시): {str(e)[:80]}")
+            self._browser = None
+            self._playwright = None
+            self._context = None
+            self._page = None
 
         if log:
             log("[POSTER] ✅ 브라우저 종료 완료")

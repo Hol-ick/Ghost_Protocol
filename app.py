@@ -9,8 +9,10 @@ Pipeline (Swarm Mode): TOPIC → GENERATE → POST
 import asyncio
 import html as _html
 import os
+import queue
 import random
 import sys
+import threading
 import time
 
 if sys.platform.startswith("win"):
@@ -19,7 +21,7 @@ if sys.platform.startswith("win"):
 import streamlit as st
 
 from ghost_protocol import database
-from ghost_protocol.brain import GhostBrain
+from ghost_protocol.brain import GhostBrain, RateLimitError
 from ghost_protocol.poster import GhostPoster, load_accounts
 
 # ══════════════════════════════════════════════
@@ -328,12 +330,165 @@ def _init_state():
         "posts_success":          0,
         "posts_failed":           0,
         "last_fired":             False,
+        # ── 동시성 제어 (Flaw #1 수정) ──────────────
+        "swarm_running":          False,   # 백그라운드 워커 실행 중 여부
+        "swarm_queue":            None,    # 워커 → UI 메시지 채널
+        "swarm_stop_event":       None,    # UI → 워커 중단 신호
     }
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
 
 _init_state()
+
+
+# ══════════════════════════════════════════════
+# 백그라운드 워커 — threading.Thread 기반
+# ══════════════════════════════════════════════
+
+def _interruptible_sleep(seconds: float, stop_event: threading.Event, interval: float = 0.5) -> None:
+    """stop_event가 set되면 즉시 중단하는 분할 sleep.
+
+    time.sleep(60~180)을 0.5초 단위로 쪼개어, 중단 신호를 빠르게 감지한다.
+    """
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        if stop_event.is_set():
+            return
+        time.sleep(min(interval, deadline - time.time()))
+
+
+def _swarm_worker(
+    log_q: queue.Queue,
+    stop_ev: threading.Event,
+    *,
+    api_key: str,
+    topic: str,
+    wave_count: int,
+    gallery_id: str,
+    gallery_type: str,
+    tone: str,
+    length: str,
+    headless: bool,
+) -> None:
+    """백그라운드 스레드: Swarm Loop 전체를 실행.
+
+    UI와는 오직 queue.Queue를 통해서만 통신한다.
+    session_state에 직접 접근하지 않아 thread-safety를 보장한다.
+    """
+
+    def q_log(msg: str) -> None:
+        log_q.put({"type": "log", "data": msg})
+
+    def q_preview(title: str, content: str, wave: int, status: str) -> None:
+        log_q.put({"type": "preview", "title": title, "content": content,
+                   "wave": wave, "status": status})
+
+    def q_stat(success: int = 0, fail: int = 0) -> None:
+        log_q.put({"type": "stat", "success": success, "fail": fail})
+
+    # ── Brain 초기화 ──
+    try:
+        brain = GhostBrain(api_key=api_key or None)
+        database.init_db()
+    except Exception as e:
+        q_log(f"❌ Brain 초기화 실패: {str(e)[:120]}")
+        log_q.put({"type": "done"})
+        return
+
+    # ══════════════════════════════════════════
+    # Swarm Loop
+    # ══════════════════════════════════════════
+    for wave in range(1, wave_count + 1):
+        if stop_ev.is_set():
+            q_log("[SWARM] 🛑 중단 요청 — 루프 종료")
+            break
+
+        q_log(f"═══════ WAVE {wave}/{wave_count} ═══════")
+
+        # ── 1) 생성 — 지수 백오프 재시도 (Flaw #2 수정) ──────────
+        q_log(f"[W{wave}] 🧠 AI 작문 시작 → 주제: '{topic[:30]}'")
+        q_preview("", "", wave, "GENERATING")
+
+        gen_title: str | None = None
+        gen_content: str = ""
+
+        for attempt in range(3):
+            if stop_ev.is_set():
+                break
+            try:
+                result = brain.generate_post(
+                    topic=topic,
+                    gallery_id=gallery_id,
+                    tone=tone,
+                    context_hours=None,
+                    length=length,
+                )
+                gen_title   = result.get("title", "무제")
+                gen_content = result.get("content", "")
+                q_log(f"[W{wave}] ✅ 생성 완료: '{gen_title[:30]}'")
+                q_preview(gen_title, gen_content, wave, "GENERATED")
+                break
+
+            except RateLimitError:
+                # 429: 지수 백오프 재시도 (60s → 120s → 포기)
+                if attempt < 2:
+                    backoff = 60 * (2 ** attempt)
+                    q_log(
+                        f"[W{wave}] ⚠️ Rate Limit (429) — {backoff}초 대기 후 재시도 "
+                        f"({attempt + 1}/3)..."
+                    )
+                    _interruptible_sleep(backoff, stop_ev)
+                else:
+                    q_log(f"[W{wave}] ❌ Rate Limit 재시도 한도(3회) 초과 — WAVE {wave} 건너뜀")
+                    gen_title = None
+
+            except Exception as e:
+                q_log(f"[W{wave}] ❌ 생성 실패: {str(e)[:80]}")
+                gen_title = None
+                break
+
+        # 생성 실패 or 중단 요청 시 포스팅 단계 완전 건너뜀
+        if not gen_title or stop_ev.is_set():
+            continue
+
+        # ── 2) 포스팅 ──────────────────────────────────────────────
+        q_log(f"[W{wave}] 🚀 자동 포스팅 시작 → {gallery_type}/{gallery_id}")
+        poster = GhostPoster(headless=headless, gallery_type=gallery_type)
+
+        # 백그라운드 스레드 전용 이벤트 루프 생성
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            post_result = loop.run_until_complete(
+                poster.auto_post(
+                    gallery_id=gallery_id,
+                    title=gen_title,
+                    content=gen_content,
+                    log_callback=q_log,
+                )
+            )
+        finally:
+            loop.close()
+            asyncio.set_event_loop(None)
+
+        if post_result["success"]:
+            q_stat(success=1)
+            q_log(f"[W{wave}] 🎉 포스팅 성공! ({post_result['message']})")
+            q_preview(gen_title, gen_content, wave, "✅ POSTED")
+        else:
+            q_stat(fail=1)
+            q_log(f"[W{wave}] ❌ 포스팅 실패: {post_result['message']}")
+            q_preview(gen_title, gen_content, wave, "❌ FAILED")
+
+        # ── 3) 대기 (마지막 WAVE 제외) ───────────────────────────
+        if wave < wave_count and not stop_ev.is_set():
+            wait_sec = random.randint(60, 180)
+            q_log(f"[SWARM] ☕ 다음 WAVE까지 {wait_sec}초 대기...")
+            _interruptible_sleep(wait_sec, stop_ev)
+
+    q_log(f"═══════ SWARM COMPLETE — {wave_count} WAVES FIRED ═══════")
+    log_q.put({"type": "done"})
 
 
 # ══════════════════════════════════════════════
@@ -509,19 +664,27 @@ with cc_right:
 
 st.markdown('</div>', unsafe_allow_html=True)  # /command-center
 
-# ── FIRE 버튼 ──
-_fire_disabled = not has_any_key or not (swarm_topic or "").strip()
+# ══════════════════════════════════════════════
+# FIRE / STOP 버튼
+# ══════════════════════════════════════════════
+_is_running = st.session_state.get("swarm_running", False)
+_fire_disabled = not has_any_key or not (swarm_topic or "").strip() or _is_running
 
 st.markdown('<div class="fire-btn">', unsafe_allow_html=True)
 fire_clicked = st.button(
-    "🔥  FIRE  —  폭격 개시",
+    "🔥  FIRE  —  폭격 개시" if not _is_running else "⏳  SWARM RUNNING...",
     width="stretch",
     type="primary",
-    disabled=_fire_disabled,
+    disabled=_fire_disabled or _is_running,
 )
 st.markdown('</div>', unsafe_allow_html=True)
 
-if _fire_disabled:
+# STOP 버튼 — 실행 중일 때만 표시
+stop_clicked = False
+if _is_running:
+    stop_clicked = st.button("🛑  STOP  —  중단", width="stretch")
+
+if not _is_running and _fire_disabled:
     if not has_any_key:
         st.caption("🔑 사이드바에 Gemini API Key를 입력하면 활성화됩니다.")
     elif not (swarm_topic or "").strip():
@@ -530,7 +693,7 @@ if _fire_disabled:
 st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════
-# MAIN — Live Terminal (하단)
+# MAIN — Live Terminal + Preview (하단)
 # ══════════════════════════════════════════════
 st.markdown("---")
 col_preview, col_log = st.columns([3, 2], gap="medium")
@@ -581,7 +744,7 @@ with col_log:
 
 
 # ══════════════════════════════════════════════
-# FIRE 실행 로직
+# FIRE — 백그라운드 워커 시작
 # ══════════════════════════════════════════════
 if fire_clicked:
     _topic = (swarm_topic or "").strip()
@@ -591,7 +754,6 @@ if fire_clicked:
     elif not _topic:
         st.error("⚠️ 주제를 입력하세요.")
     else:
-        # 계정 파일 확인
         try:
             _accounts = load_accounts()
         except (FileNotFoundError, ValueError) as _e:
@@ -606,106 +768,78 @@ if fire_clicked:
             st.session_state.swarm_wave_total = wave_count
             st.session_state.swarm_wave_current = 0
             st.session_state.last_fired = True
+            st.session_state.swarm_running = True
 
-            # ── 로그 + 프리뷰 실시간 업데이트 헬퍼 ──
-            def _slog(msg: str):
-                st.session_state.swarm_log.append(msg)
-                _log_ph.markdown(
-                    render_terminal(st.session_state.swarm_log, height_px=420),
-                    unsafe_allow_html=True,
-                )
+            # ── 통신 원시 타입 생성 ──
+            _log_q: queue.Queue = queue.Queue()
+            _stop_ev: threading.Event = threading.Event()
+            st.session_state.swarm_queue = _log_q
+            st.session_state.swarm_stop_event = _stop_ev
 
-            def _update_preview(title: str, content: str, wave: int, status: str = "GENERATING"):
-                st.session_state.swarm_preview_title = title
-                st.session_state.swarm_preview_content = content
-                st.session_state.swarm_wave_current = wave
-                _safe_t = _html.escape(title) if title else ""
-                _safe_c = _html.escape(content) if content else ""
-                _lbl = _html.escape(f"WAVE {wave}/{wave_count} — {status}")
-                if title:
-                    _preview_ph.markdown(
-                        f'<div class="preview-dark">'
-                        f'<div class="pd-label">{_lbl}</div>'
-                        f'<div class="pd-title">{_safe_t}</div>'
-                        f'<div class="pd-body">{_safe_c}</div>'
-                        f'</div>',
-                        unsafe_allow_html=True,
-                    )
-                else:
-                    _preview_ph.markdown(
-                        f'<div class="preview-dark">'
-                        f'<div class="pd-label">{_lbl}</div>'
-                        f'<div class="pd-empty">🧠 AI 작문 중...</div>'
-                        f'</div>',
-                        unsafe_allow_html=True,
-                    )
+            # ── 백그라운드 워커 시작 ──
+            threading.Thread(
+                target=_swarm_worker,
+                kwargs={
+                    "log_q":       _log_q,
+                    "stop_ev":     _stop_ev,
+                    "api_key":     st.session_state.brain_api_key,
+                    "topic":       _topic,
+                    "wave_count":  wave_count,
+                    "gallery_id":  gallery_id,
+                    "gallery_type": gallery_type,
+                    "tone":        neural_tone,
+                    "length":      selected_length,
+                    "headless":    headless,
+                },
+                daemon=True,
+            ).start()
 
-            # ── GhostBrain 초기화 ──
-            try:
-                _brain = GhostBrain(api_key=st.session_state.brain_api_key or None)
-                database.init_db()
-            except Exception as _e:
-                st.error(f"⚠️ Brain 초기화 실패: {str(_e)[:120]}")
-                st.stop()
+            st.rerun()  # 즉시 폴링 모드 진입
 
-            # ══════════════════════════════════════════
-            # SWARM LOOP — 스캔 없음, 즉시 작문 → 포스팅
-            # ══════════════════════════════════════════
-            for _wave in range(1, wave_count + 1):
-                _slog(f"═══════ WAVE {_wave}/{wave_count} ═══════")
+# ── STOP 처리 ──
+if stop_clicked and st.session_state.get("swarm_stop_event"):
+    st.session_state.swarm_stop_event.set()
+    st.session_state.swarm_log.append("[SWARM] 🛑 중단 요청 전송됨 — 현재 작업 완료 후 종료...")
 
-                # ── 1) 작문 (Generate) ──
-                _slog(f"[W{_wave}] 🧠 AI 작문 시작 → 주제: '{_topic[:30]}'")
-                _update_preview("", "", _wave, "GENERATING")
 
-                try:
-                    _result = _brain.generate_post(
-                        topic=_topic,
-                        gallery_id=gallery_id,
-                        tone=neural_tone,
-                        context_hours=None,
-                        length=selected_length,
-                    )
-                    _gen_title   = _result.get("title", "무제")
-                    _gen_content = _result.get("content", "")
-                    _slog(f"[W{_wave}] ✅ 생성 완료: '{_gen_title[:30]}'")
-                    _update_preview(_gen_title, _gen_content, _wave, "GENERATED")
+# ══════════════════════════════════════════════
+# POLLING — 백그라운드 스레드 → UI 동기화
+# ══════════════════════════════════════════════
+# 매 rerun마다 Queue를 드레인하고 session_state를 갱신.
+# swarm_running이 True인 동안 0.5초 폴링 간격으로 st.rerun()을 유지한다.
+# 메인 스레드의 최대 블로킹 시간: 0.5초 — WebSocket 타임아웃 위험 없음.
+if st.session_state.get("swarm_running") and st.session_state.get("swarm_queue") is not None:
+    _q: queue.Queue = st.session_state.swarm_queue
+    _done = False
 
-                except Exception as _e:
-                    _slog(f"[W{_wave}] ❌ 생성 실패: {str(_e)[:80]}")
-                    continue
+    # 큐에 쌓인 메시지 전부 드레인
+    while True:
+        try:
+            _msg = _q.get_nowait()
+        except queue.Empty:
+            break
 
-                # ── 2) 포스팅 (Post) ──
-                _slog(f"[W{_wave}] 🚀 자동 포스팅 시작 → {gallery_type}/{gallery_id}")
-                _poster = GhostPoster(headless=headless, gallery_type=gallery_type)
-                _post_loop = asyncio.new_event_loop()
-                try:
-                    _post_result = _post_loop.run_until_complete(
-                        _poster.auto_post(
-                            gallery_id=gallery_id,
-                            title=_gen_title,
-                            content=_gen_content,
-                            log_callback=_slog,
-                        )
-                    )
-                finally:
-                    _post_loop.close()
+        if _msg["type"] == "log":
+            st.session_state.swarm_log.append(_msg["data"])
 
-                if _post_result["success"]:
-                    st.session_state.posts_success += 1
-                    _slog(f"[W{_wave}] 🎉 포스팅 성공! ({_post_result['message']})")
-                    _update_preview(_gen_title, _gen_content, _wave, "✅ POSTED")
-                else:
-                    st.session_state.posts_failed += 1
-                    _slog(f"[W{_wave}] ❌ 포스팅 실패: {_post_result['message']}")
-                    _update_preview(_gen_title, _gen_content, _wave, "❌ FAILED")
+        elif _msg["type"] == "preview":
+            st.session_state.swarm_preview_title   = _msg["title"]
+            st.session_state.swarm_preview_content = _msg["content"]
+            st.session_state.swarm_wave_current     = _msg["wave"]
 
-                # ── 3) 대기 (마지막 WAVE 제외) ──
-                if _wave < wave_count:
-                    _wait_sec = random.randint(60, 180)
-                    _slog(f"[SWARM] ☕ 다음 WAVE까지 {_wait_sec}초 대기...")
-                    time.sleep(_wait_sec)
+        elif _msg["type"] == "stat":
+            st.session_state.posts_success += _msg.get("success", 0)
+            st.session_state.posts_failed  += _msg.get("fail", 0)
 
-            # ── 완료 ──
-            _slog(f"═══════ SWARM COMPLETE — {wave_count} WAVES FIRED ═══════")
-            st.rerun()
+        elif _msg["type"] == "done":
+            st.session_state.swarm_running    = False
+            st.session_state.swarm_queue      = None
+            st.session_state.swarm_stop_event = None
+            _done = True
+
+    # 실행 중: 0.5초 후 재폴링 / 완료: 최종 rerun으로 UI 확정
+    if st.session_state.swarm_running:
+        time.sleep(0.5)
+        st.rerun()
+    elif _done:
+        st.rerun()

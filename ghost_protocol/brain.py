@@ -32,6 +32,11 @@ load_dotenv()
 # ══════════════════════════════════════════════
 MODEL_NAME = "gemini-2.5-flash"
 
+
+class RateLimitError(Exception):
+    """Gemini API Rate Limit (429) 또는 쿼터 초과 시 발생."""
+
+
 # ══════════════════════════════════════════════
 # Safety Settings: 전 카테고리 검열 해제
 # ══════════════════════════════════════════════
@@ -395,10 +400,10 @@ class GhostBrain:
             )
         except Exception as e:
             if self._is_rate_limit_error(e):
-                return {
-                    "title": "⚠️ Rate Limit 초과",
-                    "content": "무료 티어 토큰 한도 초과입니다. 1분 뒤에 다시 시도하세요.",
-                }
+                # 에러 dict 반환 대신 명시적 예외 발생 — 호출자가 재시도 여부를 결정 (Flaw #2 수정)
+                raise RateLimitError(
+                    "Gemini API Rate Limit 초과 (429). 잠시 후 재시도 필요."
+                ) from e
             raise  # 다른 에러는 그대로 상위로 전파
 
         # ── Debug: 중단 원인 로깅 ──
