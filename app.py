@@ -39,13 +39,30 @@ st.set_page_config(
 # ══════════════════════════════════════════════
 st.markdown("""
 <style>
-    /* ═══ 1. 전역 다크 베이스 ═══ */
-    .stApp, .stMain, footer {
+    /* ═══ 1. 전역 다크 베이스 — Nuclear Override ═══ */
+    html, body {
         background-color: #0E1117 !important;
         color: #FAFAFA !important;
     }
+    .stApp,
+    [data-testid="stAppViewContainer"],
+    [data-testid="stMain"],
+    .stMain,
+    .main,
+    section.main,
+    footer {
+        background-color: #0E1117 !important;
+        color: #FAFAFA !important;
+    }
+    [data-testid="stHeader"],
     .stApp header[data-testid="stHeader"] {
         background-color: #0E1117 !important;
+    }
+    /* Streamlit 내부 베이지/흰 배경 초기화 */
+    [data-testid="stVerticalBlock"],
+    [data-testid="stHorizontalBlock"],
+    [data-testid="column"] {
+        background-color: transparent !important;
     }
     .stMainBlockContainer { padding-top: 1.5rem !important; }
 
