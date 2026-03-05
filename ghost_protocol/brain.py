@@ -16,6 +16,7 @@ SDK: google-genai (google.genai) — 신규 공식 SDK
 import json
 import os
 import re
+from collections import Counter
 from typing import Optional
 
 from google import genai
@@ -440,3 +441,121 @@ class GhostBrain:
             "title": title,
             "content": content,
         }
+
+    # ══════════════════════════════════════════════
+    # INTEL 트렌드 분석 (Read-Only — 포스팅 없음)
+    # ══════════════════════════════════════════════
+
+    def analyze_trend(
+        self,
+        raw_data: dict,
+        top_k: int = 30,
+    ) -> dict:
+        """수집된 Raw 데이터로 갤러리 트렌드를 분석하여 JSON 반환.
+
+        Pipeline:
+          raw_data (titles + comments)
+            → Counter 기반 Top-K 키워드 추출 (불용어 제거)
+            → 대표 댓글 샘플 최대 15개 (각 50자 trim)
+            → 키워드 + 샘플만 Gemini 2.5 Flash 로 전달 (토큰 최소화)
+            → JSON 파싱 후 반환
+
+        Args:
+            raw_data: TrendScraper.collect_trending() 반환값
+                      {"titles": [...], "comments": [...], "gallery_id": "...", ...}
+            top_k:    추출할 핵심 키워드 수 (기본 30)
+
+        Returns:
+            {
+              "hot_topics":   list[str],   # 현재 핫한 떡밥 3개
+              "sentiment":    str,         # 전반적인 감성 (우호적/적대적/조롱/패닉 등)
+              "memes":        list[str],   # 유행하는 밈·유행어
+              "summary":      str,         # 2문장 갤러리 분위기 요약
+              "top_keywords": list[str],   # Counter 추출 Top-K 키워드
+              "stats":        dict,        # 수집 통계
+            }
+        """
+        from .config import KEYWORD_STOPWORDS
+
+        titles:   list[str] = raw_data.get("titles",   [])
+        comments: list[str] = raw_data.get("comments", [])
+
+        # ── 1. 모든 텍스트 합치기 ──────────────────────────
+        all_text = " ".join(titles + comments)
+
+        # ── 2. 한글 토큰 추출 (2자 이상 한글 어절) ─────────
+        tokens = re.findall(r"[가-힣]{2,}", all_text)
+
+        # ── 3. 불용어 제거 + Counter ───────────────────────
+        filtered    = [t for t in tokens if t not in KEYWORD_STOPWORDS]
+        counter     = Counter(filtered)
+        top_keywords: list[str] = [w for w, _ in counter.most_common(top_k)]
+
+        # ── 4. Gemini 전달용 경량 페이로드 조립 ────────────
+        # 제목 샘플: 최대 20개
+        kw_text     = ", ".join(top_keywords[:20])
+        titles_text = "\n".join(f"- {t}" for t in titles[:20])
+        # 댓글 샘플: 최대 15개 × 50자 trim
+        comments_text = "\n".join(
+            f"- {c[:50]}" for c in comments[:15]
+        )
+
+        gallery_id = raw_data.get("gallery_id", "알 수 없음")
+
+        prompt = (
+            f"아래는 디시인사이드 '{gallery_id}' 갤러리의 실시간 데이터야.\n\n"
+            f"[핵심 키워드 Top-{min(len(top_keywords), 20)}]\n{kw_text}\n\n"
+            f"[최근 글 제목 샘플]\n{titles_text}\n\n"
+            f"[대표 댓글 샘플]\n{comments_text}\n\n"
+            "위 데이터를 분석해서 반드시 아래 JSON 형식으로만 응답해. "
+            "다른 말은 절대 하지 마.\n"
+            "{\n"
+            '  "hot_topics": ["현재 가장 핫한 떡밥 1", "떡밥 2", "떡밥 3"],\n'
+            '  "sentiment": "전반적인 감성 (우호적/적대적/조롱/패닉/흥분/무기력 중 택1 또는 직접 표현)",\n'
+            '  "memes": ["유행하는 밈 또는 유행어 1", "밈 2"],\n'
+            '  "summary": "현재 갤러리 분위기를 2문장으로 요약"\n'
+            "}"
+        )
+
+        # ── 5. Gemini API 호출 (분석용 — 기본 safety settings 유지) ──
+        cfg = types.GenerateContentConfig(
+            max_output_tokens=512,
+            temperature=0.3,       # 분석이므로 낮은 온도 → 일관성 ↑
+        )
+
+        try:
+            response = self._client.models.generate_content(
+                model=MODEL_NAME,
+                contents=prompt,
+                config=cfg,
+            )
+            raw_text = response.text.strip()
+
+            # 마크다운 코드블록 제거 후 JSON 파싱
+            cleaned  = re.sub(r"```json\n?|\n?```|```", "", raw_text).strip()
+            result   = json.loads(cleaned)
+
+        except json.JSONDecodeError:
+            # JSON 파싱 실패 시 키워드 기반 fallback
+            result = {
+                "hot_topics": top_keywords[:3],
+                "sentiment":  "분석 실패",
+                "memes":      [],
+                "summary":    raw_text[:200] if "raw_text" in dir() else "응답 파싱 실패",
+            }
+        except Exception as e:
+            if self._is_rate_limit_error(e):
+                raise RateLimitError(
+                    "Gemini API Rate Limit 초과 (429). 잠시 후 재시도 필요."
+                ) from e
+            raise
+
+        # ── 6. 공통 메타데이터 주입 ─────────────────────────
+        result["top_keywords"] = top_keywords
+        result["stats"] = {
+            "titles_count":   len(titles),
+            "comments_count": len(comments),
+            "keywords_found": len(filtered),
+        }
+
+        return result

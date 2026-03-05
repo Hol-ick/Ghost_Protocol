@@ -322,6 +322,165 @@ st.markdown("""
     .stProgress > div > div {
         background: linear-gradient(90deg, #FF4B4B, #BC8CFF) !important;
     }
+
+    /* ═══ 13. INTEL 브리핑 카드 ═══ */
+    .intel-card {
+        background: #141820 !important;
+        border: 1px solid rgba(0,240,255,0.18) !important;
+        border-radius: 18px !important;
+        padding: 24px 28px !important;
+        margin-top: 12px !important;
+    }
+    .intel-header {
+        display: flex !important;
+        align-items: center !important;
+        gap: 10px !important;
+        margin-bottom: 18px !important;
+        border-bottom: 1px solid rgba(0,240,255,0.12) !important;
+        padding-bottom: 12px !important;
+    }
+    .intel-title {
+        color: #00F0FF !important;
+        font-size: 0.72rem !important;
+        font-weight: 800 !important;
+        letter-spacing: 4px !important;
+        text-transform: uppercase !important;
+        text-shadow: 0 0 10px rgba(0,240,255,0.4) !important;
+    }
+    .intel-gallery-badge {
+        background: rgba(0,240,255,0.08) !important;
+        border: 1px solid rgba(0,240,255,0.25) !important;
+        border-radius: 20px !important;
+        padding: 2px 10px !important;
+        color: #00F0FF !important;
+        font-size: 0.65rem !important;
+        font-family: monospace !important;
+    }
+    .intel-cache-ts {
+        margin-left: auto !important;
+        color: #444 !important;
+        font-size: 0.62rem !important;
+        font-family: monospace !important;
+    }
+    /* 감성 배지 */
+    .intel-sentiment {
+        display: inline-block !important;
+        padding: 4px 14px !important;
+        border-radius: 20px !important;
+        font-size: 0.78rem !important;
+        font-weight: 700 !important;
+        letter-spacing: 1px !important;
+        margin-bottom: 16px !important;
+    }
+    .intel-sentiment-panic    { background: rgba(255,75,75,0.15) !important; color: #FF4B4B !important; border: 1px solid rgba(255,75,75,0.35) !important; }
+    .intel-sentiment-hostile  { background: rgba(255,100,0,0.15) !important; color: #FF6400 !important; border: 1px solid rgba(255,100,0,0.35) !important; }
+    .intel-sentiment-mock     { background: rgba(188,140,255,0.15) !important; color: #BC8CFF !important; border: 1px solid rgba(188,140,255,0.35) !important; }
+    .intel-sentiment-friendly { background: rgba(0,255,0,0.1) !important; color: #00FF88 !important; border: 1px solid rgba(0,255,0,0.3) !important; }
+    .intel-sentiment-neutral  { background: rgba(255,255,255,0.07) !important; color: #AAAAAA !important; border: 1px solid rgba(255,255,255,0.15) !important; }
+    /* 섹션 라벨 */
+    .intel-section-label {
+        color: #555 !important;
+        font-size: 0.62rem !important;
+        font-weight: 700 !important;
+        letter-spacing: 2px !important;
+        text-transform: uppercase !important;
+        margin-bottom: 8px !important;
+    }
+    /* 토픽·키워드 칩 */
+    .intel-chips { display: flex !important; flex-wrap: wrap !important; gap: 6px !important; margin-bottom: 14px !important; }
+    .intel-chip-hot {
+        background: rgba(255,75,75,0.12) !important;
+        border: 1px solid rgba(255,75,75,0.3) !important;
+        border-radius: 20px !important;
+        padding: 3px 10px !important;
+        color: #FF8080 !important;
+        font-size: 0.73rem !important;
+        font-weight: 600 !important;
+    }
+    .intel-chip-kw {
+        background: rgba(255,255,255,0.05) !important;
+        border: 1px solid rgba(255,255,255,0.1) !important;
+        border-radius: 20px !important;
+        padding: 2px 8px !important;
+        color: #888 !important;
+        font-size: 0.65rem !important;
+    }
+    .intel-chip-meme {
+        background: rgba(188,140,255,0.1) !important;
+        border: 1px solid rgba(188,140,255,0.25) !important;
+        border-radius: 20px !important;
+        padding: 3px 10px !important;
+        color: #BC8CFF !important;
+        font-size: 0.73rem !important;
+    }
+    /* 요약 텍스트 */
+    .intel-summary {
+        color: #CCCCCC !important;
+        font-size: 0.85rem !important;
+        line-height: 1.7 !important;
+        border-left: 2px solid rgba(0,240,255,0.25) !important;
+        padding-left: 12px !important;
+        margin-top: 4px !important;
+    }
+    /* 수집 스탯 */
+    .intel-stats {
+        display: flex !important;
+        gap: 10px !important;
+        margin-top: 14px !important;
+        padding-top: 12px !important;
+        border-top: 1px solid rgba(255,255,255,0.06) !important;
+    }
+    .intel-stat-pill {
+        background: rgba(255,255,255,0.04) !important;
+        border: 1px solid rgba(255,255,255,0.08) !important;
+        border-radius: 8px !important;
+        padding: 4px 10px !important;
+        color: #666 !important;
+        font-size: 0.62rem !important;
+        font-family: monospace !important;
+    }
+    .intel-stat-pill span { color: #AAAAAA !important; font-weight: 600 !important; }
+    /* 로딩 플레이스홀더 */
+    .intel-empty {
+        text-align: center !important;
+        padding: 40px 0 !important;
+        color: #333 !important;
+        font-size: 0.82rem !important;
+    }
+    /* INTEL 터미널 (수집 로그용) */
+    .intel-terminal {
+        background: #0A0A0A !important;
+        border: 1px solid rgba(0,240,255,0.08) !important;
+        border-radius: 10px !important;
+        padding: 12px 14px !important;
+        font-family: monospace !important;
+        font-size: 0.72rem !important;
+        color: #00C8FF !important;
+        line-height: 1.55 !important;
+        overflow-y: auto !important;
+    }
+    /* INTEL 실행 버튼 */
+    .intel-run-btn > button {
+        background: linear-gradient(135deg, #003D5C, #005580) !important;
+        color: #00F0FF !important;
+        border: 1px solid rgba(0,240,255,0.35) !important;
+        border-radius: 12px !important;
+        font-weight: 800 !important;
+        letter-spacing: 2px !important;
+        text-transform: uppercase !important;
+        transition: all 0.2s !important;
+    }
+    .intel-run-btn > button:hover {
+        background: linear-gradient(135deg, #005580, #0077AA) !important;
+        box-shadow: 0 4px 18px rgba(0,240,255,0.25) !important;
+        border-color: rgba(0,240,255,0.6) !important;
+    }
+    .intel-run-btn > button:disabled {
+        background: #1A1A1A !important;
+        color: #444 !important;
+        border-color: rgba(255,255,255,0.08) !important;
+        box-shadow: none !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -344,6 +503,13 @@ def _init_state():
         "swarm_running":          False,   # 백그라운드 워커 실행 중 여부
         "swarm_queue":            None,    # 워커 → UI 메시지 채널
         "swarm_stop_event":       None,    # UI → 워커 중단 신호
+        # ── INTEL 트렌드 분석 ────────────────────────
+        "intel_running":          False,   # INTEL 워커 실행 중 여부
+        "intel_queue":            None,    # INTEL 워커 → UI 채널
+        "intel_log":              [],      # INTEL 수집/분석 로그
+        "intel_result":           None,    # 마지막 분석 결과 dict
+        # 15분 캐시: {cache_key → {"result": dict, "ts": float}}
+        "intel_cache":            {},
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -499,6 +665,75 @@ def _swarm_worker(
 
     q_log(f"═══════ SWARM COMPLETE — {wave_count} WAVES FIRED ═══════")
     log_q.put({"type": "done"})
+
+
+# ══════════════════════════════════════════════
+# INTEL 백그라운드 워커 — 수집 + 분석 파이프라인
+# ══════════════════════════════════════════════
+
+def _intel_worker(
+    log_q: queue.Queue,
+    *,
+    api_key: str,
+    gallery_id: str,
+    gallery_type: str,
+    pages: int,
+) -> None:
+    """백그라운드 스레드: TrendScraper 수집 → GhostBrain.analyze_trend() 분석.
+
+    session_state에 직접 접근하지 않고 queue.Queue로만 UI에 통신한다.
+    완료 시 {"type": "intel_result", "data": {...}} 메시지를 전송한다.
+    """
+    from ghost_protocol.scraper import TrendScraper
+    from ghost_protocol.brain import GhostBrain, RateLimitError
+
+    def _log(msg: str) -> None:
+        log_q.put({"type": "intel_log", "data": msg})
+
+    # ── Brain 초기화 ──────────────────────────────────────
+    try:
+        brain = GhostBrain(api_key=api_key or None)
+    except Exception as e:
+        _log(f"❌ Gemini 초기화 실패: {str(e)[:100]}")
+        log_q.put({"type": "intel_done"})
+        return
+
+    # ── 1단계: AJAX 경량 수집 ─────────────────────────────
+    _log(f"🔍 [{gallery_id}] 트렌드 수집 시작 (AJAX 모드, {pages} 페이지)")
+    try:
+        scraper  = TrendScraper()
+        raw_data = scraper.collect_trending(
+            gallery_id=gallery_id,
+            gallery_type=gallery_type,
+            pages=pages,
+            progress_callback=_log,
+        )
+    except ImportError as e:
+        _log(f"❌ 의존성 오류: {e}")
+        log_q.put({"type": "intel_done"})
+        return
+    except Exception as e:
+        _log(f"❌ 수집 실패: {str(e)[:120]}")
+        log_q.put({"type": "intel_done"})
+        return
+
+    if not raw_data.get("titles"):
+        _log("⚠️ 수집된 데이터 없음 — 갤러리 ID / 타입 확인 필요")
+        log_q.put({"type": "intel_done"})
+        return
+
+    # ── 2단계: Gemini 트렌드 분석 ────────────────────────
+    _log("🧠 Gemini 트렌드 분석 중...")
+    try:
+        result = brain.analyze_trend(raw_data)
+        _log("✅ 분석 완료!")
+        log_q.put({"type": "intel_result", "data": result})
+    except RateLimitError:
+        _log("⚠️ Rate Limit (429) — API 쿼터를 초과했습니다. 1분 후 재시도하세요.")
+    except Exception as e:
+        _log(f"❌ 분석 실패: {str(e)[:120]}")
+
+    log_q.put({"type": "intel_done"})
 
 
 # ══════════════════════════════════════════════
@@ -753,6 +988,182 @@ with col_log:
         )
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# INTEL 브리핑 섹션 — Read-Only 트렌드 분석 (포스팅 없음)
+# ══════════════════════════════════════════════════════════════════════════════
+st.markdown("---")
+st.markdown(
+    '<div class="cc-header" style="margin-bottom:4px">'
+    '<span class="cc-title">🔍 Intel 정보 브리핑</span>'
+    '<span class="cc-badge">READ-ONLY · TREND ANALYSIS</span>'
+    '</div>',
+    unsafe_allow_html=True,
+)
+
+_intel_col_ctrl, _intel_col_result = st.columns([1, 2], gap="large")
+
+# ── 컨트롤 패널 ────────────────────────────────────────────────
+with _intel_col_ctrl:
+    _intel_gid = st.text_input(
+        "분석할 갤러리 ID",
+        value="stockus",
+        key="intel_gallery_id",
+        placeholder="예: stockus, baseball_new9",
+    )
+    _intel_type_map = {
+        "마이너 (mgallery)": "mgallery",
+        "정규 (board)":      "board",
+        "미니 (mini)":       "mini",
+    }
+    _intel_type_label = st.selectbox(
+        "갤러리 타입",
+        options=list(_intel_type_map.keys()),
+        index=0,
+        key="intel_gallery_type_label",
+    )
+    _intel_gtype = _intel_type_map[_intel_type_label]
+
+    _intel_pages = st.slider(
+        "수집 페이지 수",
+        min_value=1, max_value=5, value=3,
+        key="intel_pages",
+        help="페이지 수가 많을수록 정확도↑, 수집 시간↑",
+    )
+
+    # ── 15분 캐시 유효성 확인 ──────────────────────────────
+    _INTEL_CACHE_TTL = 15 * 60  # 900초
+    _intel_cache_key = f"{_intel_gid}::{_intel_gtype}"
+    _intel_cached    = st.session_state.intel_cache.get(_intel_cache_key)
+    _intel_cache_age: float | None = None
+    _intel_cache_valid = False
+
+    if _intel_cached:
+        _intel_cache_age   = time.time() - _intel_cached.get("ts", 0)
+        _intel_cache_valid = _intel_cache_age < _INTEL_CACHE_TTL
+
+    if _intel_cache_valid and _intel_cache_age is not None:
+        _mins_ago = int(_intel_cache_age // 60)
+        _secs_ago = int(_intel_cache_age % 60)
+        st.caption(f"✅ 캐시 유효 — {_mins_ago}분 {_secs_ago}초 전 분석")
+    elif _intel_cached:
+        st.caption("♻️ 캐시 만료 (15분) — 재분석 필요")
+
+    # ── 실행 버튼 ──────────────────────────────────────────
+    _intel_is_running = st.session_state.get("intel_running", False)
+    _intel_btn_disabled = (
+        not has_any_key
+        or not _intel_gid.strip()
+        or _intel_is_running
+    )
+
+    st.markdown('<div class="intel-run-btn">', unsafe_allow_html=True)
+    _intel_fire = st.button(
+        "🔍  분석 시작" if not _intel_is_running else "⏳  분석 중...",
+        key="intel_fire_btn",
+        disabled=_intel_btn_disabled,
+        width="stretch",
+    )
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # 수집 로그 미니 터미널
+    if st.session_state.intel_log:
+        _intel_log_html = "".join(
+            f'<div>{_html.escape(ln)}</div>'
+            for ln in st.session_state.intel_log[-20:]
+        )
+        st.markdown(
+            f'<div class="intel-terminal" style="height:160px;overflow-y:auto">'
+            f'{_intel_log_html}</div>',
+            unsafe_allow_html=True,
+        )
+
+# ── 결과 패널 ────────────────────────────────────────────────
+with _intel_col_result:
+    _ir = st.session_state.intel_result
+
+    # 캐시 히트 시 캐시 결과 표시
+    if _ir is None and _intel_cache_valid and _intel_cached:
+        _ir = _intel_cached["result"]
+
+    if _ir:
+        # 감성 → CSS 클래스 매핑
+        _SENTIMENT_CLASS = {
+            "패닉": "panic", "공포": "panic",
+            "적대적": "hostile", "분노": "hostile", "공격": "hostile",
+            "조롱": "mock", "냉소": "mock", "비꼬": "mock",
+            "우호적": "friendly", "긍정": "friendly",
+        }
+        _sent_raw = _ir.get("sentiment", "알 수 없음")
+        _sent_cls = "intel-sentiment-neutral"
+        for kw, cls in _SENTIMENT_CLASS.items():
+            if kw in _sent_raw:
+                _sent_cls = f"intel-sentiment-{cls}"
+                break
+
+        # ── 캐시 타임스탬프 표시 ──
+        _ts_label = ""
+        if _intel_cache_valid and _intel_cache_age is not None:
+            _ts_label = f"캐시 {int(_intel_cache_age // 60)}분 {int(_intel_cache_age % 60)}초 전"
+
+        _hot_chips = "".join(
+            f'<span class="intel-chip-hot">{_html.escape(t)}</span>'
+            for t in _ir.get("hot_topics", [])
+        )
+        _meme_chips = "".join(
+            f'<span class="intel-chip-meme">{_html.escape(m)}</span>'
+            for m in _ir.get("memes", [])
+        )
+        _kw_chips = "".join(
+            f'<span class="intel-chip-kw">{_html.escape(w)}</span>'
+            for w in _ir.get("top_keywords", [])[:15]
+        )
+        _stats = _ir.get("stats", {})
+        _stat_pills = (
+            f'<span class="intel-stat-pill">제목 <span>{_stats.get("titles_count", 0)}</span>개</span>'
+            f'<span class="intel-stat-pill">댓글 <span>{_stats.get("comments_count", 0)}</span>개</span>'
+            f'<span class="intel-stat-pill">키워드 <span>{_stats.get("keywords_found", 0)}</span>개</span>'
+        )
+
+        st.markdown(
+            f'<div class="intel-card">'
+            f'  <div class="intel-header">'
+            f'    <span class="intel-title">📡 INTEL BRIEFING</span>'
+            f'    <span class="intel-gallery-badge">{_html.escape(_intel_gid)} / {_intel_gtype}</span>'
+            f'    <span class="intel-cache-ts">{_html.escape(_ts_label)}</span>'
+            f'  </div>'
+            # 감성
+            f'  <div class="intel-section-label">OVERALL SENTIMENT</div>'
+            f'  <div class="intel-sentiment {_sent_cls}">{_html.escape(_sent_raw)}</div>'
+            # 핫 떡밥
+            f'  <div class="intel-section-label">🔥 HOT TOPICS</div>'
+            f'  <div class="intel-chips">{_hot_chips}</div>'
+            # 밈
+            f'  <div class="intel-section-label">💬 TRENDING MEMES</div>'
+            f'  <div class="intel-chips">{_meme_chips if _meme_chips else "<span style=\"color:#333;font-size:0.72rem\">감지된 밈 없음</span>"}</div>'
+            # 요약
+            f'  <div class="intel-section-label">📝 SUMMARY</div>'
+            f'  <div class="intel-summary">{_html.escape(_ir.get("summary", ""))}</div>'
+            # 키워드 클라우드
+            f'  <div class="intel-section-label" style="margin-top:14px">🔑 TOP KEYWORDS</div>'
+            f'  <div class="intel-chips">{_kw_chips}</div>'
+            # 수집 스탯
+            f'  <div class="intel-stats">{_stat_pills}</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(
+            '<div class="intel-card">'
+            '<div class="intel-empty">'
+            '📡 대기 중<br><br>'
+            '갤러리 ID를 확인하고<br>'
+            '<b style="color:#00F0FF">🔍 분석 시작</b>을 누르세요.<br><br>'
+            '<span style="color:#333;font-size:0.72rem">분석 결과는 15분간 캐시됩니다.</span>'
+            '</div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+
 # ══════════════════════════════════════════════
 # FIRE — 백그라운드 워커 시작
 # ══════════════════════════════════════════════
@@ -811,21 +1222,60 @@ if stop_clicked and st.session_state.get("swarm_stop_event"):
     st.session_state.swarm_stop_event.set()
     st.session_state.swarm_log.append("[SWARM] 🛑 중단 요청 전송됨 — 현재 작업 완료 후 종료...")
 
+# ══════════════════════════════════════════════
+# INTEL FIRE — 분석 워커 시작
+# ══════════════════════════════════════════════
+if _intel_fire:
+    _igid = (_intel_gid or "").strip()
+    if not has_any_key:
+        st.error("⚠️ Gemini API Key가 없습니다. 사이드바에 입력하세요.")
+    elif not _igid:
+        st.error("⚠️ 갤러리 ID를 입력하세요.")
+    elif _intel_cache_valid and _intel_cached:
+        # 15분 캐시 히트 → 워커 없이 캐시 결과 즉시 표시
+        st.session_state.intel_result = _intel_cached["result"]
+        st.rerun()
+    else:
+        # 캐시 미스 / 만료 → 백그라운드 워커 실행
+        st.session_state.intel_log    = []
+        st.session_state.intel_result = None
+        st.session_state.intel_running = True
+
+        _intel_q: queue.Queue = queue.Queue()
+        st.session_state.intel_queue = _intel_q
+
+        threading.Thread(
+            target=_intel_worker,
+            kwargs={
+                "log_q":       _intel_q,
+                "api_key":     st.session_state.brain_api_key,
+                "gallery_id":  _igid,
+                "gallery_type": _intel_gtype,
+                "pages":       _intel_pages,
+            },
+            daemon=True,
+        ).start()
+
+        st.rerun()
+
 
 # ══════════════════════════════════════════════
-# POLLING — 백그라운드 스레드 → UI 동기화
+# POLLING — Swarm + INTEL 백그라운드 스레드 → UI 동기화
 # ══════════════════════════════════════════════
-# 매 rerun마다 Queue를 드레인하고 session_state를 갱신.
-# swarm_running이 True인 동안 0.5초 폴링 간격으로 st.rerun()을 유지한다.
-# 메인 스레드의 최대 블로킹 시간: 0.5초 — WebSocket 타임아웃 위험 없음.
+# 매 rerun마다 양 Queue를 드레인하고 session_state를 갱신.
+# 어느 한 워커라도 실행 중이면 0.5초 폴링 간격을 유지한다.
+# 메인 스레드 최대 블로킹 시간: 0.5초 — WebSocket 타임아웃 위험 없음.
+_any_running = False
+_any_done    = False
+
+# ── Swarm Queue 드레인 ─────────────────────────────────
 if st.session_state.get("swarm_running") and st.session_state.get("swarm_queue") is not None:
-    _q: queue.Queue = st.session_state.swarm_queue
-    _done = False
+    _any_running = True
+    _sq: queue.Queue = st.session_state.swarm_queue
 
-    # 큐에 쌓인 메시지 전부 드레인
     while True:
         try:
-            _msg = _q.get_nowait()
+            _msg = _sq.get_nowait()
         except queue.Empty:
             break
 
@@ -845,11 +1295,42 @@ if st.session_state.get("swarm_running") and st.session_state.get("swarm_queue")
             st.session_state.swarm_running    = False
             st.session_state.swarm_queue      = None
             st.session_state.swarm_stop_event = None
-            _done = True
+            _any_running = False
+            _any_done    = True
 
-    # 실행 중: 0.5초 후 재폴링 / 완료: 최종 rerun으로 UI 확정
-    if st.session_state.swarm_running:
-        time.sleep(0.5)
-        st.rerun()
-    elif _done:
-        st.rerun()
+# ── INTEL Queue 드레인 ─────────────────────────────────
+if st.session_state.get("intel_running") and st.session_state.get("intel_queue") is not None:
+    _any_running = True
+    _iq: queue.Queue = st.session_state.intel_queue
+
+    while True:
+        try:
+            _imsg = _iq.get_nowait()
+        except queue.Empty:
+            break
+
+        if _imsg["type"] == "intel_log":
+            st.session_state.intel_log.append(_imsg["data"])
+
+        elif _imsg["type"] == "intel_result":
+            _result_data = _imsg["data"]
+            st.session_state.intel_result = _result_data
+            # 15분 캐시 갱신
+            _ck = f"{st.session_state.get('intel_gallery_id', '')}::{_intel_gtype}"
+            st.session_state.intel_cache[_ck] = {
+                "result": _result_data,
+                "ts":     time.time(),
+            }
+
+        elif _imsg["type"] == "intel_done":
+            st.session_state.intel_running = False
+            st.session_state.intel_queue   = None
+            _any_running = False
+            _any_done    = True
+
+# ── 폴링 제어 ─────────────────────────────────────────
+if _any_running:
+    time.sleep(0.5)
+    st.rerun()
+elif _any_done:
+    st.rerun()

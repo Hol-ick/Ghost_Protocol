@@ -31,6 +31,16 @@ from typing import Optional, Callable, Awaitable
 
 from playwright.async_api import async_playwright, Browser, Page, BrowserContext
 
+# ══════════════════════════════════════════════
+# TrendScraper 경량 HTTP 의존성 (Playwright 불필요)
+# ══════════════════════════════════════════════
+try:
+    import requests as _requests
+    from bs4 import BeautifulSoup as _BeautifulSoup
+    _HAS_REQUESTS = True
+except ImportError:
+    _HAS_REQUESTS = False
+
 
 # ══════════════════════════════════════════════
 # PyInstaller 환경에서 Playwright 브라우저 경로 보정
@@ -1216,3 +1226,269 @@ class GalleryScraper:
             await self.close()
 
         return total_saved
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TrendScraper — AJAX 기반 경량 Read-Only 트렌드 수집기 (v1.0)
+#
+# Architecture:
+#   requests.Session ──→ 목록 페이지 HTML (BeautifulSoup 파싱)
+#                    ──→ AJAX 댓글 API (POST /board/comment/ → JSON)
+#   collect_trending() ─ 위 두 메서드 조합, progress_callback 지원
+#
+# Playwright 없이 동작 — 가볍고 빠름, 차단 위험↓
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TrendScraper:
+    """DC Inside 경량 Read-Only 트렌드 수집기.
+
+    Playwright 없이 requests + BeautifulSoup으로 목록 페이지를 파싱하고,
+    댓글은 DC Inside 내부 AJAX API를 직접 호출하여 수집한다.
+
+    Usage:
+        scraper = TrendScraper()
+        data = scraper.collect_trending("stockus", gallery_type="mgallery", pages=3)
+        # → {"titles": [...], "comments": [...], "gallery_id": "...", ...}
+    """
+
+    # DC Inside 타입별 댓글 AJAX 엔드포인트
+    _COMMENT_APIS: dict[str, str] = {
+        "board":    "https://gall.dcinside.com/board/comment/",
+        "mgallery": "https://gall.dcinside.com/mgallery/board/comment/",
+        "mini":     "https://gall.dcinside.com/mini/board/comment/",
+    }
+
+    # HTML 태그 / DC 앱 워터마크 제거 패턴
+    _CLEAN_RE = re.compile(
+        r"<[^>]+>"                    # HTML 태그
+        r"|https?://\S+"              # URL
+        r"|- dc official App|- dc App"  # DC 앱 워터마크
+        r"|\[.*?\]"                   # [이미지], [동영상] 등 태그
+    )
+
+    def __init__(self) -> None:
+        if not _HAS_REQUESTS:
+            raise ImportError(
+                "TrendScraper에는 'requests'와 'beautifulsoup4' 패키지가 필요합니다. "
+                "pip install requests beautifulsoup4 로 설치하세요."
+            )
+        self._session = _requests.Session()
+        self._session.headers.update({
+            "User-Agent": random.choice(USER_AGENTS),
+            "Referer":    "https://gall.dcinside.com/",
+            "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        })
+
+    # ──────────────────────────────────────────
+    # 내부 헬퍼
+    # ──────────────────────────────────────────
+
+    def _clean(self, text: str) -> str:
+        """HTML 태그·URL·앱 워터마크를 제거하고 공백을 정리한다."""
+        return self._CLEAN_RE.sub(" ", text).strip()
+
+    def _list_url(self, gallery_type: str, gallery_id: str, page: int) -> str:
+        """갤러리 목록 URL 조립 (타입별 분기)."""
+        from .config import GALLERY_PATTERNS
+        base = GALLERY_PATTERNS.get(gallery_type, GALLERY_PATTERNS["mgallery"])
+        return f"{base.format(gallery_id=gallery_id)}&page={page}"
+
+    # ──────────────────────────────────────────
+    # 공개 메서드
+    # ──────────────────────────────────────────
+
+    def fetch_post_list(
+        self,
+        gallery_id: str,
+        gallery_type: str = "mgallery",
+        page: int = 1,
+    ) -> list[dict]:
+        """갤러리 목록 페이지를 파싱하여 게시글 메타데이터 리스트를 반환한다.
+
+        Returns:
+            [{"post_no": str, "title": str, "views": int, "recommends": int}, ...]
+            에러 발생 시 빈 리스트 반환 (caller가 처리).
+        """
+        url = self._list_url(gallery_type, gallery_id, page)
+        try:
+            resp = self._session.get(url, timeout=12)
+            resp.raise_for_status()
+        except _requests.RequestException:
+            return []
+
+        soup = _BeautifulSoup(resp.text, "html.parser")
+        posts: list[dict] = []
+
+        for tr in soup.select("tr.ub-content"):
+            try:
+                post_no: str = tr.get("data-no", "").strip()
+                if not post_no:
+                    continue
+
+                # 제목: gall_tit 셀 내부 첫 번째 일반 링크
+                title_el = tr.select_one("td.gall_tit > a:not([class])")
+                if title_el is None:
+                    title_el = tr.select_one("td.gall_tit a")
+                if title_el is None:
+                    continue
+
+                title = self._clean(title_el.get_text(strip=True))
+                if not title:
+                    continue
+
+                # 조회수 / 추천수
+                views_el = tr.select_one("td.gall_count")
+                rec_el   = tr.select_one("td.gall_recommend")
+
+                def _parse_int(el) -> int:
+                    if el is None:
+                        return 0
+                    raw = el.get_text(strip=True).replace(",", "")
+                    try:
+                        return int(raw)
+                    except ValueError:
+                        return 0
+
+                posts.append({
+                    "post_no":    post_no,
+                    "title":      title,
+                    "views":      _parse_int(views_el),
+                    "recommends": _parse_int(rec_el),
+                })
+            except Exception:  # noqa: BLE001 — 개별 행 파싱 실패는 무시
+                continue
+
+        return posts
+
+    def fetch_comments_ajax(
+        self,
+        gallery_id: str,
+        post_no: str,
+        gallery_type: str = "mgallery",
+    ) -> list[str]:
+        """DC Inside 내부 AJAX API로 댓글 텍스트 리스트를 반환한다.
+
+        Returns:
+            댓글 순수 텍스트 리스트.  실패 시 빈 리스트.
+        """
+        api_url = self._COMMENT_APIS.get(gallery_type, self._COMMENT_APIS["mgallery"])
+
+        from .config import POST_URL_PATTERNS
+        view_pattern = POST_URL_PATTERNS.get(gallery_type, POST_URL_PATTERNS["mgallery"])
+        referer = view_pattern.format(gallery_id=gallery_id, post_id=post_no)
+
+        headers = {
+            "X-Requested-With": "XMLHttpRequest",
+            "Content-Type":     "application/x-www-form-urlencoded; charset=UTF-8",
+            "Referer":          referer,
+        }
+        payload = {
+            "id":      gallery_id,
+            "no":      post_no,
+            "re_page": "1",
+        }
+
+        try:
+            resp = self._session.post(
+                api_url, data=payload, headers=headers, timeout=8
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except (_requests.RequestException, ValueError):
+            return []
+
+        comment_list = []
+        if isinstance(data, dict):
+            comment_list = data.get("comment_list", [])
+        elif isinstance(data, list):
+            comment_list = data
+
+        texts: list[str] = []
+        for c in comment_list:
+            if not isinstance(c, dict):
+                continue
+            raw = c.get("memo") or c.get("comment") or c.get("content") or ""
+            cleaned = self._clean(str(raw))
+            if cleaned and len(cleaned) > 1:
+                texts.append(cleaned)
+
+        return texts
+
+    def collect_trending(
+        self,
+        gallery_id: str,
+        gallery_type: str = "mgallery",
+        pages: int = 3,
+        max_comments_per_post: int = 5,
+        top_posts_per_page: int = 5,
+        progress_callback: Optional[Callable[[str], None]] = None,
+    ) -> dict:
+        """트렌드 수집 오케스트레이터.
+
+        1. pages 개 목록 페이지에서 게시글 제목·메타 수집
+        2. 추천수 상위 top_posts_per_page 개 글마다 AJAX로 댓글 수집
+        3. 제목 최대 100개, 댓글 최대 100개 상한선 (메모리 보호)
+
+        Returns:
+            {
+              "titles": list[str],
+              "comments": list[str],
+              "gallery_id": str,
+              "gallery_type": str,
+              "collected_at": str  # ISO 8601
+            }
+        """
+        def _log(msg: str) -> None:
+            if progress_callback:
+                progress_callback(msg)
+
+        all_titles:   list[str] = []
+        all_comments: list[str] = []
+
+        TITLE_CAP   = 100
+        COMMENT_CAP = 100
+
+        for page_no in range(1, pages + 1):
+            _log(f"📄 목록 수집 중... ({page_no}/{pages} 페이지)")
+
+            posts = self.fetch_post_list(gallery_id, gallery_type, page_no)
+            if not posts:
+                _log(f"⚠️ {page_no} 페이지 수집 실패 — 건너뜀")
+                continue
+
+            # 제목 누적 (상한 적용)
+            for p in posts:
+                if len(all_titles) >= TITLE_CAP:
+                    break
+                all_titles.append(p["title"])
+
+            # 추천수 Top N 글의 댓글 수집
+            top = sorted(posts, key=lambda x: x.get("recommends", 0), reverse=True)
+            top = top[:top_posts_per_page]
+
+            for p in top:
+                if len(all_comments) >= COMMENT_CAP:
+                    break
+                _log(f"💬 댓글 수집: [{p['post_no']}] {p['title'][:24]}...")
+                cmts = self.fetch_comments_ajax(gallery_id, p["post_no"], gallery_type)
+                # 개별 댓글 50자 trim — analyze_trend 토큰 절약
+                trimmed = [c[:50] for c in cmts[:max_comments_per_post]]
+                all_comments.extend(trimmed)
+                _time.sleep(random.uniform(0.3, 0.7))  # 차단 회피 딜레이
+
+            # 페이지 간 쿨다운
+            if page_no < pages:
+                _time.sleep(random.uniform(0.5, 1.0))
+
+        _log(
+            f"✅ 수집 완료 — 제목 {len(all_titles)}개 / "
+            f"댓글 {len(all_comments)}개"
+        )
+        return {
+            "titles":       all_titles,
+            "comments":     all_comments,
+            "gallery_id":   gallery_id,
+            "gallery_type": gallery_type,
+            "collected_at": datetime.now().isoformat(),
+        }
