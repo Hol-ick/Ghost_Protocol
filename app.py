@@ -35,35 +35,28 @@ st.set_page_config(
 )
 
 # ══════════════════════════════════════════════
-# CSS — Warm Sidebar + Dark Command Center
+# CSS — Stealth Dark Bento Theme
 # ══════════════════════════════════════════════
 st.markdown("""
 <style>
-    /* ═══ 1. 기본 라이트 테마 강제 ═══ */
-    :root, [data-theme="dark"] {
-        --primary-color:            #C8A97E !important;
-        --background-color:         #F4F2EE !important;
-        --secondary-background-color: #FFFFFF !important;
-        --text-color:               #2C2C2C !important;
-        color-scheme: light !important;
-    }
+    /* ═══ 1. 전역 다크 베이스 ═══ */
     .stApp, .stMain, footer {
-        background-color: var(--background-color) !important;
-        color: var(--text-color) !important;
+        background-color: #0E1117 !important;
+        color: #FAFAFA !important;
     }
     .stApp header[data-testid="stHeader"] {
-        background-color: var(--background-color) !important;
+        background-color: #0E1117 !important;
     }
     .stMainBlockContainer { padding-top: 1.5rem !important; }
 
     /* ═══ 2. 사이드바 ═══ */
     section[data-testid="stSidebar"] > div {
-        background-color: #FFFFFF !important;
-        box-shadow: 2px 0 12px rgba(0,0,0,0.04) !important;
+        background-color: #1A1A1A !important;
+        border-right: 1px solid rgba(255,255,255,0.08) !important;
     }
     section[data-testid="stSidebar"] .stMarkdown,
     section[data-testid="stSidebar"] label,
-    section[data-testid="stSidebar"] p { color: #2C2C2C !important; }
+    section[data-testid="stSidebar"] p { color: #FAFAFA !important; }
 
     /* ═══ 3. 사이드바 로고 ═══ */
     .sb-logo {
@@ -71,69 +64,69 @@ st.markdown("""
         font-size: 1.1rem !important;
         font-weight: 900 !important;
         letter-spacing: 3px !important;
-        color: #2C2C2C !important;
+        color: #FAFAFA !important;
         padding: 8px 0 4px 0 !important;
     }
-    .sb-logo span { color: #C8A97E !important; }
+    .sb-logo span { color: #00F0FF !important; }
     .sb-sub {
         text-align: center !important;
         font-size: 0.68rem !important;
-        color: #B0A898 !important;
+        color: #888888 !important;
         letter-spacing: 2px !important;
         text-transform: uppercase !important;
         margin-bottom: 4px !important;
     }
 
-    /* ═══ 4. 입력 필드 기본 ═══ */
+    /* ═══ 4. 입력 필드 ═══ */
     div[data-baseweb="input"] {
-        background-color: #FFFFFF !important;
-        border: 1px solid #DDD8CF !important;
+        background-color: #1E1E1E !important;
+        border: 1px solid rgba(255,255,255,0.1) !important;
         border-radius: 8px !important;
     }
     div[data-baseweb="input"]:focus-within {
-        border-color: #C8A97E !important;
-        box-shadow: 0 0 0 2px rgba(200,169,126,0.15) !important;
+        border-color: #00F0FF !important;
+        box-shadow: 0 0 0 2px rgba(0,240,255,0.15) !important;
     }
     div[data-baseweb="select"] > div,
     div[data-baseweb="base-input"] input {
-        background-color: #FFFFFF !important;
-        color: #2C2C2C !important;
-        -webkit-text-fill-color: #2C2C2C !important;
+        background-color: #1E1E1E !important;
+        color: #FAFAFA !important;
+        -webkit-text-fill-color: #FAFAFA !important;
     }
-    ul[role="listbox"] { background-color: #FFFFFF !important; }
-    li[role="option"] { color: #2C2C2C !important; }
+    ul[role="listbox"] { background-color: #1E1E1E !important; }
+    li[role="option"] { color: #FAFAFA !important; }
     li[role="option"]:hover, li[role="option"][aria-selected="true"] {
-        background-color: #F2EFE9 !important; color: #C8A97E !important;
+        background-color: #2A2A2A !important; color: #00F0FF !important;
     }
     div[data-baseweb="popover"], div[data-baseweb="popover"] > div {
-        background-color: #FFFFFF !important;
+        background-color: #1E1E1E !important;
     }
     .stTextInput input, .stTextArea textarea {
-        background-color: #FFFFFF !important; color: #2C2C2C !important;
+        background-color: #1E1E1E !important; color: #FAFAFA !important;
+        -webkit-text-fill-color: #FAFAFA !important;
     }
 
-    /* ═══ 5. 버튼 기본 (골드) ═══ */
+    /* ═══ 5. 버튼 기본 ═══ */
     div.stButton > button {
-        background-color: #C8A97E !important;
-        color: #FFFFFF !important;
-        border: none !important;
+        background-color: #1E1E1E !important;
+        color: #FAFAFA !important;
+        border: 1px solid rgba(255,255,255,0.15) !important;
         border-radius: 12px !important;
         font-weight: 700 !important;
         transition: all 0.2s !important;
     }
     div.stButton > button:hover {
-        background-color: #B08D5B !important;
-        box-shadow: 0 4px 14px rgba(200,169,126,0.4) !important;
+        background-color: #2A2A2A !important;
+        border-color: rgba(255,255,255,0.3) !important;
     }
 
     /* ═══ 6. Command Center 카드 ═══ */
     .command-center {
-        background: linear-gradient(145deg, #12121E 0%, #1A1A2E 100%) !important;
-        border: 1px solid #2E2E4A !important;
+        background: #1A1A1A !important;
+        border: 1px solid rgba(255,255,255,0.1) !important;
         border-radius: 18px !important;
         padding: 28px 32px !important;
         margin-bottom: 18px !important;
-        box-shadow: 0 8px 32px rgba(0,0,0,0.2) !important;
     }
     .cc-header {
         display: flex !important;
@@ -142,18 +135,19 @@ st.markdown("""
         margin-bottom: 20px !important;
     }
     .cc-title {
-        color: #E0DFFF !important;
+        color: #00F0FF !important;
         font-size: 0.75rem !important;
         font-weight: 800 !important;
         letter-spacing: 4px !important;
         text-transform: uppercase !important;
+        text-shadow: 0 0 12px rgba(0,240,255,0.5) !important;
     }
     .cc-badge {
-        background: rgba(188, 140, 255, 0.12) !important;
-        border: 1px solid rgba(188, 140, 255, 0.3) !important;
+        background: rgba(0,240,255,0.1) !important;
+        border: 1px solid rgba(0,240,255,0.3) !important;
         border-radius: 20px !important;
         padding: 2px 10px !important;
-        color: #BC8CFF !important;
+        color: #00F0FF !important;
         font-size: 0.65rem !important;
         font-weight: 600 !important;
         letter-spacing: 1px !important;
@@ -172,22 +166,21 @@ st.markdown("""
         margin-bottom: 6px !important;
     }
     .cti-row:last-child { margin-bottom: 0 !important; }
-    .cti-label { color: #484F58 !important; font-size: 0.68rem !important; letter-spacing: 1px !important; text-transform: uppercase !important; }
-    .cti-val { color: #C8D3E0 !important; font-size: 0.78rem !important; font-weight: 600 !important; font-family: monospace !important; }
-    /* Command Center 내부 입력 필드 다크 오버라이드 */
+    .cti-label { color: #888888 !important; font-size: 0.68rem !important; letter-spacing: 1px !important; text-transform: uppercase !important; }
+    .cti-val { color: #E6EDF3 !important; font-size: 0.78rem !important; font-weight: 600 !important; font-family: monospace !important; }
     .command-center .stTextInput input,
     .command-center input[type="text"] {
         background-color: rgba(255,255,255,0.06) !important;
-        color: #E6EDF3 !important;
-        -webkit-text-fill-color: #E6EDF3 !important;
+        color: #FAFAFA !important;
+        -webkit-text-fill-color: #FAFAFA !important;
         border: 1px solid rgba(255,255,255,0.1) !important;
         border-radius: 8px !important;
     }
-    .command-center label { color: #8B949E !important; }
+    .command-center label { color: #AAAAAA !important; }
 
     /* ═══ 7. FIRE 버튼 ═══ */
     .fire-btn > button {
-        background: linear-gradient(135deg, #E53935 0%, #B71C1C 100%) !important;
+        background: #FF4B4B !important;
         color: #FFFFFF !important;
         font-size: 1.05rem !important;
         font-weight: 900 !important;
@@ -196,12 +189,12 @@ st.markdown("""
         padding: 0.85rem 2rem !important;
         border-radius: 14px !important;
         border: none !important;
-        box-shadow: 0 6px 24px rgba(229, 57, 53, 0.45) !important;
+        box-shadow: 0 6px 24px rgba(255,75,75,0.45) !important;
         transition: all 0.2s !important;
     }
     .fire-btn > button:hover {
-        background: linear-gradient(135deg, #EF5350 0%, #C62828 100%) !important;
-        box-shadow: 0 8px 32px rgba(229, 57, 53, 0.65) !important;
+        background: #FF2222 !important;
+        box-shadow: 0 8px 32px rgba(255,75,75,0.65) !important;
         transform: translateY(-2px) !important;
     }
     .fire-btn > button:disabled {
@@ -211,30 +204,30 @@ st.markdown("""
         opacity: 0.5 !important;
     }
 
-    /* ═══ 8. Live Terminal (dark log) ═══ */
+    /* ═══ 8. Live Terminal ═══ */
     .terminal {
-        background: #0D1117 !important;
-        border: 1px solid #21262D !important;
+        background: #000000 !important;
+        border: 1px solid rgba(0,255,0,0.15) !important;
         border-radius: 12px !important;
         padding: 16px !important;
         overflow-y: auto !important;
         font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace !important;
         font-size: 0.76rem !important;
         line-height: 1.6 !important;
-        color: #8B949E !important;
+        color: #00FF00 !important;
     }
     .terminal div { padding: 1px 0 !important; }
-    .t-ok   { color: #3FB950 !important; }
-    .t-err  { color: #F85149 !important; font-weight: 600 !important; }
-    .t-info { color: #58A6FF !important; }
-    .t-warn { color: #D29922 !important; }
+    .t-ok   { color: #00FF00 !important; }
+    .t-err  { color: #FF4B4B !important; font-weight: 600 !important; }
+    .t-info { color: #00F0FF !important; }
+    .t-warn { color: #FFD700 !important; }
     .t-wave { color: #BC8CFF !important; font-weight: 700 !important; letter-spacing: 1px !important; }
 
-    /* ═══ 9. Preview 카드 (dark) ═══ */
+    /* ═══ 9. Preview 카드 (bento dark) ═══ */
     .preview-dark {
-        background: #161B22 !important;
-        border: 1px solid #30363D !important;
-        border-radius: 14px !important;
+        background: #1E1E1E !important;
+        border: 1px solid rgba(255,255,255,0.1) !important;
+        border-radius: 12px !important;
         padding: 22px !important;
         min-height: 360px !important;
     }
@@ -247,36 +240,36 @@ st.markdown("""
         margin-bottom: 10px !important;
     }
     .pd-title {
-        color: #E6EDF3 !important;
+        color: #FAFAFA !important;
         font-size: 1.05rem !important;
         font-weight: 700 !important;
         margin-bottom: 14px !important;
         padding-bottom: 12px !important;
-        border-bottom: 1px solid #30363D !important;
+        border-bottom: 1px solid rgba(255,255,255,0.1) !important;
         line-height: 1.4 !important;
     }
     .pd-body {
-        color: #8B949E !important;
+        color: #CCCCCC !important;
         font-size: 0.9rem !important;
         line-height: 1.75 !important;
         white-space: pre-wrap !important;
     }
     .pd-empty {
-        color: #30363D !important;
+        color: #555555 !important;
         font-style: italic !important;
         text-align: center !important;
         padding: 60px 0 !important;
         font-size: 0.85rem !important;
     }
     .pd-status {
-        color: #3FB950 !important;
+        color: #00FF00 !important;
         font-size: 0.65rem !important;
         font-weight: 600 !important;
         letter-spacing: 2px !important;
         text-transform: uppercase !important;
         margin-top: 14px !important;
         padding-top: 10px !important;
-        border-top: 1px solid #21262D !important;
+        border-top: 1px solid rgba(255,255,255,0.08) !important;
     }
 
     /* ═══ 10. 섹션 헤더 ═══ */
@@ -285,7 +278,7 @@ st.markdown("""
         font-weight: 700 !important;
         letter-spacing: 2.5px !important;
         text-transform: uppercase !important;
-        color: #8C8478 !important;
+        color: #888888 !important;
         margin-bottom: 12px !important;
     }
 
@@ -297,20 +290,20 @@ st.markdown("""
     }
     .stat-card {
         flex: 1 !important;
-        background: #F7F5F0 !important;
-        border: 1px solid #E8E2D8 !important;
+        background: #1E1E1E !important;
+        border: 1px solid rgba(255,255,255,0.1) !important;
         border-radius: 10px !important;
         padding: 10px 8px !important;
         text-align: center !important;
     }
-    .stat-val { font-size: 1.4rem !important; font-weight: 800 !important; color: #2C2C2C !important; }
-    .stat-label { font-size: 0.62rem !important; color: #8C8478 !important; text-transform: uppercase !important; letter-spacing: 1px !important; }
-    .stat-ok .stat-val { color: #3a7d44 !important; }
-    .stat-err .stat-val { color: #C0392B !important; }
+    .stat-val { font-size: 1.4rem !important; font-weight: 800 !important; color: #FAFAFA !important; }
+    .stat-label { font-size: 0.62rem !important; color: #888888 !important; text-transform: uppercase !important; letter-spacing: 1px !important; }
+    .stat-ok .stat-val { color: #00FF00 !important; }
+    .stat-err .stat-val { color: #FF4B4B !important; }
 
     /* ═══ 12. Progress Bar ═══ */
     .stProgress > div > div {
-        background: linear-gradient(90deg, #E53935, #BC8CFF) !important;
+        background: linear-gradient(90deg, #FF4B4B, #BC8CFF) !important;
     }
 </style>
 """, unsafe_allow_html=True)
