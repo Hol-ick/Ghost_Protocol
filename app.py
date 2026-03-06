@@ -451,12 +451,12 @@ def _init_state() -> None:
         "target_length":          "보통 (3~4문장)",
         "target_headless":        True,
         # ── Widget 기본값 (Payload Bento) ────────────
-        "target_gallery_id":      "stockus",
+        "target_gallery_id":      "",
         "target_type_label":      "마이너 (mgallery)",
         "swarm_topic_input":      "",
         "swarm_wave_count":       3,
         # ── Widget 기본값 (INTEL Bento) ───────────────
-        "intel_gallery_id":       "stockus",
+        "intel_gallery_id":       "",
         "intel_type_label":       "마이너 (mgallery)",
         "intel_pages":            3,
     }
@@ -1120,7 +1120,7 @@ with st.expander("🔍  STEP 1  —  SITUATION ROOM  ·  TREND ANALYSIS"):
         st.text_input(
             "분석할 갤러리 ID",
             key="intel_gallery_id",
-            placeholder="예: stockus, baseball_new9",
+            placeholder="예: baseball_new9, soccer_new1, webtoon",
         )
         st.selectbox(
             "갤러리 타입",
@@ -1183,7 +1183,7 @@ with pay_left:
     st.text_input(
         "🎯 폭격할 주제를 입력하세요",
         key="swarm_topic_input",
-        placeholder="예: 나스닥 폭락 실화냐 / 테슬라 단타 계획 / 엔비디아 버블론",
+        placeholder="예: 요즘 분위기 왜 이러냐 / 이슈 터진 거 실화냐 / 다들 어떻게 생각하냐",
     )
     st.slider(
         "💣 WAVE 횟수",
@@ -1195,7 +1195,7 @@ with pay_right:
     st.text_input(
         "Gallery ID",
         key="target_gallery_id",
-        placeholder="예: stockus",
+        placeholder="예: baseball_new9",
         help="DC Inside 갤러리 ID",
     )
     st.selectbox(
@@ -1205,7 +1205,7 @@ with pay_right:
         help="정규→board / 마이너→mgallery",
     )
     # 재계산 (위젯 렌더 후 갱신)
-    _gallery_id   = st.session_state.get("target_gallery_id", "stockus")
+    _gallery_id   = st.session_state.get("target_gallery_id", "")
     _gallery_type = _TYPE_MAP.get(st.session_state.get("target_type_label", "마이너 (mgallery)"), "mgallery")
     _neural_tone  = _TONE_MAP.get(st.session_state.get("target_tone_label", "🧊 냉소적 (Cynical)"), "cynical")
     _length       = st.session_state.get("target_length", "보통 (3~4문장)")

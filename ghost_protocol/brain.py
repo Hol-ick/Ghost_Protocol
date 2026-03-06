@@ -470,11 +470,37 @@ class GhostBrain:
             author_stats=author_stats,
         )
 
-        # ── 6. Gemini API 호출 (분석용 — Native JSON Mode + 토큰 확장) ──
-        # response_mime_type: API 레벨에서 순수 JSON 강제 → 마크다운 펜스 원천 차단
-        # max_output_tokens: 512 → 2048 (hot_topics/summary 잘림 방지)
+        # ── 6. Gemini API 호출 (분석용 — Native JSON Mode + Schema 강제) ──
+        # response_mime_type: API 레벨 순수 JSON 강제 → 마크다운 펜스 원천 차단
+        # response_schema:    반환 구조·타입 고정 → key 누락·임의 구조 변경 불가
+        # max_output_tokens:  2048 (hot_topics/summary 잘림 방지)
+        _TREND_SCHEMA = {
+            "type": "object",
+            "properties": {
+                "hot_topics": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "현재 갤러리에서 가장 핫한 떡밥 3개",
+                },
+                "sentiment": {
+                    "type": "string",
+                    "description": "전반적인 갤러리 감성 (우호적/적대적/조롱/패닉 등)",
+                },
+                "memes": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "유행하는 밈·유행어",
+                },
+                "summary": {
+                    "type": "string",
+                    "description": "2문장 갤러리 분위기 요약",
+                },
+            },
+            "required": ["hot_topics", "sentiment", "memes", "summary"],
+        }
         cfg = types.GenerateContentConfig(
             response_mime_type="application/json",
+            response_schema=_TREND_SCHEMA,
             max_output_tokens=2048,
             temperature=0.3,       # 분석이므로 낮은 온도 → 일관성 ↑
         )
