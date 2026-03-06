@@ -1,14 +1,13 @@
 """Ghost Protocol v5.0 — Auto-poster module (Playwright).
 
 Pipeline:
-  accounts.json → random account select
-  Playwright    → headless browser (anti-detection)
-  DC Inside     → login → WAF delay → write post → done
-  log_callback  → real-time UI logging
+  accounts.txt → 아이디 목록 읽기 → 공통 비밀번호 매핑
+  Playwright   → headless browser (anti-detection)
+  DC Inside    → login → WAF delay → write post → done
+  log_callback → real-time UI logging
 """
 
 import asyncio
-import json
 import os
 import random
 import time
@@ -22,39 +21,46 @@ from .config import USER_AGENTS, WRITE_URL_PATTERNS, get_write_url
 # 계정 관리
 # ══════════════════════════════════════════════
 ACCOUNTS_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(__file__)), "accounts.json"
+    os.path.dirname(os.path.dirname(__file__)), "accounts.txt"
 )
+
+# 모든 계정에 공통으로 적용되는 비밀번호
+_COMMON_PW = "q1w2e3r4%%"
 
 LOGIN_URL = "https://sign.dcinside.com/login"
 
 
 def load_accounts() -> list[dict]:
-    """accounts.json에서 계정 목록을 로드.
+    """accounts.txt에서 아이디 목록을 읽어 공통 비밀번호와 매핑하여 반환.
+
+    accounts.txt 형식:
+        한 줄에 아이디 하나 (공백 라인·앞뒤 공백 자동 무시)
 
     Returns:
-        [{"id": "user1", "pw": "pass1"}, ...]
+        [{"id": "user1", "pw": "q1w2e3r4%%"}, ...]
 
     Raises:
-        FileNotFoundError: accounts.json이 없을 때
-        ValueError: 파일 형식이 잘못되었을 때
+        FileNotFoundError: accounts.txt가 없을 때
+        ValueError: 파일이 비어있을 때
     """
     if not os.path.exists(ACCOUNTS_PATH):
         raise FileNotFoundError(
-            f"accounts.json이 없습니다: {ACCOUNTS_PATH}\n"
-            '[{"id": "아이디", "pw": "비밀번호"}] 형식으로 생성하세요.'
+            f"[POSTER] ❌ accounts.txt가 없습니다: {ACCOUNTS_PATH}\n"
+            "프로젝트 루트에 accounts.txt 파일을 만들고 아이디를 한 줄에 하나씩 입력하세요."
         )
 
     with open(ACCOUNTS_PATH, "r", encoding="utf-8") as f:
-        accounts = json.load(f)
+        lines = f.readlines()
 
-    if not isinstance(accounts, list) or not accounts:
-        raise ValueError("accounts.json이 비어있거나 형식이 잘못되었습니다.")
+    ids = [line.strip() for line in lines if line.strip()]
 
-    for acc in accounts:
-        if "id" not in acc or "pw" not in acc:
-            raise ValueError('accounts.json 항목에 "id"와 "pw" 필드가 필요합니다.')
+    if not ids:
+        raise ValueError(
+            f"[POSTER] ❌ accounts.txt가 비어있습니다: {ACCOUNTS_PATH}\n"
+            "아이디를 한 줄에 하나씩 입력하세요."
+        )
 
-    return accounts
+    return [{"id": uid, "pw": _COMMON_PW} for uid in ids]
 
 
 def pick_random_account() -> dict:

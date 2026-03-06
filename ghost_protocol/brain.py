@@ -206,7 +206,7 @@ class GhostBrain:
 
         try:
             _cfg = types.GenerateContentConfig(
-                system_instruction=pm.load("system_base.txt"),
+                system_instruction=pm.render("system_base.txt", gallery_id=gallery_id),
                 safety_settings=SAFETY_SETTINGS,
                 response_mime_type="application/json",  # Native JSON — 마크다운 펜스 원천 차단
                 temperature=0.9,
@@ -253,8 +253,8 @@ class GhostBrain:
         """DC Inside 스타일 게시글 생성 (XML 태그 파싱).
 
         Args:
-            topic: 글 주제 (예: "엔비디아 실적 발표")
-            gallery_id: 갤러리 ID (예: "stockus")
+            topic: 글 주제 (예: "요즘 분위기 왜 이러냐")
+            gallery_id: 갤러리 ID (예: "baseball_new9")
             tone: 말투 (cynical / neutral / analytical / aggressive)
             context_hours: 컨텍스트 시간 범위 (None이면 미사용)
             length: 글 길이 ("짧게 (1~2문장)" / "보통 (3~4문장)" / "길게 (5문장 이상)")
@@ -332,14 +332,14 @@ class GhostBrain:
             cross_instruction = (
                 "\n[⚠️ 최우선 지시: monologue × 아주 짧게 조합]\n"
                 "본문은 탄식 한 방으로 끝내라. 아래 예시처럼:\n"
-                "  '에휴'  /  'ㅅㅂ'  /  '녹냐'  /  '어떡하노'  /  '시발년들'\n"
-                "  '계좌 녹는 거 보소'  /  '하...'  /  '존버나'\n"
+                "  '에휴'  /  'ㅅㅂ'  /  '어떡하노'  /  '아 진짜'  /  '이게 맞냐'\n"
+                "  '하...'  /  '어카냐 진짜'  /  '무슨 일임'\n"
                 "단어 1~2개, 끝. 키워드 나열 절대 금지. 문장 완성 절대 금지.\n"
             )
 
         parts.append(
             f"주제: {topic}\n\n"
-            f"위 주제로 디시 미주갤 스타일 게시글을 {tone_instruction}.\n"
+            f"위 주제로 디시 {gallery_id} 갤러리 스타일 게시글을 {tone_instruction}.\n"
             f"[분량 조건] {length_instruction}.\n"
             f"{cross_instruction}"
             f"{kw_inject}\n"
@@ -353,7 +353,7 @@ class GhostBrain:
 
         # ── Gemini API 호출 (GenerateContentConfig + 429 안전 처리) ──
         _cfg = types.GenerateContentConfig(
-            system_instruction=pm.load("system_base.txt"),
+            system_instruction=pm.render("system_base.txt", gallery_id=gallery_id),
             safety_settings=SAFETY_SETTINGS,
             max_output_tokens=2048,
             temperature=0.9,
