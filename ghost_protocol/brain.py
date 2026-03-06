@@ -495,8 +495,12 @@ class GhostBrain:
                     "type": "string",
                     "description": "2문장 갤러리 분위기 요약",
                 },
+                "ai_analysis": {
+                    "type": "string",
+                    "description": "갤러리의 전반적인 분위기와 민심에 대한 AI의 평문 분석 요약",
+                },
             },
-            "required": ["hot_topics", "sentiment", "memes", "summary"],
+            "required": ["hot_topics", "sentiment", "memes", "summary", "ai_analysis"],
         }
         cfg = types.GenerateContentConfig(
             response_mime_type="application/json",

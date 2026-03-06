@@ -803,17 +803,44 @@ def _intel_results_fragment() -> None:
                 unsafe_allow_html=True,
             )
 
-            _summary_text = _ir.get("summary", "").strip()
-            if _summary_text:
+            _summary_text    = _ir.get("summary", "").strip()
+            _ai_analysis_text = _ir.get("ai_analysis", "").strip()
+            if _summary_text or _ai_analysis_text:
                 _sb = _html.escape(_summary_text).replace("\n", "<br>")
+                _ab = _html.escape(_ai_analysis_text).replace("\n", "<br>")
+
+                # ── 카드 내부 블록 조립 ───────────────────────────────────────
+                _inner_html = ""
+                if _ab:
+                    _inner_html += (
+                        '<div style="color:#6A8FA0;font-size:0.62rem;font-weight:700;'
+                        'letter-spacing:2px;text-transform:uppercase;margin-bottom:8px">'
+                        '🤖 AI BRIEFING</div>'
+                        '<p style="margin:0;color:#B8C8D0;font-size:0.9rem;line-height:1.85;">'
+                        f'{_ab}</p>'
+                    )
+                if _ab and _sb:
+                    _inner_html += (
+                        '<div style="border-top:1px solid rgba(0,240,255,0.15);'
+                        'margin:16px 0;"></div>'
+                    )
+                if _sb:
+                    _inner_html += (
+                        '<div style="color:#555;font-size:0.62rem;font-weight:700;'
+                        'letter-spacing:2px;text-transform:uppercase;margin-bottom:8px">'
+                        '📝 POSTING DRAFT</div>'
+                        '<p style="margin:0;color:#D0D0D0;font-size:0.9rem;'
+                        'line-height:1.85;font-style:italic;">'
+                        f'{_sb}</p>'
+                    )
+
                 st.markdown(
                     f'<div style="background:rgba(0,240,255,0.04);border:1px solid rgba(0,240,255,0.13);'
                     f'border-left:3px solid rgba(0,240,255,0.45);border-radius:0 12px 12px 0;'
                     f'padding:16px 22px;margin-top:14px;">'
                     f'<div style="color:#555;font-size:0.62rem;font-weight:700;letter-spacing:2px;'
-                    f'text-transform:uppercase;margin-bottom:10px">📝 SITUATION SUMMARY</div>'
-                    f'<p style="margin:0;color:#D0D0D0;font-size:0.9rem;line-height:1.85;font-style:italic;">'
-                    f'{_sb}</p></div>',
+                    f'text-transform:uppercase;margin-bottom:12px">📋 SITUATION SUMMARY</div>'
+                    f'{_inner_html}</div>',
                     unsafe_allow_html=True,
                 )
 

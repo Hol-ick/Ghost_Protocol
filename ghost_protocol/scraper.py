@@ -1327,6 +1327,20 @@ class TrendScraper:
                 if not post_no:
                     continue
 
+                # ── 공지사항 스킵 ──────────────────────────────────────────────
+                # 1) gall_num 텍스트가 숫자가 아닌 경우 ("공지", "설문" 등) 스킵
+                num_el = tr.select_one("td.gall_num")
+                if num_el:
+                    num_text = num_el.get_text(strip=True)
+                    if not num_text.isdigit():
+                        continue
+                # 2) 행 CSS class에 "notice" 포함 시 스킵 (DC Inside 추가 마커)
+                row_class_list = tr.get("class") or []
+                row_class_str = " ".join(row_class_list) if isinstance(row_class_list, list) else str(row_class_list)
+                if "notice" in row_class_str.lower():
+                    continue
+                # ───────────────────────────────────────────────────────────────
+
                 # 제목: gall_tit 셀 내부 첫 번째 일반 링크
                 title_el = tr.select_one("td.gall_tit > a:not([class])")
                 if title_el is None:
