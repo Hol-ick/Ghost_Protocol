@@ -67,6 +67,9 @@ desktop.ini
 *.bak
 nul
 
+# ── 📋 로그 디렉토리 ──────────────────────────
+logs/
+
 # ── 🎭 Playwright ────────────────────────────
 playwright-report/
 test-results/

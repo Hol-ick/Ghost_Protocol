@@ -844,6 +844,15 @@ def _intel_results_fragment() -> None:
                     unsafe_allow_html=True,
                 )
 
+            # ── 파싱 실패 시 Raw Response 디버그 뷰어 ──────────────────────────
+            if _ir.get("_parse_error"):
+                with st.expander("🛠️ API Raw Response (Debug)", expanded=False):
+                    st.caption("JSON 파싱 실패 — Gemini가 반환한 원본 텍스트입니다. `logs/api_debug.log` 에도 동일 내용이 기록됩니다.")
+                    st.code(
+                        _ir.get("_raw_response", "(응답 없음)"),
+                        language="text",
+                    )
+
             # "FIRE 주제로 사용" 버튼
             _hot = _ir.get("hot_topics", [])
             if _hot:

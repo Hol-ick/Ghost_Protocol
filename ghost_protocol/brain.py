@@ -14,9 +14,11 @@ SDK: google-genai (google.genai) — 신규 공식 SDK
 """
 
 import json
+import logging
 import os
 import re
 from collections import Counter
+from pathlib import Path
 from typing import Optional
 
 from google import genai
@@ -28,6 +30,28 @@ from . import prompt_manager as pm
 
 # .env 에서 GEMINI_API_KEY 로딩
 load_dotenv()
+
+
+# ══════════════════════════════════════════════
+# API 디버그 로거 — logs/api_debug.log
+# ══════════════════════════════════════════════
+_LOGS_DIR = Path(__file__).parent.parent / "logs"
+_LOGS_DIR.mkdir(exist_ok=True)
+
+_api_logger = logging.getLogger("ghost_protocol.api_debug")
+_api_logger.setLevel(logging.DEBUG)
+
+if not _api_logger.handlers:                       # Streamlit 모듈 재로딩 시 핸들러 중복 방지
+    _fh = logging.FileHandler(
+        _LOGS_DIR / "api_debug.log", encoding="utf-8"
+    )
+    _fh.setLevel(logging.DEBUG)
+    _fh.setFormatter(logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    ))
+    _api_logger.addHandler(_fh)
+    _api_logger.propagate = False                  # 루트 로거 전파 금지 → 콘솔 오염 방지
 
 
 # ══════════════════════════════════════════════
@@ -511,6 +535,12 @@ class GhostBrain:
 
         raw_text = ""
         try:
+            # ── 로그: Gemini에 보내는 프롬프트 전문 기록 ──────────────────────
+            _api_logger.debug(
+                "analyze_trend PROMPT ▶ gallery=%s\n%s\n%s",
+                gallery_id, "─" * 60, prompt,
+            )
+
             response = self._client.models.generate_content(
                 model=MODEL_NAME,
                 contents=prompt,
@@ -518,22 +548,36 @@ class GhostBrain:
             )
             raw_text = response.text.strip()
 
+            # ── 로그: Gemini Raw 응답 전문 기록 ───────────────────────────────
+            _api_logger.debug(
+                "analyze_trend RESPONSE ▶ len=%d\n%s\n%s",
+                len(raw_text), "─" * 60, raw_text,
+            )
+
             # 강화된 JSON 파싱 (마크다운 펜스 + 앞뒤 산문 제거)
             result = _parse_json_robust(raw_text)
 
-        except json.JSONDecodeError:
-            # 파싱 실패 시 원본 응답 전체를 콘솔에 출력 (디버깅용)
+        except json.JSONDecodeError as _exc:
+            # ── 로그: 파싱 실패 상세 기록 ─────────────────────────────────────
+            _api_logger.error(
+                "analyze_trend PARSE ERROR ▶ %s\nRAW RESPONSE (len=%d):\n%s\n%s",
+                _exc, len(raw_text), "─" * 60, raw_text,
+            )
             print(
                 f"[RAW RESPONSE] analyze_trend JSON parse failed "
                 f"(len={len(raw_text)} chars):\n{raw_text}",
                 flush=True,
             )
-            # 키워드 기반 fallback
+            # 안전한 기본 딕셔너리 반환 — UI 붕괴 방지
+            # _parse_error / _raw_response: app.py 디버그 뷰어가 감지·표시
             result = {
-                "hot_topics": top_keywords[:3],
-                "sentiment":  "분석 실패",
-                "memes":      [],
-                "summary":    raw_text[:200] if raw_text else "응답 파싱 실패",
+                "hot_topics":    top_keywords[:3],
+                "sentiment":     "분석 실패",
+                "memes":         [],
+                "summary":       "N/A",
+                "ai_analysis":   "⚠️ API 응답 파싱 실패 — logs/api_debug.log 를 확인하세요.",
+                "_parse_error":  True,
+                "_raw_response": raw_text,
             }
         except Exception as e:
             if self._is_rate_limit_error(e):
