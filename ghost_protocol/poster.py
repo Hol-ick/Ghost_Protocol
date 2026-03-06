@@ -430,13 +430,23 @@ class GhostPoster:
         if log:
             log("[POSTER] ✅ 에디터 포커스 완료.")
 
-        # ── 🖼️ 미끼 짤방: paste 이벤트 시뮬레이션 ──
+        # ── 🖼️ 미끼 짤방: paste 이벤트 시뮬레이션 ──────────────────────────
+        # 수정 이력:
+        #   구버전: ClipboardEvent('paste', { clipboardData: dt }) + page.evaluate(fn, editor)
+        #   문제 1: Chromium은 ClipboardEvent 생성자의 clipboardData 옵션을 무시 →
+        #           event.clipboardData가 빈 DataTransfer로 남아 에디터가 이미지를 읽지 못함.
+        #           ("Cannot read properties of undefined (reading 'dispatch')" 에러 발생)
+        #   문제 2: editor가 iframe 내부 요소일 때 page.evaluate(fn, elementHandle)는
+        #           cross-frame 참조 오류를 유발할 수 있음.
+        #   해결책:
+        #   (A) editor.evaluate(fn) 사용 → 올바른 프레임 컨텍스트에서 실행
+        #   (B) ClipboardEvent 대신 기본 Event + Object.defineProperty로 clipboardData 강제 주입
         try:
             if log:
                 log("[POSTER] 🖼️ 1x1 미끼 짤방 붙여넣기 시뮬레이션 중...")
 
-            paste_js = """
-            (el) => {
+            paste_js = """(el) => {
+                // 1×1 투명 PNG (Base64 인코딩)
                 const b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
                 const bin = atob(b64);
                 const arr = new Uint8Array(bin.length);
@@ -447,15 +457,19 @@ class GhostPoster:
                 const dt = new DataTransfer();
                 dt.items.add(file);
 
-                const event = new ClipboardEvent('paste', {
-                    clipboardData: dt,
-                    bubbles: true,
-                    cancelable: true
+                // Chromium: ClipboardEvent 생성자에서 clipboardData를 설정해도
+                // 실제 event.clipboardData는 read-only라 반영되지 않음.
+                // → 표준 Event + Object.defineProperty로 clipboardData를 강제 주입.
+                const evt = new Event('paste', { bubbles: true, cancelable: true });
+                Object.defineProperty(evt, 'clipboardData', {
+                    value: dt,
+                    configurable: true,
                 });
-                el.dispatchEvent(event);
-            }
-            """
-            await page.evaluate(paste_js, editor)
+                el.dispatchEvent(evt);
+            }"""
+
+            # editor.evaluate(fn) — iframe 내부 에디터도 올바른 프레임 컨텍스트에서 실행
+            await editor.evaluate(paste_js)
             # 디시 서버 이미지 업로드 대기
             await page.wait_for_timeout(2000)
             await page.keyboard.press("Enter")

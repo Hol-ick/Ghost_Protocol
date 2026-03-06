@@ -79,10 +79,10 @@ def render(name: str, **kwargs) -> str:
 
     Example:
         >>> render("trend_analysis.txt",
-        ...        gallery_id="stockus",
+        ...        gallery_id="baseball_new9",
         ...        top_k_count=20,
-        ...        kw_text="엔비디아, 테슬라",
-        ...        titles_text="- 오늘 장 미쳤네",
+        ...        kw_text="오늘 경기, 선발 투수",
+        ...        titles_text="- 오늘 진짜 미쳤네",
         ...        comments_text="- 진짜 ㄷㄷ")
     """
     return Template(_read_file(name)).safe_substitute(**kwargs)

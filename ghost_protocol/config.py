@@ -126,9 +126,9 @@ BLOCKED_TEXT_MARKERS = [
 BOT_TIME_WINDOW_SEC = 60
 BOT_CPM_THRESHOLD = 3
 BOT_CLEANUP_INTERVAL = 30
-SUSPICIOUS_KEYWORDS = [
-    "매수", "좌표", "풀매수", "올인", "존버",
-    "떡상", "급등", "단타", "물타기", "손절",
+SUSPICIOUS_KEYWORDS: list[str] = [
+    # 도메인 종속 키워드는 일체 제거 — 봇 레이더는 CPM·시간 패턴 기반으로만 동작
+    # (특정 갤러리 주제어를 여기에 넣으면 해당 갤러리의 정상 글도 오탐됨)
 ]
 
 # ──────────────────────────────────────────────

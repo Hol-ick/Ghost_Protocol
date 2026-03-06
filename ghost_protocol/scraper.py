@@ -1247,7 +1247,7 @@ class TrendScraper:
 
     Usage:
         scraper = TrendScraper()
-        data = scraper.collect_trending("stockus", gallery_type="mgallery", pages=3)
+        data = scraper.collect_trending("baseball_new9", gallery_type="mgallery", pages=3)
         # → {"titles": [...], "comments": [...], "gallery_id": "...", ...}
     """
 
