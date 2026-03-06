@@ -1,7 +1,8 @@
 """Ghost Protocol v5.0 — LAUNCHPAD
+One-Page Stealth Dashboard · Bento 2.0 Redesign
 
-Pipeline (Swarm Mode): TOPIC → GENERATE → POST
-스캔 단계 없음 — 주제 직접 입력 후 즉시 폭격.
+Pipeline: INTEL (Trend Analysis) → PAYLOAD (Topic + Config) → LAUNCH (FIRE + Monitor)
+@st.fragment 기반 부분 재렌더링으로 Flickering 완전 제거.
 
 실행: streamlit run app.py
 """
@@ -32,11 +33,30 @@ st.set_page_config(
     page_title="Ghost Protocol — Launchpad",
     page_icon="🚀",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
 # ══════════════════════════════════════════════
-# CSS — Stealth Dark Bento Theme
+# Lookup Maps (module-level constants)
+# ══════════════════════════════════════════════
+_TYPE_MAP = {
+    "마이너 (mgallery)": "mgallery",
+    "정규 (board)":      "board",
+    "미니 (mini)":       "mini",
+}
+_TONE_MAP = {
+    "🧊 냉소적 (Cynical)":    "cynical",
+    "😐 중립 (Neutral)":      "neutral",
+    "📊 분석적 (Analytical)": "analytical",
+    "🗣️ 독백 (Monologue)":   "monologue",
+    "🔥 공격적 (Aggressive)": "aggressive",
+    "💀 어그로성 (Aggro)":    "aggro",
+}
+_LEN_OPTS = ["아주 짧게 (1문장)", "짧게 (1~2문장)", "보통 (3~4문장)"]
+_INTEL_CACHE_TTL = 900  # 15분
+
+# ══════════════════════════════════════════════
+# CSS — Stealth Dark Bento Theme 2.0
 # ══════════════════════════════════════════════
 st.markdown("""
 <style>
@@ -59,40 +79,21 @@ st.markdown("""
     .stApp header[data-testid="stHeader"] {
         background-color: #0E1117 !important;
     }
-    /* Streamlit 내부 베이지/흰 배경 초기화 */
     [data-testid="stVerticalBlock"],
     [data-testid="stHorizontalBlock"],
     [data-testid="column"] {
         background-color: transparent !important;
     }
-    .stMainBlockContainer { padding-top: 1.5rem !important; }
 
-    /* ═══ 2. 사이드바 ═══ */
-    section[data-testid="stSidebar"] > div {
-        background-color: #1A1A1A !important;
-        border-right: 1px solid rgba(255,255,255,0.08) !important;
-    }
-    section[data-testid="stSidebar"] .stMarkdown,
-    section[data-testid="stSidebar"] label,
-    section[data-testid="stSidebar"] p { color: #FAFAFA !important; }
+    /* ═══ 2. 사이드바 완전 제거 ═══ */
+    [data-testid="collapsedControl"] { display: none !important; }
+    section[data-testid="stSidebar"] { display: none !important; }
 
-    /* ═══ 3. 사이드바 로고 ═══ */
-    .sb-logo {
-        text-align: center !important;
-        font-size: 1.1rem !important;
-        font-weight: 900 !important;
-        letter-spacing: 3px !important;
-        color: #FAFAFA !important;
-        padding: 8px 0 4px 0 !important;
-    }
-    .sb-logo span { color: #00F0FF !important; }
-    .sb-sub {
-        text-align: center !important;
-        font-size: 0.68rem !important;
-        color: #888888 !important;
-        letter-spacing: 2px !important;
-        text-transform: uppercase !important;
-        margin-bottom: 4px !important;
+    /* ═══ 3. 메인 패딩 조정 ═══ */
+    .stMainBlockContainer {
+        padding: 1.5rem 2.5rem 4rem 2.5rem !important;
+        max-width: 1440px !important;
+        margin: 0 auto !important;
     }
 
     /* ═══ 4. 입력 필드 ═══ */
@@ -138,65 +139,7 @@ st.markdown("""
         border-color: rgba(255,255,255,0.3) !important;
     }
 
-    /* ═══ 6. Command Center 카드 ═══ */
-    .command-center {
-        background: #1A1A1A !important;
-        border: 1px solid rgba(255,255,255,0.1) !important;
-        border-radius: 18px !important;
-        padding: 28px 32px !important;
-        margin-bottom: 18px !important;
-    }
-    .cc-header {
-        display: flex !important;
-        align-items: center !important;
-        gap: 10px !important;
-        margin-bottom: 20px !important;
-    }
-    .cc-title {
-        color: #00F0FF !important;
-        font-size: 0.75rem !important;
-        font-weight: 800 !important;
-        letter-spacing: 4px !important;
-        text-transform: uppercase !important;
-        text-shadow: 0 0 12px rgba(0,240,255,0.5) !important;
-    }
-    .cc-badge {
-        background: rgba(0,240,255,0.1) !important;
-        border: 1px solid rgba(0,240,255,0.3) !important;
-        border-radius: 20px !important;
-        padding: 2px 10px !important;
-        color: #00F0FF !important;
-        font-size: 0.65rem !important;
-        font-weight: 600 !important;
-        letter-spacing: 1px !important;
-    }
-    .cc-target-info {
-        background: rgba(255,255,255,0.03) !important;
-        border: 1px solid rgba(255,255,255,0.07) !important;
-        border-radius: 10px !important;
-        padding: 12px 16px !important;
-        margin-top: 8px !important;
-    }
-    .cti-row {
-        display: flex !important;
-        justify-content: space-between !important;
-        align-items: center !important;
-        margin-bottom: 6px !important;
-    }
-    .cti-row:last-child { margin-bottom: 0 !important; }
-    .cti-label { color: #888888 !important; font-size: 0.68rem !important; letter-spacing: 1px !important; text-transform: uppercase !important; }
-    .cti-val { color: #E6EDF3 !important; font-size: 0.78rem !important; font-weight: 600 !important; font-family: monospace !important; }
-    .command-center .stTextInput input,
-    .command-center input[type="text"] {
-        background-color: rgba(255,255,255,0.06) !important;
-        color: #FAFAFA !important;
-        -webkit-text-fill-color: #FAFAFA !important;
-        border: 1px solid rgba(255,255,255,0.1) !important;
-        border-radius: 8px !important;
-    }
-    .command-center label { color: #AAAAAA !important; }
-
-    /* ═══ 7. FIRE 버튼 ═══ */
+    /* ═══ 6. FIRE 버튼 ═══ */
     .fire-btn > button {
         background: #FF4B4B !important;
         color: #FFFFFF !important;
@@ -222,6 +165,22 @@ st.markdown("""
         opacity: 0.5 !important;
     }
 
+    /* ═══ 7. STOP 버튼 ═══ */
+    .stop-btn > button {
+        background: #1A1A1A !important;
+        color: #FF4B4B !important;
+        border: 1px solid rgba(255,75,75,0.4) !important;
+        border-radius: 12px !important;
+        font-weight: 700 !important;
+        letter-spacing: 2px !important;
+        transition: all 0.2s !important;
+    }
+    .stop-btn > button:hover {
+        background: rgba(255,75,75,0.1) !important;
+        border-color: #FF4B4B !important;
+        box-shadow: 0 0 14px rgba(255,75,75,0.25) !important;
+    }
+
     /* ═══ 8. Live Terminal ═══ */
     .terminal {
         background: #000000 !important;
@@ -241,7 +200,7 @@ st.markdown("""
     .t-warn { color: #FFD700 !important; }
     .t-wave { color: #BC8CFF !important; font-weight: 700 !important; letter-spacing: 1px !important; }
 
-    /* ═══ 9. Preview 카드 (bento dark) ═══ */
+    /* ═══ 9. Preview 카드 ═══ */
     .preview-dark {
         background: #1E1E1E !important;
         border: 1px solid rgba(255,255,255,0.1) !important;
@@ -250,238 +209,206 @@ st.markdown("""
         min-height: 360px !important;
     }
     .pd-label {
-        color: #BC8CFF !important;
-        font-size: 0.65rem !important;
-        font-weight: 700 !important;
-        letter-spacing: 3px !important;
-        text-transform: uppercase !important;
-        margin-bottom: 10px !important;
+        color: #BC8CFF !important; font-size: 0.65rem !important; font-weight: 700 !important;
+        letter-spacing: 3px !important; text-transform: uppercase !important; margin-bottom: 10px !important;
     }
     .pd-title {
-        color: #FAFAFA !important;
-        font-size: 1.05rem !important;
-        font-weight: 700 !important;
-        margin-bottom: 14px !important;
-        padding-bottom: 12px !important;
-        border-bottom: 1px solid rgba(255,255,255,0.1) !important;
-        line-height: 1.4 !important;
+        color: #FAFAFA !important; font-size: 1.05rem !important; font-weight: 700 !important;
+        margin-bottom: 14px !important; padding-bottom: 12px !important;
+        border-bottom: 1px solid rgba(255,255,255,0.1) !important; line-height: 1.4 !important;
     }
-    .pd-body {
-        color: #CCCCCC !important;
-        font-size: 0.9rem !important;
-        line-height: 1.75 !important;
-        white-space: pre-wrap !important;
-    }
-    .pd-empty {
-        color: #555555 !important;
-        font-style: italic !important;
-        text-align: center !important;
-        padding: 60px 0 !important;
-        font-size: 0.85rem !important;
-    }
-    .pd-status {
-        color: #00FF00 !important;
-        font-size: 0.65rem !important;
-        font-weight: 600 !important;
-        letter-spacing: 2px !important;
-        text-transform: uppercase !important;
-        margin-top: 14px !important;
-        padding-top: 10px !important;
-        border-top: 1px solid rgba(255,255,255,0.08) !important;
-    }
+    .pd-body { color: #CCCCCC !important; font-size: 0.9rem !important; line-height: 1.75 !important; white-space: pre-wrap !important; }
+    .pd-empty { color: #555555 !important; font-style: italic !important; text-align: center !important; padding: 60px 0 !important; font-size: 0.85rem !important; }
 
     /* ═══ 10. 섹션 헤더 ═══ */
     .section-hdr {
-        font-size: 0.72rem !important;
-        font-weight: 700 !important;
-        letter-spacing: 2.5px !important;
-        text-transform: uppercase !important;
-        color: #888888 !important;
-        margin-bottom: 12px !important;
+        font-size: 0.72rem !important; font-weight: 700 !important; letter-spacing: 2.5px !important;
+        text-transform: uppercase !important; color: #888888 !important; margin-bottom: 12px !important;
     }
 
-    /* ═══ 11. 스탯 카드 (사이드바) ═══ */
-    .stat-row {
-        display: flex !important;
-        gap: 8px !important;
-        margin-top: 4px !important;
-    }
-    .stat-card {
-        flex: 1 !important;
-        background: #1E1E1E !important;
-        border: 1px solid rgba(255,255,255,0.1) !important;
-        border-radius: 10px !important;
-        padding: 10px 8px !important;
-        text-align: center !important;
-    }
-    .stat-val { font-size: 1.4rem !important; font-weight: 800 !important; color: #FAFAFA !important; }
-    .stat-label { font-size: 0.62rem !important; color: #888888 !important; text-transform: uppercase !important; letter-spacing: 1px !important; }
-    .stat-ok .stat-val { color: #00FF00 !important; }
-    .stat-err .stat-val { color: #FF4B4B !important; }
+    /* ═══ 11. Progress Bar ═══ */
+    .stProgress > div > div { background: linear-gradient(90deg, #FF4B4B, #BC8CFF) !important; }
 
-    /* ═══ 12. Progress Bar ═══ */
-    .stProgress > div > div {
-        background: linear-gradient(90deg, #FF4B4B, #BC8CFF) !important;
-    }
-
-    /* ═══ 13. INTEL 브리핑 카드 ═══ */
+    /* ═══ 12. INTEL 브리핑 카드 ═══ */
     .intel-card {
-        background: #141820 !important;
-        border: 1px solid rgba(0,240,255,0.18) !important;
-        border-radius: 18px !important;
-        padding: 24px 28px !important;
-        margin-top: 12px !important;
+        background: #141820 !important; border: 1px solid rgba(0,240,255,0.18) !important;
+        border-radius: 18px !important; padding: 24px 28px !important; margin-top: 8px !important;
     }
     .intel-header {
-        display: flex !important;
-        align-items: center !important;
-        gap: 10px !important;
-        margin-bottom: 18px !important;
-        border-bottom: 1px solid rgba(0,240,255,0.12) !important;
+        display: flex !important; align-items: center !important; gap: 10px !important;
+        margin-bottom: 18px !important; border-bottom: 1px solid rgba(0,240,255,0.12) !important;
         padding-bottom: 12px !important;
     }
     .intel-title {
-        color: #00F0FF !important;
-        font-size: 0.72rem !important;
-        font-weight: 800 !important;
-        letter-spacing: 4px !important;
-        text-transform: uppercase !important;
+        color: #00F0FF !important; font-size: 0.72rem !important; font-weight: 800 !important;
+        letter-spacing: 4px !important; text-transform: uppercase !important;
         text-shadow: 0 0 10px rgba(0,240,255,0.4) !important;
     }
     .intel-gallery-badge {
-        background: rgba(0,240,255,0.08) !important;
-        border: 1px solid rgba(0,240,255,0.25) !important;
-        border-radius: 20px !important;
-        padding: 2px 10px !important;
-        color: #00F0FF !important;
-        font-size: 0.65rem !important;
-        font-family: monospace !important;
+        background: rgba(0,240,255,0.08) !important; border: 1px solid rgba(0,240,255,0.25) !important;
+        border-radius: 20px !important; padding: 2px 10px !important; color: #00F0FF !important;
+        font-size: 0.65rem !important; font-family: monospace !important;
     }
-    .intel-cache-ts {
-        margin-left: auto !important;
-        color: #444 !important;
-        font-size: 0.62rem !important;
-        font-family: monospace !important;
-    }
-    /* 감성 배지 */
+    .intel-cache-ts { margin-left: auto !important; color: #444 !important; font-size: 0.62rem !important; font-family: monospace !important; }
     .intel-sentiment {
-        display: inline-block !important;
-        padding: 4px 14px !important;
-        border-radius: 20px !important;
-        font-size: 0.78rem !important;
-        font-weight: 700 !important;
-        letter-spacing: 1px !important;
-        margin-bottom: 16px !important;
+        display: inline-block !important; padding: 4px 14px !important; border-radius: 20px !important;
+        font-size: 0.78rem !important; font-weight: 700 !important; letter-spacing: 1px !important; margin-bottom: 16px !important;
     }
     .intel-sentiment-panic    { background: rgba(255,75,75,0.15) !important; color: #FF4B4B !important; border: 1px solid rgba(255,75,75,0.35) !important; }
     .intel-sentiment-hostile  { background: rgba(255,100,0,0.15) !important; color: #FF6400 !important; border: 1px solid rgba(255,100,0,0.35) !important; }
     .intel-sentiment-mock     { background: rgba(188,140,255,0.15) !important; color: #BC8CFF !important; border: 1px solid rgba(188,140,255,0.35) !important; }
     .intel-sentiment-friendly { background: rgba(0,255,0,0.1) !important; color: #00FF88 !important; border: 1px solid rgba(0,255,0,0.3) !important; }
     .intel-sentiment-neutral  { background: rgba(255,255,255,0.07) !important; color: #AAAAAA !important; border: 1px solid rgba(255,255,255,0.15) !important; }
-    /* 섹션 라벨 */
     .intel-section-label {
-        color: #555 !important;
-        font-size: 0.62rem !important;
-        font-weight: 700 !important;
-        letter-spacing: 2px !important;
-        text-transform: uppercase !important;
-        margin-bottom: 8px !important;
+        color: #555 !important; font-size: 0.62rem !important; font-weight: 700 !important;
+        letter-spacing: 2px !important; text-transform: uppercase !important; margin-bottom: 8px !important;
     }
-    /* 토픽·키워드 칩 */
     .intel-chips { display: flex !important; flex-wrap: wrap !important; gap: 6px !important; margin-bottom: 14px !important; }
-    .intel-chip-hot {
-        background: rgba(255,75,75,0.12) !important;
-        border: 1px solid rgba(255,75,75,0.3) !important;
-        border-radius: 20px !important;
-        padding: 3px 10px !important;
-        color: #FF8080 !important;
-        font-size: 0.73rem !important;
-        font-weight: 600 !important;
-    }
-    .intel-chip-kw {
-        background: rgba(255,255,255,0.05) !important;
-        border: 1px solid rgba(255,255,255,0.1) !important;
-        border-radius: 20px !important;
-        padding: 2px 8px !important;
-        color: #888 !important;
-        font-size: 0.65rem !important;
-    }
-    .intel-chip-meme {
-        background: rgba(188,140,255,0.1) !important;
-        border: 1px solid rgba(188,140,255,0.25) !important;
-        border-radius: 20px !important;
-        padding: 3px 10px !important;
-        color: #BC8CFF !important;
-        font-size: 0.73rem !important;
-    }
-    /* 요약 텍스트 */
-    .intel-summary {
-        color: #CCCCCC !important;
-        font-size: 0.85rem !important;
-        line-height: 1.7 !important;
-        border-left: 2px solid rgba(0,240,255,0.25) !important;
-        padding-left: 12px !important;
-        margin-top: 4px !important;
-    }
-    /* 수집 스탯 */
-    .intel-stats {
-        display: flex !important;
-        gap: 10px !important;
-        margin-top: 14px !important;
-        padding-top: 12px !important;
-        border-top: 1px solid rgba(255,255,255,0.06) !important;
-    }
-    .intel-stat-pill {
-        background: rgba(255,255,255,0.04) !important;
-        border: 1px solid rgba(255,255,255,0.08) !important;
-        border-radius: 8px !important;
-        padding: 4px 10px !important;
-        color: #666 !important;
-        font-size: 0.62rem !important;
-        font-family: monospace !important;
-    }
+    .intel-chip-hot  { background: rgba(255,75,75,0.12) !important; border: 1px solid rgba(255,75,75,0.3) !important; border-radius: 20px !important; padding: 3px 10px !important; color: #FF8080 !important; font-size: 0.73rem !important; font-weight: 600 !important; }
+    .intel-chip-kw   { background: rgba(255,255,255,0.05) !important; border: 1px solid rgba(255,255,255,0.1) !important; border-radius: 20px !important; padding: 2px 8px !important; color: #888 !important; font-size: 0.65rem !important; }
+    .intel-chip-meme { background: rgba(188,140,255,0.1) !important; border: 1px solid rgba(188,140,255,0.25) !important; border-radius: 20px !important; padding: 3px 10px !important; color: #BC8CFF !important; font-size: 0.73rem !important; }
+    .intel-summary   { color: #CCCCCC !important; font-size: 0.85rem !important; line-height: 1.7 !important; border-left: 2px solid rgba(0,240,255,0.25) !important; padding-left: 12px !important; margin-top: 4px !important; }
+    .intel-stats     { display: flex !important; gap: 10px !important; margin-top: 14px !important; padding-top: 12px !important; border-top: 1px solid rgba(255,255,255,0.06) !important; }
+    .intel-stat-pill { background: rgba(255,255,255,0.04) !important; border: 1px solid rgba(255,255,255,0.08) !important; border-radius: 8px !important; padding: 4px 10px !important; color: #666 !important; font-size: 0.62rem !important; font-family: monospace !important; }
     .intel-stat-pill span { color: #AAAAAA !important; font-weight: 600 !important; }
-    /* 로딩 플레이스홀더 */
-    .intel-empty {
-        text-align: center !important;
-        padding: 40px 0 !important;
-        color: #333 !important;
-        font-size: 0.82rem !important;
-    }
-    /* INTEL 터미널 (수집 로그용) */
-    .intel-terminal {
-        background: #0A0A0A !important;
-        border: 1px solid rgba(0,240,255,0.08) !important;
-        border-radius: 10px !important;
-        padding: 12px 14px !important;
-        font-family: monospace !important;
-        font-size: 0.72rem !important;
-        color: #00C8FF !important;
-        line-height: 1.55 !important;
-        overflow-y: auto !important;
-    }
-    /* INTEL 실행 버튼 */
+    .intel-empty     { text-align: center !important; padding: 40px 0 !important; color: #333 !important; font-size: 0.82rem !important; }
+    .intel-terminal  { background: #0A0A0A !important; border: 1px solid rgba(0,240,255,0.08) !important; border-radius: 10px !important; padding: 12px 14px !important; font-family: monospace !important; font-size: 0.72rem !important; color: #00C8FF !important; line-height: 1.55 !important; overflow-y: auto !important; }
     .intel-run-btn > button {
-        background: linear-gradient(135deg, #003D5C, #005580) !important;
-        color: #00F0FF !important;
-        border: 1px solid rgba(0,240,255,0.35) !important;
-        border-radius: 12px !important;
-        font-weight: 800 !important;
-        letter-spacing: 2px !important;
-        text-transform: uppercase !important;
-        transition: all 0.2s !important;
+        background: linear-gradient(135deg, #003D5C, #005580) !important; color: #00F0FF !important;
+        border: 1px solid rgba(0,240,255,0.35) !important; border-radius: 12px !important;
+        font-weight: 800 !important; letter-spacing: 2px !important; text-transform: uppercase !important; transition: all 0.2s !important;
     }
     .intel-run-btn > button:hover {
         background: linear-gradient(135deg, #005580, #0077AA) !important;
-        box-shadow: 0 4px 18px rgba(0,240,255,0.25) !important;
-        border-color: rgba(0,240,255,0.6) !important;
+        box-shadow: 0 4px 18px rgba(0,240,255,0.25) !important; border-color: rgba(0,240,255,0.6) !important;
     }
     .intel-run-btn > button:disabled {
-        background: #1A1A1A !important;
-        color: #444 !important;
-        border-color: rgba(255,255,255,0.08) !important;
-        box-shadow: none !important;
+        background: #1A1A1A !important; color: #444 !important;
+        border-color: rgba(255,255,255,0.08) !important; box-shadow: none !important;
     }
+
+    /* ═══ 13. NEW: Header Bar ═══ */
+    .header-bar {
+        display: flex !important; align-items: center !important;
+        justify-content: space-between !important;
+        padding: 6px 0 18px 0 !important;
+        border-bottom: 1px solid rgba(255,255,255,0.06) !important;
+        margin-bottom: 22px !important;
+    }
+    .logo-text {
+        font-size: 1.1rem !important; font-weight: 900 !important;
+        letter-spacing: 3px !important; color: #FAFAFA !important;
+    }
+    .logo-text span { color: #00F0FF !important; }
+    .logo-sub {
+        font-size: 0.63rem !important; color: #555555 !important;
+        letter-spacing: 2px !important; text-transform: uppercase !important; margin-top: 2px !important;
+    }
+
+    /* ═══ 14. NEW: Bento Step 카드 ═══ */
+    .bento-step {
+        background: #111418 !important;
+        border: 1px solid rgba(255,255,255,0.07) !important;
+        border-radius: 18px !important;
+        padding: 22px 26px !important;
+        margin-bottom: 14px !important;
+    }
+    .bento-step-header {
+        display: flex !important; align-items: center !important;
+        gap: 10px !important; margin-bottom: 18px !important;
+    }
+    .bento-step-title {
+        font-size: 0.72rem !important; font-weight: 800 !important; letter-spacing: 3px !important;
+        text-transform: uppercase !important; color: #00F0FF !important;
+        text-shadow: 0 0 12px rgba(0,240,255,0.35) !important;
+    }
+    .bento-step-badge {
+        display: inline-block !important; background: rgba(0,240,255,0.08) !important;
+        border: 1px solid rgba(0,240,255,0.18) !important; border-radius: 20px !important;
+        padding: 2px 10px !important; font-size: 0.6rem !important; font-weight: 600 !important;
+        color: #00F0FF !important; letter-spacing: 1.5px !important;
+    }
+
+    /* ═══ 15. NEW: Mission Stats Bar (인라인) ═══ */
+    .mission-stats-bar {
+        display: flex !important; gap: 10px !important;
+        margin-top: 14px !important; padding-top: 14px !important;
+        border-top: 1px solid rgba(255,255,255,0.06) !important;
+        flex-wrap: wrap !important; align-items: center !important;
+    }
+    .ms-pill {
+        background: #1A1A1A !important; border: 1px solid rgba(255,255,255,0.09) !important;
+        border-radius: 10px !important; padding: 8px 18px !important;
+        text-align: center !important; min-width: 76px !important;
+    }
+    .ms-val  { font-size: 1.3rem !important; font-weight: 800 !important; line-height: 1.2 !important; }
+    .ms-lbl  { font-size: 0.6rem !important; color: #666 !important; text-transform: uppercase !important; letter-spacing: 1px !important; margin-top: 2px !important; }
+    .ms-ok   .ms-val { color: #00FF00 !important; }
+    .ms-err  .ms-val { color: #FF4B4B !important; }
+    .ms-wave .ms-val { color: #BC8CFF !important; }
+    .ms-reset-wrap { margin-left: auto !important; }
+
+    /* ═══ 16. NEW: Settings Popover 버튼 ═══ */
+    .settings-wrap [data-testid="stPopoverTrigger"] > button {
+        background: #1A1A1A !important; color: #888888 !important;
+        border: 1px solid rgba(255,255,255,0.12) !important; border-radius: 10px !important;
+        font-size: 0.75rem !important; font-weight: 600 !important; letter-spacing: 1px !important;
+    }
+    .settings-wrap [data-testid="stPopoverTrigger"] > button:hover {
+        background: #222222 !important; color: #FAFAFA !important;
+        border-color: rgba(255,255,255,0.25) !important;
+    }
+    /* Popover 패널 다크 */
+    [data-testid="stPopoverBody"] {
+        background: #161B22 !important;
+        border: 1px solid rgba(255,255,255,0.1) !important;
+        border-radius: 12px !important;
+    }
+
+    /* ═══ 17. NEW: Expander INTEL 스타일 ═══ */
+    [data-testid="stExpander"] {
+        background: #0F1318 !important;
+        border: 1px solid rgba(0,240,255,0.12) !important;
+        border-radius: 16px !important;
+        margin-bottom: 14px !important;
+        overflow: hidden !important;
+    }
+    [data-testid="stExpander"] summary {
+        padding: 14px 22px !important;
+    }
+    [data-testid="stExpander"] summary:hover {
+        background: rgba(0,240,255,0.04) !important;
+    }
+    [data-testid="stExpander"] summary p,
+    [data-testid="stExpander"] summary span {
+        color: #00F0FF !important;
+        font-size: 0.73rem !important;
+        font-weight: 700 !important;
+        letter-spacing: 2px !important;
+        text-transform: uppercase !important;
+    }
+
+    /* ═══ 18. NEW: "FIRE 주제로 사용" 버튼 ═══ */
+    .topic-use-btn > button {
+        background: rgba(0,240,255,0.06) !important; color: #00F0FF !important;
+        border: 1px solid rgba(0,240,255,0.25) !important; border-radius: 8px !important;
+        font-size: 0.72rem !important; font-weight: 600 !important; letter-spacing: 1px !important;
+    }
+    .topic-use-btn > button:hover {
+        background: rgba(0,240,255,0.12) !important;
+        box-shadow: 0 0 10px rgba(0,240,255,0.15) !important;
+    }
+
+    /* ═══ 19. NEW: Config Summary 인포 박스 ═══ */
+    .config-summary {
+        background: rgba(255,255,255,0.03) !important;
+        border: 1px solid rgba(255,255,255,0.07) !important;
+        border-radius: 10px !important; padding: 14px 16px !important;
+    }
+    .cs-row { display: flex !important; justify-content: space-between !important; align-items: center !important; margin-bottom: 6px !important; }
+    .cs-row:last-child { margin-bottom: 0 !important; }
+    .cs-label { color: #666 !important; font-size: 0.65rem !important; letter-spacing: 1px !important; text-transform: uppercase !important; }
+    .cs-val   { color: #CCCCCC !important; font-size: 0.75rem !important; font-weight: 600 !important; font-family: monospace !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -489,8 +416,9 @@ st.markdown("""
 # ══════════════════════════════════════════════
 # Session State
 # ══════════════════════════════════════════════
-def _init_state():
-    defaults = {
+def _init_state() -> None:
+    defaults: dict = {
+        # ── Worker 통신 ──────────────────────────────
         "brain_api_key":          os.getenv("GEMINI_API_KEY", ""),
         "swarm_log":              [],
         "swarm_preview_title":    "",
@@ -500,17 +428,31 @@ def _init_state():
         "posts_success":          0,
         "posts_failed":           0,
         "last_fired":             False,
-        # ── 동시성 제어 (Flaw #1 수정) ──────────────
-        "swarm_running":          False,   # 백그라운드 워커 실행 중 여부
-        "swarm_queue":            None,    # 워커 → UI 메시지 채널
-        "swarm_stop_event":       None,    # UI → 워커 중단 신호
-        # ── INTEL 트렌드 분석 ────────────────────────
-        "intel_running":          False,   # INTEL 워커 실행 중 여부
-        "intel_queue":            None,    # INTEL 워커 → UI 채널
-        "intel_log":              [],      # INTEL 수집/분석 로그
-        "intel_result":           None,    # 마지막 분석 결과 dict
-        # 15분 캐시: {cache_key → {"result": dict, "ts": float}}
+        "swarm_running":          False,
+        "swarm_queue":            None,
+        "swarm_stop_event":       None,
+        # ── INTEL ────────────────────────────────────
+        "intel_running":          False,
+        "intel_queue":            None,
+        "intel_log":              [],
+        "intel_result":           None,
         "intel_cache":            {},
+        # ── Plotly 차트 캐시 ─────────────────────────
+        "_intel_fig":             None,
+        "_intel_fig_key":         None,
+        # ── Widget 기본값 (Settings Popover) ─────────
+        "target_tone_label":      "🧊 냉소적 (Cynical)",
+        "target_length":          "보통 (3~4문장)",
+        "target_headless":        True,
+        # ── Widget 기본값 (Payload Bento) ────────────
+        "target_gallery_id":      "stockus",
+        "target_type_label":      "마이너 (mgallery)",
+        "swarm_topic_input":      "",
+        "swarm_wave_count":       3,
+        # ── Widget 기본값 (INTEL Bento) ───────────────
+        "intel_gallery_id":       "stockus",
+        "intel_type_label":       "마이너 (mgallery)",
+        "intel_pages":            3,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -524,10 +466,7 @@ _init_state()
 # ══════════════════════════════════════════════
 
 def _interruptible_sleep(seconds: float, stop_event: threading.Event, interval: float = 0.5) -> None:
-    """stop_event가 set되면 즉시 중단하는 분할 sleep.
-
-    time.sleep(60~180)을 0.5초 단위로 쪼개어, 중단 신호를 빠르게 감지한다.
-    """
+    """stop_event가 set되면 즉시 중단하는 분할 sleep."""
     deadline = time.time() + seconds
     while time.time() < deadline:
         if stop_event.is_set():
@@ -549,9 +488,7 @@ def _swarm_worker(
     headless: bool,
 ) -> None:
     """백그라운드 스레드: Swarm Loop 전체를 실행.
-
     UI와는 오직 queue.Queue를 통해서만 통신한다.
-    session_state에 직접 접근하지 않아 thread-safety를 보장한다.
     """
 
     def q_log(msg: str) -> None:
@@ -564,7 +501,6 @@ def _swarm_worker(
     def q_stat(success: int = 0, fail: int = 0) -> None:
         log_q.put({"type": "stat", "success": success, "fail": fail})
 
-    # ── Brain 초기화 ──
     try:
         brain = GhostBrain(api_key=api_key or None)
         database.init_db()
@@ -573,17 +509,12 @@ def _swarm_worker(
         log_q.put({"type": "done"})
         return
 
-    # ══════════════════════════════════════════
-    # Swarm Loop
-    # ══════════════════════════════════════════
     for wave in range(1, wave_count + 1):
         if stop_ev.is_set():
             q_log("[SWARM] 🛑 중단 요청 — 루프 종료")
             break
 
         q_log(f"═══════ WAVE {wave}/{wave_count} ═══════")
-
-        # ── 1) 생성 — 지수 백오프 재시도 (Flaw #2 수정) ──────────
         q_log(f"[W{wave}] 🧠 AI 작문 시작 → 주제: '{topic[:30]}'")
         q_preview("", "", wave, "GENERATING")
 
@@ -608,13 +539,9 @@ def _swarm_worker(
                 break
 
             except RateLimitError:
-                # 429: 지수 백오프 재시도 (60s → 120s → 포기)
                 if attempt < 2:
                     backoff = 60 * (2 ** attempt)
-                    q_log(
-                        f"[W{wave}] ⚠️ Rate Limit (429) — {backoff}초 대기 후 재시도 "
-                        f"({attempt + 1}/3)..."
-                    )
+                    q_log(f"[W{wave}] ⚠️ Rate Limit (429) — {backoff}초 대기 후 재시도 ({attempt+1}/3)...")
                     _interruptible_sleep(backoff, stop_ev)
                 else:
                     q_log(f"[W{wave}] ❌ Rate Limit 재시도 한도(3회) 초과 — WAVE {wave} 건너뜀")
@@ -625,25 +552,17 @@ def _swarm_worker(
                 gen_title = None
                 break
 
-        # 생성 실패 or 중단 요청 시 포스팅 단계 완전 건너뜀
         if not gen_title or stop_ev.is_set():
             continue
 
-        # ── 2) 포스팅 ──────────────────────────────────────────────
         q_log(f"[W{wave}] 🚀 자동 포스팅 시작 → {gallery_type}/{gallery_id}")
         poster = GhostPoster(headless=headless, gallery_type=gallery_type)
-
-        # 백그라운드 스레드 전용 이벤트 루프 생성
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
             post_result = loop.run_until_complete(
-                poster.auto_post(
-                    gallery_id=gallery_id,
-                    title=gen_title,
-                    content=gen_content,
-                    log_callback=q_log,
-                )
+                poster.auto_post(gallery_id=gallery_id, title=gen_title,
+                                 content=gen_content, log_callback=q_log)
             )
         finally:
             loop.close()
@@ -658,7 +577,6 @@ def _swarm_worker(
             q_log(f"[W{wave}] ❌ 포스팅 실패: {post_result['message']}")
             q_preview(gen_title, gen_content, wave, "❌ FAILED")
 
-        # ── 3) 대기 (마지막 WAVE 제외) ───────────────────────────
         if wave < wave_count and not stop_ev.is_set():
             wait_sec = random.randint(60, 180)
             q_log(f"[SWARM] ☕ 다음 WAVE까지 {wait_sec}초 대기...")
@@ -668,10 +586,6 @@ def _swarm_worker(
     log_q.put({"type": "done"})
 
 
-# ══════════════════════════════════════════════
-# INTEL 백그라운드 워커 — 수집 + 분석 파이프라인
-# ══════════════════════════════════════════════
-
 def _intel_worker(
     log_q: queue.Queue,
     *,
@@ -680,18 +594,13 @@ def _intel_worker(
     gallery_type: str,
     pages: int,
 ) -> None:
-    """백그라운드 스레드: TrendScraper 수집 → GhostBrain.analyze_trend() 분석.
-
-    session_state에 직접 접근하지 않고 queue.Queue로만 UI에 통신한다.
-    완료 시 {"type": "intel_result", "data": {...}} 메시지를 전송한다.
-    """
+    """백그라운드 스레드: TrendScraper 수집 → GhostBrain.analyze_trend() 분석."""
     from ghost_protocol.scraper import TrendScraper
     from ghost_protocol.brain import GhostBrain, RateLimitError
 
     def _log(msg: str) -> None:
         log_q.put({"type": "intel_log", "data": msg})
 
-    # ── Brain 초기화 ──────────────────────────────────────
     try:
         brain = GhostBrain(api_key=api_key or None)
     except Exception as e:
@@ -699,15 +608,12 @@ def _intel_worker(
         log_q.put({"type": "intel_done"})
         return
 
-    # ── 1단계: AJAX 경량 수집 ─────────────────────────────
     _log(f"🔍 [{gallery_id}] 트렌드 수집 시작 (AJAX 모드, {pages} 페이지)")
     try:
         scraper  = TrendScraper()
         raw_data = scraper.collect_trending(
-            gallery_id=gallery_id,
-            gallery_type=gallery_type,
-            pages=pages,
-            progress_callback=_log,
+            gallery_id=gallery_id, gallery_type=gallery_type,
+            pages=pages, progress_callback=_log,
         )
     except ImportError as e:
         _log(f"❌ 의존성 오류: {e}")
@@ -723,14 +629,13 @@ def _intel_worker(
         log_q.put({"type": "intel_done"})
         return
 
-    # ── 2단계: Gemini 트렌드 분석 ────────────────────────
     _log("🧠 Gemini 트렌드 분석 중...")
     try:
         result = brain.analyze_trend(raw_data)
         _log("✅ 분석 완료!")
         log_q.put({"type": "intel_result", "data": result})
     except RateLimitError:
-        _log("⚠️ Rate Limit (429) — API 쿼터를 초과했습니다. 1분 후 재시도하세요.")
+        _log("⚠️ Rate Limit (429) — 1분 후 재시도하세요.")
     except Exception as e:
         _log(f"❌ 분석 실패: {str(e)[:120]}")
 
@@ -741,7 +646,6 @@ def _intel_worker(
 # Terminal HTML 렌더러
 # ══════════════════════════════════════════════
 def render_terminal(logs: list, height_px: int = 400) -> str:
-    """실시간 로그를 어두운 터미널 스타일 HTML로 변환."""
     parts = []
     for line in reversed(logs[-200:]):
         if any(k in line for k in ("═══", "WAVE", "SWARM")):
@@ -763,502 +667,567 @@ def render_terminal(logs: list, height_px: int = 400) -> str:
 
 
 # ══════════════════════════════════════════════
-# SIDEBAR — 타겟팅 설정
+# Plotly 차트 빌더 (캐시 로직은 호출부에서 관리)
 # ══════════════════════════════════════════════
-with st.sidebar:
-    st.markdown(
-        '<div class="sb-logo">👻 <span>GHOST</span> PROTOCOL</div>'
-        '<div class="sb-sub">v5.0 · Launchpad</div>',
-        unsafe_allow_html=True,
+def _build_intel_fig(ir: dict) -> "go.Figure | None":
+    """intel_result dict에서 Plotly 키워드 빈도 차트를 생성한다."""
+    kw_all    = ir.get("top_keywords", [])[:30]
+    kw_counts = ir.get("keyword_counts", {})
+    if not kw_all:
+        return None
+    if not kw_counts:
+        kw_counts = {w: len(kw_all) - i for i, w in enumerate(kw_all)}
+    n        = min(20, len(kw_all))
+    words    = kw_all[:n]
+    vals     = [kw_counts.get(w, 1) for w in words]
+    words_r  = words[::-1]
+    vals_r   = vals[::-1]
+    fig = go.Figure(go.Bar(
+        x=vals_r, y=words_r, orientation="h",
+        marker=dict(color=vals_r,
+                    colorscale=[[0, "#1C3A50"], [0.45, "#006688"], [1.0, "#00F0FF"]],
+                    showscale=False, line=dict(width=0)),
+        hovertemplate="<b>%{y}</b><br>빈도: %{x}회<extra></extra>",
+    ))
+    fig.update_layout(
+        template="plotly_dark", paper_bgcolor="#141820", plot_bgcolor="#141820",
+        height=max(320, n * 22), margin=dict(l=0, r=16, t=36, b=8),
+        title=dict(text="📊 KEYWORD FREQUENCY  —  TOP 20",
+                   font=dict(size=10, color="#444444", family="monospace"), x=0),
+        xaxis=dict(gridcolor="rgba(255,255,255,0.05)",
+                   tickfont=dict(size=9, color="#555555", family="monospace"),
+                   title=None, zeroline=False),
+        yaxis=dict(tickfont=dict(size=11, color="#BBBBBB"), title=None, automargin=True),
+        hoverlabel=dict(bgcolor="#1A2030", font_size=12, font_family="monospace",
+                        bordercolor="rgba(0,240,255,0.3)"),
     )
-    st.divider()
-
-    # ── 타겟 설정 ──
-    st.markdown('<div class="section-hdr">🎯 Target</div>', unsafe_allow_html=True)
-
-    gallery_id = st.text_input(
-        "Gallery ID",
-        value="stockus",
-        placeholder="예: stockus, universe, baseball_new9",
-        help="DC Inside 갤러리 ID",
-        label_visibility="visible",
-    )
-
-    # ── 갤러리 타입 선택 (명시적 렌더링) ──
-    _type_map = {
-        "마이너 (mgallery)": "mgallery",
-        "정규 (board)":      "board",
-        "미니 (mini)":       "mini",
-    }
-    _type_label = st.selectbox(
-        "갤러리 타입",
-        options=list(_type_map.keys()),
-        index=0,
-        help="정규 갤러리(예: universe)→ board / 마이너(예: stockus)→ mgallery",
-    )
-    gallery_type = _type_map[_type_label]
-
-    st.divider()
-
-    # ── 글 설정 ──
-    st.markdown('<div class="section-hdr">✍️ Style</div>', unsafe_allow_html=True)
-
-    tone_map = {
-        "🧊 냉소적 (Cynical)":    "cynical",
-        "😐 중립 (Neutral)":      "neutral",
-        "📊 분석적 (Analytical)": "analytical",
-        "🗣️ 독백 (Monologue)":   "monologue",
-        "🔥 공격적 (Aggressive)": "aggressive",
-        "💀 어그로성 (Aggro)":    "aggro",
-    }
-    tone_label = st.selectbox("Tone", options=list(tone_map.keys()), index=0)
-    neural_tone = tone_map[tone_label]
-
-    selected_length = st.selectbox(
-        "Length",
-        options=["아주 짧게 (1문장)", "짧게 (1~2문장)", "보통 (3~4문장)"],
-        index=2,
-    )
-
-    headless = st.toggle("🕶️ Headless Mode", value=True, help="ON: 숨김 / OFF: 디버깅")
-
-    st.divider()
-
-    # ── API Key ──
-    st.markdown('<div class="section-hdr">🔑 API Key</div>', unsafe_allow_html=True)
-    _api_input = st.text_input(
-        "Gemini API Key",
-        type="password",
-        value=st.session_state.brain_api_key,
-        label_visibility="collapsed",
-        placeholder="AIza...",
-    )
-    st.session_state.brain_api_key = _api_input
-    _env_key = os.getenv("GEMINI_API_KEY", "")
-    has_any_key = bool(st.session_state.brain_api_key or _env_key)
-    if _env_key and not st.session_state.brain_api_key:
-        st.caption("✅ .env 키 감지됨")
-
-    st.divider()
-
-    # ── 미션 스탯 ──
-    st.markdown('<div class="section-hdr">📊 Mission Stats</div>', unsafe_allow_html=True)
-    st.markdown(
-        f'<div class="stat-row">'
-        f'<div class="stat-card stat-ok">'
-        f'<div class="stat-val">{st.session_state.posts_success}</div>'
-        f'<div class="stat-label">성공</div></div>'
-        f'<div class="stat-card stat-err">'
-        f'<div class="stat-val">{st.session_state.posts_failed}</div>'
-        f'<div class="stat-label">실패</div></div>'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-
-    st.divider()
-    if st.button("🔄 스탯 초기화", width="stretch"):
-        st.session_state.posts_success = 0
-        st.session_state.posts_failed = 0
-        st.session_state.swarm_log = []
-        st.session_state.swarm_preview_title = ""
-        st.session_state.swarm_preview_content = ""
-        st.rerun()
-
-
-# ══════════════════════════════════════════════
-# MAIN — Command Center (상단)
-# ══════════════════════════════════════════════
-st.markdown(
-    '<div class="command-center">'
-    '<div class="cc-header">'
-    '<span class="cc-title">⚡ Command Center</span>'
-    '<span class="cc-badge">SWARM MODE</span>'
-    '</div>',
-    unsafe_allow_html=True,
-)
-
-cc_left, cc_right = st.columns([3, 1], gap="large")
-
-with cc_left:
-    swarm_topic = st.text_input(
-        "🎯 폭격할 주제를 입력하세요",
-        placeholder="예: 나스닥 폭락 실화냐 / 테슬라 단타 계획 / 엔비디아 버블론",
-        key="swarm_topic_input",
-    )
-    wave_count = st.slider(
-        "💣 WAVE 횟수",
-        min_value=1, max_value=10, value=3,
-        help="연속 폭격 횟수. 각 WAVE 사이에 60~180초 랜덤 대기.",
-    )
-
-with cc_right:
-    st.markdown(
-        f'<div class="cc-target-info">'
-        f'<div class="cti-row"><span class="cti-label">갤러리</span>'
-        f'<span class="cti-val">{_html.escape(gallery_id)}</span></div>'
-        f'<div class="cti-row"><span class="cti-label">타입</span>'
-        f'<span class="cti-val">{gallery_type}</span></div>'
-        f'<div class="cti-row"><span class="cti-label">톤</span>'
-        f'<span class="cti-val">{neural_tone}</span></div>'
-        f'<div class="cti-row"><span class="cti-label">길이</span>'
-        f'<span class="cti-val">{selected_length.split(" ")[0]}</span></div>'
-        f'<div class="cti-row"><span class="cti-label">Headless</span>'
-        f'<span class="cti-val">{"ON" if headless else "OFF"}</span></div>'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-
-st.markdown('</div>', unsafe_allow_html=True)  # /command-center
-
-# ══════════════════════════════════════════════
-# FIRE / STOP 버튼
-# ══════════════════════════════════════════════
-_is_running = st.session_state.get("swarm_running", False)
-_fire_disabled = not has_any_key or not (swarm_topic or "").strip() or _is_running
-
-st.markdown('<div class="fire-btn">', unsafe_allow_html=True)
-fire_clicked = st.button(
-    "🔥  FIRE  —  폭격 개시" if not _is_running else "⏳  SWARM RUNNING...",
-    width="stretch",
-    type="primary",
-    disabled=_fire_disabled or _is_running,
-)
-st.markdown('</div>', unsafe_allow_html=True)
-
-# STOP 버튼 — 실행 중일 때만 표시
-stop_clicked = False
-if _is_running:
-    stop_clicked = st.button("🛑  STOP  —  중단", width="stretch")
-
-if not _is_running and _fire_disabled:
-    if not has_any_key:
-        st.caption("🔑 사이드바에 Gemini API Key를 입력하면 활성화됩니다.")
-    elif not (swarm_topic or "").strip():
-        st.caption("🎯 위에서 폭격할 주제를 입력하면 활성화됩니다.")
-
-st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
-
-# ══════════════════════════════════════════════
-# MAIN — Live Terminal + Preview (하단)
-# ══════════════════════════════════════════════
-st.markdown("---")
-col_preview, col_log = st.columns([3, 2], gap="medium")
-
-with col_preview:
-    st.markdown('<div class="section-hdr">🖥️ AI Post Preview</div>', unsafe_allow_html=True)
-    _preview_ph = st.empty()
-
-    if st.session_state.swarm_preview_title:
-        _safe_t = _html.escape(st.session_state.swarm_preview_title)
-        _safe_c = _html.escape(st.session_state.swarm_preview_content)
-        _wave_lbl = (
-            f"WAVE {st.session_state.swarm_wave_current}/"
-            f"{st.session_state.swarm_wave_total} — POSTED"
-            if st.session_state.last_fired else "LAST GENERATED"
-        )
-        _preview_ph.markdown(
-            f'<div class="preview-dark">'
-            f'<div class="pd-label">{_html.escape(_wave_lbl)}</div>'
-            f'<div class="pd-title">{_safe_t}</div>'
-            f'<div class="pd-body">{_safe_c}</div>'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
-    else:
-        _preview_ph.markdown(
-            '<div class="preview-dark">'
-            '<div class="pd-empty">대기 중...<br><br>주제를 입력하고<br>🔥 FIRE를 눌러주세요.</div>'
-            '</div>',
-            unsafe_allow_html=True,
-        )
-
-with col_log:
-    st.markdown('<div class="section-hdr">📟 Live Terminal</div>', unsafe_allow_html=True)
-    _log_ph = st.empty()
-
-    if st.session_state.swarm_log:
-        _log_ph.markdown(render_terminal(st.session_state.swarm_log, height_px=420), unsafe_allow_html=True)
-    else:
-        _log_ph.markdown(
-            '<div class="terminal" style="height:420px">'
-            '<div style="color:#30363D;font-style:italic">'
-            '// Ghost Protocol v5.0 Launchpad<br>'
-            '// Terminal ready — awaiting launch sequence...'
-            '</div></div>',
-            unsafe_allow_html=True,
-        )
+    return fig
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# INTEL 브리핑 섹션 — Read-Only 트렌드 분석 (포스팅 없음)
+# @st.fragment — INTEL 결과 렌더링 + 폴링
+# 이 fragment만 0.5초마다 재실행 — 전체 페이지 flickering 없음
 # ══════════════════════════════════════════════════════════════════════════════
-st.markdown("---")
-st.markdown(
-    '<div class="cc-header" style="margin-bottom:4px">'
-    '<span class="cc-title">🔍 Intel 정보 브리핑</span>'
-    '<span class="cc-badge">READ-ONLY · TREND ANALYSIS</span>'
-    '</div>',
-    unsafe_allow_html=True,
-)
+@st.fragment
+def _intel_results_fragment() -> None:
+    """INTEL 결과 렌더 + 워커 폴링 fragment.
 
-_intel_col_ctrl, _intel_col_result = st.columns([1, 2], gap="large")
+    • intel_running=True 동안 queue 드레인 → session_state 갱신 → fragment 재실행
+    • 완료(intel_done) 수신 시 scope='app' 전체 재실행 → 버튼 재활성화
+    • Plotly fig는 intel_result 해시가 바뀔 때만 재생성 (flickering 방지)
+    """
+    ss = st.session_state
 
-# ── 컨트롤 패널 ────────────────────────────────────────────────
-with _intel_col_ctrl:
-    _intel_gid = st.text_input(
-        "분석할 갤러리 ID",
-        value="stockus",
-        key="intel_gallery_id",
-        placeholder="예: stockus, baseball_new9",
-    )
-    _intel_type_map = {
-        "마이너 (mgallery)": "mgallery",
-        "정규 (board)":      "board",
-        "미니 (mini)":       "mini",
-    }
-    _intel_type_label = st.selectbox(
-        "갤러리 타입",
-        options=list(_intel_type_map.keys()),
-        index=0,
-        key="intel_gallery_type_label",
-    )
-    _intel_gtype = _intel_type_map[_intel_type_label]
+    # ── INTEL Queue 드레인 ──────────────────────────────────────────────
+    _intel_done = False
+    if ss.get("intel_running") and ss.get("intel_queue") is not None:
+        iq: queue.Queue = ss.intel_queue
+        while True:
+            try:
+                msg = iq.get_nowait()
+            except queue.Empty:
+                break
 
-    _intel_pages = st.slider(
-        "수집 페이지 수",
-        min_value=1, max_value=5, value=3,
-        key="intel_pages",
-        help="페이지 수가 많을수록 정확도↑, 수집 시간↑",
-    )
+            if msg["type"] == "intel_log":
+                ss.intel_log.append(msg["data"])
 
-    # ── 15분 캐시 유효성 확인 ──────────────────────────────
-    _INTEL_CACHE_TTL = 15 * 60  # 900초
-    _intel_cache_key = f"{_intel_gid}::{_intel_gtype}"
-    _intel_cached    = st.session_state.intel_cache.get(_intel_cache_key)
-    _intel_cache_age: float | None = None
-    _intel_cache_valid = False
+            elif msg["type"] == "intel_result":
+                _data = msg["data"]
+                ss.intel_result = _data
+                _ck = f"{ss.get('intel_gallery_id', '')}::{_TYPE_MAP.get(ss.get('intel_type_label', '마이너 (mgallery)'), 'mgallery')}"
+                ss.intel_cache[_ck] = {"result": _data, "ts": time.time()}
+                ss["_intel_fig_key"] = None  # 캐시 무효화 → 다음 렌더에서 재생성
 
-    if _intel_cached:
-        _intel_cache_age   = time.time() - _intel_cached.get("ts", 0)
-        _intel_cache_valid = _intel_cache_age < _INTEL_CACHE_TTL
+            elif msg["type"] == "intel_done":
+                ss.intel_running = False
+                ss.intel_queue   = None
+                _intel_done = True
 
-    if _intel_cache_valid and _intel_cache_age is not None:
-        _mins_ago = int(_intel_cache_age // 60)
-        _secs_ago = int(_intel_cache_age % 60)
-        st.caption(f"✅ 캐시 유효 — {_mins_ago}분 {_secs_ago}초 전 분석")
-    elif _intel_cached:
-        st.caption("♻️ 캐시 만료 (15분) — 재분석 필요")
+    # ── 표시할 결과 결정 (live result > cache) ─────────────────────────
+    _ir = ss.intel_result
+    if _ir is None and not ss.get("intel_running"):
+        _ck = f"{ss.get('intel_gallery_id', '')}::{_TYPE_MAP.get(ss.get('intel_type_label', '마이너 (mgallery)'), 'mgallery')}"
+        _cached = ss.intel_cache.get(_ck)
+        if _cached and (time.time() - _cached.get("ts", 0)) < _INTEL_CACHE_TTL:
+            _ir = _cached["result"]
 
-    # ── 실행 버튼 ──────────────────────────────────────────
-    _intel_is_running = st.session_state.get("intel_running", False)
-    _intel_btn_disabled = (
-        not has_any_key
-        or not _intel_gid.strip()
-        or _intel_is_running
-    )
-
-    st.markdown('<div class="intel-run-btn">', unsafe_allow_html=True)
-    _intel_fire = st.button(
-        "🔍  분석 시작" if not _intel_is_running else "⏳  분석 중...",
-        key="intel_fire_btn",
-        disabled=_intel_btn_disabled,
-        width="stretch",
-    )
-    st.markdown('</div>', unsafe_allow_html=True)
-
-    # 수집 로그 미니 터미널
-    if st.session_state.intel_log:
-        _intel_log_html = "".join(
-            f'<div>{_html.escape(ln)}</div>'
-            for ln in st.session_state.intel_log[-20:]
-        )
-        st.markdown(
-            f'<div class="intel-terminal" style="height:160px;overflow-y:auto">'
-            f'{_intel_log_html}</div>',
-            unsafe_allow_html=True,
-        )
-
-# ── 결과 패널 ────────────────────────────────────────────────
-with _intel_col_result:
-    _ir = st.session_state.intel_result
-
-    # 캐시 히트 시 캐시 결과 표시
-    if _ir is None and _intel_cache_valid and _intel_cached:
-        _ir = _intel_cached["result"]
-
+    # ── 결과 렌더링 ─────────────────────────────────────────────────────
     if _ir:
-        # 감성 → CSS 클래스 매핑
-        _SENTIMENT_CLASS = {
-            "패닉": "panic", "공포": "panic",
-            "적대적": "hostile", "분노": "hostile", "공격": "hostile",
-            "조롱": "mock", "냉소": "mock", "비꼬": "mock",
-            "우호적": "friendly", "긍정": "friendly",
+        _SENTIMENT_CLS = {
+            "패닉": "panic", "공포": "panic", "적대적": "hostile",
+            "분노": "hostile", "공격": "hostile", "조롱": "mock",
+            "냉소": "mock", "비꼬": "mock", "우호적": "friendly", "긍정": "friendly",
         }
         _sent_raw = _ir.get("sentiment", "알 수 없음")
         _sent_cls = "intel-sentiment-neutral"
-        for kw, cls in _SENTIMENT_CLASS.items():
+        for kw, cls in _SENTIMENT_CLS.items():
             if kw in _sent_raw:
                 _sent_cls = f"intel-sentiment-{cls}"
                 break
 
-        # ── 캐시 타임스탬프 표시 ──
-        _ts_label = ""
-        if _intel_cache_valid and _intel_cache_age is not None:
-            _ts_label = f"캐시 {int(_intel_cache_age // 60)}분 {int(_intel_cache_age % 60)}초 전"
-
-        _hot_chips = "".join(
-            f'<span class="intel-chip-hot">{_html.escape(t)}</span>'
-            for t in _ir.get("hot_topics", [])
-        )
-        _meme_chips = "".join(
-            f'<span class="intel-chip-meme">{_html.escape(m)}</span>'
-            for m in _ir.get("memes", [])
-        )
-        _kw_chips = "".join(
-            f'<span class="intel-chip-kw">{_html.escape(w)}</span>'
-            for w in _ir.get("top_keywords", [])[:15]
-        )
-        _stats = _ir.get("stats", {})
+        _hot_chips  = "".join(f'<span class="intel-chip-hot">{_html.escape(t)}</span>'  for t in _ir.get("hot_topics", []))
+        _meme_chips = "".join(f'<span class="intel-chip-meme">{_html.escape(m)}</span>' for m in _ir.get("memes", []))
+        _kw_chips   = "".join(f'<span class="intel-chip-kw">{_html.escape(w)}</span>'   for w in _ir.get("top_keywords", [])[:15])
+        _stats_d    = _ir.get("stats", {})
         _stat_pills = (
-            f'<span class="intel-stat-pill">제목 <span>{_stats.get("titles_count", 0)}</span>개</span>'
-            f'<span class="intel-stat-pill">댓글 <span>{_stats.get("comments_count", 0)}</span>개</span>'
-            f'<span class="intel-stat-pill">키워드 <span>{_stats.get("keywords_found", 0)}</span>개</span>'
+            f'<span class="intel-stat-pill">제목 <span>{_stats_d.get("titles_count", 0)}</span>개</span>'
+            f'<span class="intel-stat-pill">댓글 <span>{_stats_d.get("comments_count", 0)}</span>개</span>'
+            f'<span class="intel-stat-pill">키워드 <span>{_stats_d.get("keywords_found", 0)}</span>개</span>'
         )
 
-        st.markdown(
-            f'<div class="intel-card">'
-            f'  <div class="intel-header">'
-            f'    <span class="intel-title">📡 INTEL BRIEFING</span>'
-            f'    <span class="intel-gallery-badge">{_html.escape(_intel_gid)} / {_intel_gtype}</span>'
-            f'    <span class="intel-cache-ts">{_html.escape(_ts_label)}</span>'
-            f'  </div>'
-            # 감성
-            f'  <div class="intel-section-label">OVERALL SENTIMENT</div>'
-            f'  <div class="intel-sentiment {_sent_cls}">{_html.escape(_sent_raw)}</div>'
-            # 핫 떡밥
-            f'  <div class="intel-section-label">🔥 HOT TOPICS</div>'
-            f'  <div class="intel-chips">{_hot_chips}</div>'
-            # 밈
-            f'  <div class="intel-section-label">💬 TRENDING MEMES</div>'
-            f'  <div class="intel-chips">{_meme_chips if _meme_chips else "<span style=\"color:#333;font-size:0.72rem\">감지된 밈 없음</span>"}</div>'
-            # 키워드 클라우드 (Summary는 카드 아래 독립 박스로 렌더링)
-            f'  <div class="intel-section-label" style="margin-top:14px">🔑 TOP KEYWORDS</div>'
-            f'  <div class="intel-chips">{_kw_chips}</div>'
-            # 수집 스탯
-            f'  <div class="intel-stats">{_stat_pills}</div>'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
+        col_brief, col_chart = st.columns([2, 1], gap="large")
 
-        # ── Option A: Summary 강화 렌더링 (독립 callout 박스) ──────────
-        _summary_text = _ir.get("summary", "").strip()
-        if _summary_text:
-            _summary_body = _html.escape(_summary_text).replace("\n", "<br>")
+        with col_brief:
             st.markdown(
-                f'<div style="'
-                f'background:rgba(0,240,255,0.04);'
-                f'border:1px solid rgba(0,240,255,0.13);'
-                f'border-left:3px solid rgba(0,240,255,0.45);'
-                f'border-radius:0 12px 12px 0;'
-                f'padding:16px 22px;'
-                f'margin-top:14px;">'
-                f'<div style="color:#555;font-size:0.62rem;font-weight:700;'
-                f'letter-spacing:2px;text-transform:uppercase;margin-bottom:10px">'
-                f'📝 SITUATION SUMMARY</div>'
-                f'<p style="margin:0;color:#D0D0D0;font-size:0.9rem;line-height:1.85;'
-                f'font-style:italic;">'
-                f'{_summary_body}'
-                f'</p>'
+                f'<div class="intel-card">'
+                f'  <div class="intel-header">'
+                f'    <span class="intel-title">📡 INTEL BRIEFING</span>'
+                f'    <span class="intel-gallery-badge">{_html.escape(ss.get("intel_gallery_id",""))}</span>'
+                f'  </div>'
+                f'  <div class="intel-section-label">OVERALL SENTIMENT</div>'
+                f'  <div class="intel-sentiment {_sent_cls}">{_html.escape(_sent_raw)}</div>'
+                f'  <div class="intel-section-label">🔥 HOT TOPICS</div>'
+                f'  <div class="intel-chips">{_hot_chips}</div>'
+                f'  <div class="intel-section-label">💬 TRENDING MEMES</div>'
+                f'  <div class="intel-chips">{_meme_chips if _meme_chips else "<span style=\"color:#333;font-size:0.72rem\">감지된 밈 없음</span>"}</div>'
+                f'  <div class="intel-section-label" style="margin-top:14px">🔑 TOP KEYWORDS</div>'
+                f'  <div class="intel-chips">{_kw_chips}</div>'
+                f'  <div class="intel-stats">{_stat_pills}</div>'
                 f'</div>',
                 unsafe_allow_html=True,
             )
 
-        # ── Option C: Plotly 키워드 빈도 막대 그래프 ─────────────────
-        _kw_all    = _ir.get("top_keywords", [])[:30]
-        _kw_counts = _ir.get("keyword_counts", {})
-        if _kw_all:
-            # keyword_counts 없으면 순위 기반 대체값 (구형 캐시 하위호환)
-            if not _kw_counts:
-                _kw_counts = {w: len(_kw_all) - i for i, w in enumerate(_kw_all)}
+            _summary_text = _ir.get("summary", "").strip()
+            if _summary_text:
+                _sb = _html.escape(_summary_text).replace("\n", "<br>")
+                st.markdown(
+                    f'<div style="background:rgba(0,240,255,0.04);border:1px solid rgba(0,240,255,0.13);'
+                    f'border-left:3px solid rgba(0,240,255,0.45);border-radius:0 12px 12px 0;'
+                    f'padding:16px 22px;margin-top:14px;">'
+                    f'<div style="color:#555;font-size:0.62rem;font-weight:700;letter-spacing:2px;'
+                    f'text-transform:uppercase;margin-bottom:10px">📝 SITUATION SUMMARY</div>'
+                    f'<p style="margin:0;color:#D0D0D0;font-size:0.9rem;line-height:1.85;font-style:italic;">'
+                    f'{_sb}</p></div>',
+                    unsafe_allow_html=True,
+                )
 
-            _chart_n     = min(20, len(_kw_all))
-            _chart_words = _kw_all[:_chart_n]
-            _chart_vals  = [_kw_counts.get(w, 1) for w in _chart_words]
+            # "FIRE 주제로 사용" 버튼
+            _hot = _ir.get("hot_topics", [])
+            if _hot:
+                st.markdown('<div class="topic-use-btn" style="margin-top:12px">', unsafe_allow_html=True)
+                if st.button(f"➡️  '{_hot[0]}'  —  FIRE 주제로 사용", key="use_as_topic_btn"):
+                    ss.swarm_topic_input = _hot[0]
+                    st.rerun(scope="app")
+                st.markdown('</div>', unsafe_allow_html=True)
 
-            # 역순: Plotly horizontal bar는 아래부터 쌓이므로 뒤집어야 상위가 위에 표시됨
-            _cw_rev = _chart_words[::-1]
-            _cv_rev = _chart_vals[::-1]
+        with col_chart:
+            # Plotly fig 캐시: intel_result 내용이 바뀔 때만 재생성
+            _fig_key = hash(str(_ir.get("top_keywords", [])) + str(_ir.get("keyword_counts", {})))
+            if ss.get("_intel_fig_key") != _fig_key or ss.get("_intel_fig") is None:
+                ss["_intel_fig"]     = _build_intel_fig(_ir)
+                ss["_intel_fig_key"] = _fig_key
 
-            _fig = go.Figure(go.Bar(
-                x=_cv_rev,
-                y=_cw_rev,
-                orientation="h",
-                marker=dict(
-                    # 빈도 값으로 컬러스케일 → 높을수록 밝은 시안
-                    color=_cv_rev,
-                    colorscale=[[0, "#1C3A50"], [0.45, "#006688"], [1.0, "#00F0FF"]],
-                    showscale=False,
-                    line=dict(width=0),
-                ),
-                hovertemplate="<b>%{y}</b><br>빈도: %{x}회<extra></extra>",
-            ))
-            _fig.update_layout(
-                template="plotly_dark",
-                paper_bgcolor="#141820",
-                plot_bgcolor="#141820",
-                height=max(320, _chart_n * 22),   # 키워드 수에 따라 동적 높이
-                margin=dict(l=0, r=16, t=36, b=8),
-                title=dict(
-                    text="📊 KEYWORD FREQUENCY  —  TOP 20",
-                    font=dict(size=10, color="#444444", family="monospace"),
-                    x=0,
-                    pad=dict(b=6),
-                ),
-                xaxis=dict(
-                    gridcolor="rgba(255,255,255,0.05)",
-                    tickfont=dict(size=9, color="#555555", family="monospace"),
-                    title=None,
-                    zeroline=False,
-                ),
-                yaxis=dict(
-                    tickfont=dict(size=11, color="#BBBBBB"),
-                    title=None,
-                    automargin=True,
-                ),
-                hoverlabel=dict(
-                    bgcolor="#1A2030",
-                    font_size=12,
-                    font_family="monospace",
-                    bordercolor="rgba(0,240,255,0.3)",
-                ),
+            if ss["_intel_fig"] is not None:
+                st.plotly_chart(ss["_intel_fig"], use_container_width=True,
+                                config={"displayModeBar": False})
+
+    elif ss.get("intel_running"):
+        # 수집/분석 진행 중
+        if ss.intel_log:
+            _lh = "".join(f'<div>{_html.escape(ln)}</div>' for ln in ss.intel_log[-18:])
+            st.markdown(
+                f'<div class="intel-terminal" style="height:160px;overflow-y:auto">{_lh}</div>',
+                unsafe_allow_html=True,
             )
-            st.plotly_chart(
-                _fig,
-                use_container_width=True,
-                config={"displayModeBar": False},
+        else:
+            st.markdown(
+                '<div class="intel-card"><div class="intel-empty">📡 수집 중...<br><br>'
+                '<span style="color:#00F0FF">갤러리 트렌드 데이터를 수집하고 있습니다.</span>'
+                '</div></div>',
+                unsafe_allow_html=True,
             )
-
     else:
         st.markdown(
-            '<div class="intel-card">'
-            '<div class="intel-empty">'
-            '📡 대기 중<br><br>'
+            '<div class="intel-card"><div class="intel-empty">📡 대기 중<br><br>'
             '갤러리 ID를 확인하고<br>'
             '<b style="color:#00F0FF">🔍 분석 시작</b>을 누르세요.<br><br>'
             '<span style="color:#333;font-size:0.72rem">분석 결과는 15분간 캐시됩니다.</span>'
-            '</div>'
-            '</div>',
+            '</div></div>',
             unsafe_allow_html=True,
         )
+
+    # ── 폴링 제어 ────────────────────────────────────────────────────────
+    if _intel_done:
+        st.rerun(scope="app")          # 전체 재실행 → 버튼 재활성화
+    elif ss.get("intel_running"):
+        time.sleep(0.5)
+        st.rerun()                     # fragment만 재실행
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# @st.fragment — SWARM 모니터 (Preview + Terminal + Stats + STOP)
+# ══════════════════════════════════════════════════════════════════════════════
+@st.fragment
+def _monitor_fragment() -> None:
+    """SWARM 실시간 모니터 fragment.
+
+    • swarm_running=True 동안 queue 드레인 → session_state 갱신 → fragment 재실행
+    • 전체 페이지 재실행 없이 Preview/Terminal/Stats만 갱신 → Flickering 없음
+    • 완료(done) 수신 시 scope='app' 전체 재실행 → FIRE 버튼 재활성화
+    """
+    ss = st.session_state
+
+    # ── Swarm Queue 드레인 ───────────────────────────────────────────────
+    _done_received = False
+    if ss.get("swarm_running") and ss.get("swarm_queue") is not None:
+        sq: queue.Queue = ss.swarm_queue
+        while True:
+            try:
+                msg = sq.get_nowait()
+            except queue.Empty:
+                break
+
+            if msg["type"] == "log":
+                ss.swarm_log.append(msg["data"])
+            elif msg["type"] == "preview":
+                ss.swarm_preview_title   = msg["title"]
+                ss.swarm_preview_content = msg["content"]
+                ss.swarm_wave_current    = msg["wave"]
+            elif msg["type"] == "stat":
+                ss.posts_success += msg.get("success", 0)
+                ss.posts_failed  += msg.get("fail", 0)
+            elif msg["type"] == "done":
+                ss.swarm_running    = False
+                ss.swarm_queue      = None
+                ss.swarm_stop_event = None
+                _done_received = True
+
+    # ── STOP 버튼 (실행 중일 때만) ───────────────────────────────────────
+    if ss.get("swarm_running"):
+        st.markdown('<div class="stop-btn">', unsafe_allow_html=True)
+        if st.button("🛑  STOP  —  중단", key="stop_btn_frag", use_container_width=True):
+            if ss.get("swarm_stop_event"):
+                ss.swarm_stop_event.set()
+                ss.swarm_log.append("[SWARM] 🛑 중단 요청 전송됨 — 현재 작업 완료 후 종료...")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    # ── Preview + Terminal ───────────────────────────────────────────────
+    col_preview, col_log = st.columns([3, 2], gap="medium")
+
+    with col_preview:
+        st.markdown('<div class="section-hdr">🖥️ AI Post Preview</div>', unsafe_allow_html=True)
+        if ss.swarm_preview_title:
+            _safe_t   = _html.escape(ss.swarm_preview_title)
+            _safe_c   = _html.escape(ss.swarm_preview_content)
+            _wave_lbl = (
+                f"WAVE {ss.swarm_wave_current}/{ss.swarm_wave_total}"
+                if ss.last_fired else "LAST GENERATED"
+            )
+            st.markdown(
+                f'<div class="preview-dark">'
+                f'<div class="pd-label">{_html.escape(_wave_lbl)}</div>'
+                f'<div class="pd-title">{_safe_t}</div>'
+                f'<div class="pd-body">{_safe_c}</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                '<div class="preview-dark">'
+                '<div class="pd-empty">대기 중...<br><br>주제를 입력하고<br>🔥 FIRE를 눌러주세요.</div>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+
+    with col_log:
+        st.markdown('<div class="section-hdr">📟 Live Terminal</div>', unsafe_allow_html=True)
+        if ss.swarm_log:
+            st.markdown(render_terminal(ss.swarm_log, height_px=420), unsafe_allow_html=True)
+        else:
+            st.markdown(
+                '<div class="terminal" style="height:420px">'
+                '<div style="color:#30363D;font-style:italic">'
+                '// Ghost Protocol v5.0 Launchpad<br>'
+                '// Terminal ready — awaiting launch sequence...'
+                '</div></div>',
+                unsafe_allow_html=True,
+            )
+
+    # ── Mission Stats + Reset ────────────────────────────────────────────
+    _wave_disp = f"{ss.swarm_wave_current}/{ss.swarm_wave_total}" if ss.swarm_wave_total else "—"
+    sc1, sc2, sc3, sc4 = st.columns([1, 1, 1, 3])
+    with sc1:
+        st.markdown(
+            f'<div class="ms-pill ms-ok">'
+            f'<div class="ms-val">{ss.posts_success}</div>'
+            f'<div class="ms-lbl">성공</div></div>',
+            unsafe_allow_html=True,
+        )
+    with sc2:
+        st.markdown(
+            f'<div class="ms-pill ms-err">'
+            f'<div class="ms-val">{ss.posts_failed}</div>'
+            f'<div class="ms-lbl">실패</div></div>',
+            unsafe_allow_html=True,
+        )
+    with sc3:
+        st.markdown(
+            f'<div class="ms-pill ms-wave">'
+            f'<div class="ms-val">{_wave_disp}</div>'
+            f'<div class="ms-lbl">Wave</div></div>',
+            unsafe_allow_html=True,
+        )
+    with sc4:
+        if st.button("🔄 스탯 초기화", key="reset_stats_btn"):
+            ss.posts_success          = 0
+            ss.posts_failed           = 0
+            ss.swarm_log              = []
+            ss.swarm_preview_title    = ""
+            ss.swarm_preview_content  = ""
+            st.rerun(scope="app")
+
+    # ── 폴링 제어 ────────────────────────────────────────────────────────
+    if _done_received:
+        st.rerun(scope="app")          # 전체 재실행 → FIRE 버튼 재활성화
+    elif ss.get("swarm_running"):
+        time.sleep(0.5)
+        st.rerun()                     # fragment만 재실행
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#
+#  ██████╗ ███████╗███╗   ██╗██████╗ ███████╗██████╗
+# ██╔══██╗██╔════╝████╗  ██║██╔══██╗██╔════╝██╔══██╗
+# ██████╔╝█████╗  ██╔██╗ ██║██║  ██║█████╗  ██████╔╝
+# ██╔══██╗██╔══╝  ██║╚██╗██║██║  ██║██╔══╝  ██╔══██╗
+# ██║  ██║███████╗██║ ╚████║██████╔╝███████╗██║  ██║
+# ╚═╝  ╚═╝╚══════╝╚═╝  ╚═══╝╚═════╝ ╚══════╝╚═╝  ╚═╝
+#
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── 공통 변수 계산 ────────────────────────────────────────────────────────────
+_env_key    = os.getenv("GEMINI_API_KEY", "")
+has_any_key = bool(st.session_state.get("brain_api_key", "") or _env_key)
+
+_gallery_id   = st.session_state.get("target_gallery_id", "stockus")
+_gallery_type = _TYPE_MAP.get(st.session_state.get("target_type_label",  "마이너 (mgallery)"), "mgallery")
+_neural_tone  = _TONE_MAP.get(st.session_state.get("target_tone_label",  "🧊 냉소적 (Cynical)"),  "cynical")
+_length       = st.session_state.get("target_length",   "보통 (3~4문장)")
+_headless     = st.session_state.get("target_headless", True)
+_is_running   = st.session_state.get("swarm_running",   False)
+
+
+# ══════════════════════════════════════════════
+# HEADER BAR — 로고 + Settings Popover
+# ══════════════════════════════════════════════
+hdr_logo, hdr_spacer, hdr_settings = st.columns([3, 5, 2])
+
+with hdr_logo:
+    st.markdown(
+        '<div class="logo-text">👻 <span>GHOST</span> PROTOCOL</div>'
+        '<div class="logo-sub">v5.0 · Launchpad · Bento 2.0</div>',
+        unsafe_allow_html=True,
+    )
+
+with hdr_settings:
+    st.markdown('<div class="settings-wrap">', unsafe_allow_html=True)
+    with st.popover("⚙️  Settings", use_container_width=True):
+        st.markdown(
+            '<div style="font-size:0.65rem;font-weight:700;letter-spacing:2px;'
+            'text-transform:uppercase;color:#555;margin-bottom:14px">🔑 API KEY</div>',
+            unsafe_allow_html=True,
+        )
+        st.text_input(
+            "Gemini API Key",
+            type="password",
+            key="brain_api_key",
+            label_visibility="collapsed",
+            placeholder="AIza...",
+        )
+        if _env_key and not st.session_state.get("brain_api_key", ""):
+            st.caption("✅ .env 키 감지됨")
+
+        st.divider()
+        st.markdown(
+            '<div style="font-size:0.65rem;font-weight:700;letter-spacing:2px;'
+            'text-transform:uppercase;color:#555;margin-bottom:10px">✍️ STYLE</div>',
+            unsafe_allow_html=True,
+        )
+        st.selectbox("Tone", options=list(_TONE_MAP.keys()), key="target_tone_label")
+        st.selectbox("Length", options=_LEN_OPTS, key="target_length")
+        st.toggle("🕶️ Headless Mode", key="target_headless",
+                  help="ON: 숨김 브라우저 / OFF: 디버깅용 화면 표시")
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+st.markdown(
+    '<hr style="border:none;border-top:1px solid rgba(255,255,255,0.06);margin:0 0 20px 0">',
+    unsafe_allow_html=True,
+)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# STEP 1 — INTEL BENTO (Expander)
+# ══════════════════════════════════════════════════════════════════════════════
+with st.expander("🔍  STEP 1  —  SITUATION ROOM  ·  TREND ANALYSIS"):
+
+    _intel_ctrl, _intel_result_area = st.columns([1, 2], gap="large")
+
+    # ── 컨트롤 패널 ─────────────────────────────────────────────────────
+    with _intel_ctrl:
+        st.text_input(
+            "분석할 갤러리 ID",
+            key="intel_gallery_id",
+            placeholder="예: stockus, baseball_new9",
+        )
+        st.selectbox(
+            "갤러리 타입",
+            options=list(_TYPE_MAP.keys()),
+            key="intel_type_label",
+        )
+        st.slider("수집 페이지 수", min_value=1, max_value=5, key="intel_pages",
+                  help="페이지 수↑ = 정확도↑, 수집 시간↑")
+
+        # 캐시 상태 표시
+        _igid_now   = st.session_state.get("intel_gallery_id", "")
+        _igtype_now = _TYPE_MAP.get(st.session_state.get("intel_type_label", "마이너 (mgallery)"), "mgallery")
+        _ick        = f"{_igid_now}::{_igtype_now}"
+        _icached    = st.session_state.intel_cache.get(_ick)
+        _icache_age: float | None = None
+        _icache_valid = False
+        if _icached:
+            _icache_age   = time.time() - _icached.get("ts", 0)
+            _icache_valid = _icache_age < _INTEL_CACHE_TTL
+        if _icache_valid and _icache_age is not None:
+            st.caption(f"✅ 캐시 유효 — {int(_icache_age//60)}분 {int(_icache_age%60)}초 전 분석")
+        elif _icached:
+            st.caption("♻️ 캐시 만료 (15분) — 재분석 필요")
+
+        _intel_is_running  = st.session_state.get("intel_running", False)
+        _intel_btn_disabled = not has_any_key or not _igid_now.strip() or _intel_is_running
+
+        st.markdown('<div class="intel-run-btn">', unsafe_allow_html=True)
+        _intel_fire = st.button(
+            "🔍  분석 시작" if not _intel_is_running else "⏳  분석 중...",
+            key="intel_fire_btn",
+            disabled=_intel_btn_disabled,
+            use_container_width=True,
+        )
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        if not has_any_key:
+            st.caption("🔑 Settings에 API Key를 입력하면 활성화됩니다.")
+
+    # ── 결과 패널 (fragment) ─────────────────────────────────────────────
+    with _intel_result_area:
+        _intel_results_fragment()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# STEP 2 — PAYLOAD BENTO (타겟 + 주제 + Wave)
+# ══════════════════════════════════════════════════════════════════════════════
+st.markdown(
+    '<div class="bento-step">'
+    '<div class="bento-step-header">'
+    '<span class="bento-step-title">⚡ Step 2  —  Payload</span>'
+    '<span class="bento-step-badge">TARGET · TOPIC · WAVE</span>'
+    '</div>',
+    unsafe_allow_html=True,
+)
+
+pay_left, pay_right = st.columns([3, 1], gap="large")
+
+with pay_left:
+    st.text_input(
+        "🎯 폭격할 주제를 입력하세요",
+        key="swarm_topic_input",
+        placeholder="예: 나스닥 폭락 실화냐 / 테슬라 단타 계획 / 엔비디아 버블론",
+    )
+    st.slider(
+        "💣 WAVE 횟수",
+        min_value=1, max_value=10, key="swarm_wave_count",
+        help="연속 폭격 횟수. 각 WAVE 사이에 60~180초 랜덤 대기.",
+    )
+
+with pay_right:
+    st.text_input(
+        "Gallery ID",
+        key="target_gallery_id",
+        placeholder="예: stockus",
+        help="DC Inside 갤러리 ID",
+    )
+    st.selectbox(
+        "갤러리 타입",
+        options=list(_TYPE_MAP.keys()),
+        key="target_type_label",
+        help="정규→board / 마이너→mgallery",
+    )
+    # 재계산 (위젯 렌더 후 갱신)
+    _gallery_id   = st.session_state.get("target_gallery_id", "stockus")
+    _gallery_type = _TYPE_MAP.get(st.session_state.get("target_type_label", "마이너 (mgallery)"), "mgallery")
+    _neural_tone  = _TONE_MAP.get(st.session_state.get("target_tone_label", "🧊 냉소적 (Cynical)"), "cynical")
+    _length       = st.session_state.get("target_length", "보통 (3~4문장)")
+    _headless     = st.session_state.get("target_headless", True)
+    st.markdown(
+        f'<div class="config-summary" style="margin-top:8px">'
+        f'<div class="cs-row"><span class="cs-label">Tone</span><span class="cs-val">{_neural_tone}</span></div>'
+        f'<div class="cs-row"><span class="cs-label">Length</span><span class="cs-val">{_length.split(" ")[0]}</span></div>'
+        f'<div class="cs-row"><span class="cs-label">Headless</span><span class="cs-val">{"ON" if _headless else "OFF"}</span></div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+st.markdown('</div>', unsafe_allow_html=True)  # /bento-step
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# STEP 3 — LAUNCH & MONITOR BENTO
+# ══════════════════════════════════════════════════════════════════════════════
+st.markdown(
+    '<div class="bento-step">'
+    '<div class="bento-step-header">'
+    '<span class="bento-step-title">🔥 Step 3  —  Launch & Monitor</span>'
+    '<span class="bento-step-badge">SWARM MODE</span>'
+    '</div>',
+    unsafe_allow_html=True,
+)
+
+_topic_val    = st.session_state.get("swarm_topic_input", "").strip()
+_is_running   = st.session_state.get("swarm_running", False)
+_fire_disabled = not has_any_key or not _topic_val or _is_running
+
+st.markdown('<div class="fire-btn">', unsafe_allow_html=True)
+fire_clicked = st.button(
+    "🔥  FIRE  —  폭격 개시" if not _is_running else "⏳  SWARM RUNNING...",
+    use_container_width=True,
+    type="primary",
+    disabled=_fire_disabled,
+)
+st.markdown('</div>', unsafe_allow_html=True)
+
+if not _is_running and _fire_disabled:
+    if not has_any_key:
+        st.caption("🔑 Settings(⚙️)에 Gemini API Key를 입력하면 활성화됩니다.")
+    elif not _topic_val:
+        st.caption("🎯 Step 2에서 폭격할 주제를 입력하면 활성화됩니다.")
+
+st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+
+# ── Monitor Fragment (Preview + Terminal + Stats + STOP) ────────────────────
+_monitor_fragment()
+
+st.markdown('</div>', unsafe_allow_html=True)  # /bento-step
+
 
 # ══════════════════════════════════════════════
 # FIRE — 백그라운드 워커 시작
 # ══════════════════════════════════════════════
 if fire_clicked:
-    _topic = (swarm_topic or "").strip()
+    _topic   = st.session_state.get("swarm_topic_input", "").strip()
+    _w_count = st.session_state.get("swarm_wave_count", 3)
 
     if not has_any_key:
-        st.error("⚠️ Gemini API Key가 없습니다. 사이드바에 입력하세요.")
+        st.error("⚠️ Gemini API Key가 없습니다. ⚙️ Settings에서 입력하세요.")
     elif not _topic:
         st.error("⚠️ 주제를 입력하세요.")
     else:
@@ -1269,63 +1238,56 @@ if fire_clicked:
             _accounts = None
 
         if _accounts:
-            # ── 상태 초기화 ──
-            st.session_state.swarm_log = []
-            st.session_state.swarm_preview_title = ""
-            st.session_state.swarm_preview_content = ""
-            st.session_state.swarm_wave_total = wave_count
-            st.session_state.swarm_wave_current = 0
-            st.session_state.last_fired = True
-            st.session_state.swarm_running = True
+            st.session_state.swarm_log              = []
+            st.session_state.swarm_preview_title    = ""
+            st.session_state.swarm_preview_content  = ""
+            st.session_state.swarm_wave_total        = _w_count
+            st.session_state.swarm_wave_current      = 0
+            st.session_state.last_fired              = True
+            st.session_state.swarm_running           = True
 
-            # ── 통신 원시 타입 생성 ──
-            _log_q: queue.Queue = queue.Queue()
+            _log_q: queue.Queue     = queue.Queue()
             _stop_ev: threading.Event = threading.Event()
-            st.session_state.swarm_queue = _log_q
+            st.session_state.swarm_queue      = _log_q
             st.session_state.swarm_stop_event = _stop_ev
 
-            # ── 백그라운드 워커 시작 ──
             threading.Thread(
                 target=_swarm_worker,
                 kwargs={
-                    "log_q":       _log_q,
-                    "stop_ev":     _stop_ev,
-                    "api_key":     st.session_state.brain_api_key,
-                    "topic":       _topic,
-                    "wave_count":  wave_count,
-                    "gallery_id":  gallery_id,
-                    "gallery_type": gallery_type,
-                    "tone":        neural_tone,
-                    "length":      selected_length,
-                    "headless":    headless,
+                    "log_q":        _log_q,
+                    "stop_ev":      _stop_ev,
+                    "api_key":      st.session_state.brain_api_key,
+                    "topic":        _topic,
+                    "wave_count":   _w_count,
+                    "gallery_id":   _gallery_id,
+                    "gallery_type": _gallery_type,
+                    "tone":         _neural_tone,
+                    "length":       _length,
+                    "headless":     _headless,
                 },
                 daemon=True,
             ).start()
 
-            st.rerun()  # 즉시 폴링 모드 진입
+            st.rerun()  # 폴링 모드 진입 (fragment가 이후 polling 담당)
 
-# ── STOP 처리 ──
-if stop_clicked and st.session_state.get("swarm_stop_event"):
-    st.session_state.swarm_stop_event.set()
-    st.session_state.swarm_log.append("[SWARM] 🛑 중단 요청 전송됨 — 현재 작업 완료 후 종료...")
 
 # ══════════════════════════════════════════════
 # INTEL FIRE — 분석 워커 시작
 # ══════════════════════════════════════════════
 if _intel_fire:
-    _igid = (_intel_gid or "").strip()
+    _igid = st.session_state.get("intel_gallery_id", "").strip()
+
     if not has_any_key:
-        st.error("⚠️ Gemini API Key가 없습니다. 사이드바에 입력하세요.")
+        st.error("⚠️ Gemini API Key가 없습니다. ⚙️ Settings에서 입력하세요.")
     elif not _igid:
         st.error("⚠️ 갤러리 ID를 입력하세요.")
-    elif _intel_cache_valid and _intel_cached:
-        # 15분 캐시 히트 → 워커 없이 캐시 결과 즉시 표시
-        st.session_state.intel_result = _intel_cached["result"]
+    elif _icache_valid and _icached:
+        # 캐시 히트 → 워커 없이 즉시 표시
+        st.session_state.intel_result = _icached["result"]
         st.rerun()
     else:
-        # 캐시 미스 / 만료 → 백그라운드 워커 실행
-        st.session_state.intel_log    = []
-        st.session_state.intel_result = None
+        st.session_state.intel_log     = []
+        st.session_state.intel_result  = None
         st.session_state.intel_running = True
 
         _intel_q: queue.Queue = queue.Queue()
@@ -1334,90 +1296,13 @@ if _intel_fire:
         threading.Thread(
             target=_intel_worker,
             kwargs={
-                "log_q":       _intel_q,
-                "api_key":     st.session_state.brain_api_key,
-                "gallery_id":  _igid,
-                "gallery_type": _intel_gtype,
-                "pages":       _intel_pages,
+                "log_q":        _intel_q,
+                "api_key":      st.session_state.brain_api_key,
+                "gallery_id":   _igid,
+                "gallery_type": _igtype_now,
+                "pages":        st.session_state.get("intel_pages", 3),
             },
             daemon=True,
         ).start()
 
-        st.rerun()
-
-
-# ══════════════════════════════════════════════
-# POLLING — Swarm + INTEL 백그라운드 스레드 → UI 동기화
-# ══════════════════════════════════════════════
-# 매 rerun마다 양 Queue를 드레인하고 session_state를 갱신.
-# 어느 한 워커라도 실행 중이면 0.5초 폴링 간격을 유지한다.
-# 메인 스레드 최대 블로킹 시간: 0.5초 — WebSocket 타임아웃 위험 없음.
-_any_running = False
-_any_done    = False
-
-# ── Swarm Queue 드레인 ─────────────────────────────────
-if st.session_state.get("swarm_running") and st.session_state.get("swarm_queue") is not None:
-    _any_running = True
-    _sq: queue.Queue = st.session_state.swarm_queue
-
-    while True:
-        try:
-            _msg = _sq.get_nowait()
-        except queue.Empty:
-            break
-
-        if _msg["type"] == "log":
-            st.session_state.swarm_log.append(_msg["data"])
-
-        elif _msg["type"] == "preview":
-            st.session_state.swarm_preview_title   = _msg["title"]
-            st.session_state.swarm_preview_content = _msg["content"]
-            st.session_state.swarm_wave_current     = _msg["wave"]
-
-        elif _msg["type"] == "stat":
-            st.session_state.posts_success += _msg.get("success", 0)
-            st.session_state.posts_failed  += _msg.get("fail", 0)
-
-        elif _msg["type"] == "done":
-            st.session_state.swarm_running    = False
-            st.session_state.swarm_queue      = None
-            st.session_state.swarm_stop_event = None
-            _any_running = False
-            _any_done    = True
-
-# ── INTEL Queue 드레인 ─────────────────────────────────
-if st.session_state.get("intel_running") and st.session_state.get("intel_queue") is not None:
-    _any_running = True
-    _iq: queue.Queue = st.session_state.intel_queue
-
-    while True:
-        try:
-            _imsg = _iq.get_nowait()
-        except queue.Empty:
-            break
-
-        if _imsg["type"] == "intel_log":
-            st.session_state.intel_log.append(_imsg["data"])
-
-        elif _imsg["type"] == "intel_result":
-            _result_data = _imsg["data"]
-            st.session_state.intel_result = _result_data
-            # 15분 캐시 갱신
-            _ck = f"{st.session_state.get('intel_gallery_id', '')}::{_intel_gtype}"
-            st.session_state.intel_cache[_ck] = {
-                "result": _result_data,
-                "ts":     time.time(),
-            }
-
-        elif _imsg["type"] == "intel_done":
-            st.session_state.intel_running = False
-            st.session_state.intel_queue   = None
-            _any_running = False
-            _any_done    = True
-
-# ── 폴링 제어 ─────────────────────────────────────────
-if _any_running:
-    time.sleep(0.5)
-    st.rerun()
-elif _any_done:
-    st.rerun()
+        st.rerun()  # fragment가 이후 polling 담당
