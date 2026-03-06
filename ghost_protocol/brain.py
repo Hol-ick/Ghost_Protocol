@@ -184,8 +184,9 @@ class GhostBrain:
             _cfg = types.GenerateContentConfig(
                 system_instruction=pm.load("system_base.txt"),
                 safety_settings=SAFETY_SETTINGS,
+                response_mime_type="application/json",  # Native JSON — 마크다운 펜스 원천 차단
                 temperature=0.9,
-                max_output_tokens=50,
+                max_output_tokens=200,   # 50 → 200 (JSON 래퍼 + 한글 주제 잘림 방지)
             )
             response = self._client.models.generate_content(
                 model=MODEL_NAME,
@@ -469,9 +470,12 @@ class GhostBrain:
             author_stats=author_stats,
         )
 
-        # ── 6. Gemini API 호출 (분석용 — 기본 safety settings 유지) ──
+        # ── 6. Gemini API 호출 (분석용 — Native JSON Mode + 토큰 확장) ──
+        # response_mime_type: API 레벨에서 순수 JSON 강제 → 마크다운 펜스 원천 차단
+        # max_output_tokens: 512 → 2048 (hot_topics/summary 잘림 방지)
         cfg = types.GenerateContentConfig(
-            max_output_tokens=512,
+            response_mime_type="application/json",
+            max_output_tokens=2048,
             temperature=0.3,       # 분석이므로 낮은 온도 → 일관성 ↑
         )
 
@@ -488,7 +492,13 @@ class GhostBrain:
             result = _parse_json_robust(raw_text)
 
         except json.JSONDecodeError:
-            # JSON 파싱 실패 시 키워드 기반 fallback
+            # 파싱 실패 시 원본 응답 전체를 콘솔에 출력 (디버깅용)
+            print(
+                f"[RAW RESPONSE] analyze_trend JSON parse failed "
+                f"(len={len(raw_text)} chars):\n{raw_text}",
+                flush=True,
+            )
+            # 키워드 기반 fallback
             result = {
                 "hot_topics": top_keywords[:3],
                 "sentiment":  "분석 실패",
