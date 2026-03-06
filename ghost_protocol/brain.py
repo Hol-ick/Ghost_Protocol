@@ -529,8 +529,13 @@ class GhostBrain:
         cfg = types.GenerateContentConfig(
             response_mime_type="application/json",
             response_schema=_TREND_SCHEMA,
-            max_output_tokens=2048,
-            temperature=0.3,       # 분석이므로 낮은 온도 → 일관성 ↑
+            max_output_tokens=8192,                              # 2048 → 8192: 안전 마진 4× 확장
+            temperature=0.3,                                     # 분석 태스크 → 낮은 온도 = 일관성 ↑
+            thinking_config=types.ThinkingConfig(thinking_budget=0),
+            # ↑ gemini-2.5-flash 기본 thinking 비활성화:
+            #   thinking 토큰이 max_output_tokens 예산을 잠식해
+            #   ~516chars 부근에서 응답이 잘리는 현상의 근본 원인.
+            #   이 태스크는 구조화된 JSON 추출 → 창의적 사고 불필요.
         )
 
         raw_text = ""
@@ -548,11 +553,21 @@ class GhostBrain:
             )
             raw_text = response.text.strip()
 
-            # ── 로그: Gemini Raw 응답 전문 기록 ───────────────────────────────
-            _api_logger.debug(
-                "analyze_trend RESPONSE ▶ len=%d\n%s\n%s",
-                len(raw_text), "─" * 60, raw_text,
+            # ── 로그: Gemini Raw 응답 + finish_reason 기록 ────────────────────
+            _finish_reason = (
+                str(response.candidates[0].finish_reason)
+                if response.candidates else "UNKNOWN"
             )
+            _api_logger.debug(
+                "analyze_trend RESPONSE ▶ len=%d finish_reason=%s\n%s\n%s",
+                len(raw_text), _finish_reason, "─" * 60, raw_text,
+            )
+            # finish_reason != STOP → 잘림/안전필터 경고 (MAX_TOKENS 포함)
+            if _finish_reason != "FinishReason.STOP":
+                _api_logger.warning(
+                    "analyze_trend NON-STOP finish_reason=%s — 응답 잘림 또는 필터링 가능성",
+                    _finish_reason,
+                )
 
             # 강화된 JSON 파싱 (마크다운 펜스 + 앞뒤 산문 제거)
             result = _parse_json_robust(raw_text)
