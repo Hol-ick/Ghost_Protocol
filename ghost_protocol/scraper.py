@@ -1307,7 +1307,8 @@ class TrendScraper:
         """갤러리 목록 페이지를 파싱하여 게시글 메타데이터 리스트를 반환한다.
 
         Returns:
-            [{"post_no": str, "title": str, "views": int, "recommends": int}, ...]
+            [{"post_no": str, "title": str, "views": int, "recommends": int,
+              "author": str}, ...]
             에러 발생 시 빈 리스트 반환 (caller가 처리).
         """
         url = self._list_url(gallery_type, gallery_id, page)
@@ -1350,11 +1351,24 @@ class TrendScraper:
                     except ValueError:
                         return 0
 
+                # 작성자 추출 (고정닉 nickname 또는 유동닉 IP)
+                author = ""
+                writer_el = tr.select_one("td.gall_writer")
+                if writer_el:
+                    nick_el = writer_el.select_one(".nickname")
+                    if nick_el:
+                        author = nick_el.get_text(strip=True)
+                    else:
+                        ip_el = writer_el.select_one(".ip")
+                        if ip_el:
+                            author = ip_el.get_text(strip=True)
+
                 posts.append({
                     "post_no":    post_no,
                     "title":      title,
                     "views":      _parse_int(views_el),
                     "recommends": _parse_int(rec_el),
+                    "author":     author,
                 })
             except Exception:  # noqa: BLE001 — 개별 행 파싱 실패는 무시
                 continue
@@ -1434,6 +1448,7 @@ class TrendScraper:
             {
               "titles": list[str],
               "comments": list[str],
+              "authors": list[str],    # 게시글 작성자 (닉네임/IP) — author dominance 분석용
               "gallery_id": str,
               "gallery_type": str,
               "collected_at": str  # ISO 8601
@@ -1445,9 +1460,11 @@ class TrendScraper:
 
         all_titles:   list[str] = []
         all_comments: list[str] = []
+        all_authors:  list[str] = []   # 작성자 누적 리스트
 
         TITLE_CAP   = 100
         COMMENT_CAP = 100
+        AUTHOR_CAP  = 200              # 상위 200개면 dominance 계산에 충분
 
         for page_no in range(1, pages + 1):
             _log(f"📄 목록 수집 중... ({page_no}/{pages} 페이지)")
@@ -1457,11 +1474,14 @@ class TrendScraper:
                 _log(f"⚠️ {page_no} 페이지 수집 실패 — 건너뜀")
                 continue
 
-            # 제목 누적 (상한 적용)
+            # 제목 + 작성자 누적 (상한 적용)
             for p in posts:
                 if len(all_titles) >= TITLE_CAP:
                     break
                 all_titles.append(p["title"])
+                # 작성자 누적 (빈 문자열 제외, 상한 적용)
+                if len(all_authors) < AUTHOR_CAP and p.get("author"):
+                    all_authors.append(p["author"])
 
             # 추천수 Top N 글의 댓글 수집
             top = sorted(posts, key=lambda x: x.get("recommends", 0), reverse=True)
@@ -1483,11 +1503,13 @@ class TrendScraper:
 
         _log(
             f"✅ 수집 완료 — 제목 {len(all_titles)}개 / "
-            f"댓글 {len(all_comments)}개"
+            f"댓글 {len(all_comments)}개 / "
+            f"작성자 {len(all_authors)}개"
         )
         return {
             "titles":       all_titles,
             "comments":     all_comments,
+            "authors":      all_authors,
             "gallery_id":   gallery_id,
             "gallery_type": gallery_type,
             "collected_at": datetime.now().isoformat(),

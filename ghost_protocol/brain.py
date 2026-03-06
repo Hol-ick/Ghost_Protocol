@@ -29,6 +29,36 @@ from . import prompt_manager as pm
 # .env 에서 GEMINI_API_KEY 로딩
 load_dotenv()
 
+
+# ══════════════════════════════════════════════
+# JSON 파싱 강화 헬퍼
+# ══════════════════════════════════════════════
+
+def _parse_json_robust(text: str) -> dict:
+    """Gemini 응답 텍스트에서 JSON 오브젝트를 안전하게 추출한다.
+
+    처리 순서:
+      1. 마크다운 코드펜스(```json ... ```) 내부 추출 시도
+      2. 펜스가 없으면 raw 텍스트에서 첫 번째 { ... } 블록 추출
+      3. json.loads() 로 파싱 — 실패 시 JSONDecodeError를 그대로 전파
+
+    이 방식은 아래 모든 케이스를 커버한다:
+      · ```json\\n{...}\\n```   (표준 마크다운)
+      · ```\\n{...}\\n```       (언어 태그 없음)
+      · {... }                  (펜스 없음)
+      · 앞뒤 산문 + { ... }    (Gemini가 설명을 붙인 경우)
+    """
+    # 1단계: 마크다운 코드펜스 추출
+    fence_match = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
+    candidate = fence_match.group(1).strip() if fence_match else text.strip()
+
+    # 2단계: 첫 번째 { ... } 블록만 잘라냄 (앞뒤 산문 제거)
+    brace_match = re.search(r"\{[\s\S]*\}", candidate)
+    if brace_match:
+        candidate = brace_match.group(0)
+
+    return json.loads(candidate)
+
 # ══════════════════════════════════════════════
 # 고정 모델 (무료 티어 최적화 — Fallback 없음)
 # ══════════════════════════════════════════════
@@ -166,13 +196,11 @@ class GhostBrain:
             raw_text = response.text.strip()
             print(f"[DEBUG] suggest_topic Raw AI Response: '{raw_text}'")
 
-            # 마크다운 코드블록 제거 후 JSON 파싱
-            cleaned = re.sub(r'```json\n|\n```|```', '', raw_text).strip()
-            print(f"[DEBUG] suggest_topic Cleaned for JSON: '{cleaned}'")
-
+            # 강화된 JSON 파싱 후 topic 추출
             try:
-                data = json.loads(cleaned)
+                data = _parse_json_robust(raw_text)
                 topic = data.get("topic", "").strip()
+                print(f"[DEBUG] suggest_topic JSON parsed OK")
             except (json.JSONDecodeError, AttributeError):
                 # JSON 파싱 실패 시 첫 줄 fallback
                 lines = [ln.strip() for ln in raw_text.splitlines() if ln.strip()]
@@ -392,6 +420,7 @@ class GhostBrain:
 
         titles:   list[str] = raw_data.get("titles",   [])
         comments: list[str] = raw_data.get("comments", [])
+        authors:  list[str] = raw_data.get("authors",  [])
 
         # ── 1. 모든 텍스트 합치기 ──────────────────────────
         all_text = " ".join(titles + comments)
@@ -404,7 +433,22 @@ class GhostBrain:
         counter     = Counter(filtered)
         top_keywords: list[str] = [w for w, _ in counter.most_common(top_k)]
 
-        # ── 4. Gemini 전달용 경량 페이로드 조립 ────────────
+        # ── 4. Author Dominance 계산 ────────────────────────
+        # 작성자 점유율 Top 5 → "$author_stats" 변수로 Gemini에 전달
+        # 예: "김사자(80%), ㅇㅇ(10%), 홍길동(5%), 익명(3%), 기타(2%)"
+        author_stats = "데이터 없음"
+        if authors:
+            author_counter = Counter(a for a in authors if a)
+            total_authors = sum(author_counter.values())
+            if total_authors > 0:
+                top_authors = author_counter.most_common(5)
+                parts = [
+                    f"{name}({count / total_authors * 100:.0f}%)"
+                    for name, count in top_authors
+                ]
+                author_stats = ", ".join(parts)
+
+        # ── 5. Gemini 전달용 경량 페이로드 조립 ────────────
         # 제목 샘플: 최대 20개
         kw_text     = ", ".join(top_keywords[:20])
         titles_text = "\n".join(f"- {t}" for t in titles[:20])
@@ -422,14 +466,16 @@ class GhostBrain:
             kw_text=kw_text,
             titles_text=titles_text,
             comments_text=comments_text,
+            author_stats=author_stats,
         )
 
-        # ── 5. Gemini API 호출 (분석용 — 기본 safety settings 유지) ──
+        # ── 6. Gemini API 호출 (분석용 — 기본 safety settings 유지) ──
         cfg = types.GenerateContentConfig(
             max_output_tokens=512,
             temperature=0.3,       # 분석이므로 낮은 온도 → 일관성 ↑
         )
 
+        raw_text = ""
         try:
             response = self._client.models.generate_content(
                 model=MODEL_NAME,
@@ -438,9 +484,8 @@ class GhostBrain:
             )
             raw_text = response.text.strip()
 
-            # 마크다운 코드블록 제거 후 JSON 파싱
-            cleaned  = re.sub(r"```json\n?|\n?```|```", "", raw_text).strip()
-            result   = json.loads(cleaned)
+            # 강화된 JSON 파싱 (마크다운 펜스 + 앞뒤 산문 제거)
+            result = _parse_json_robust(raw_text)
 
         except json.JSONDecodeError:
             # JSON 파싱 실패 시 키워드 기반 fallback
@@ -448,7 +493,7 @@ class GhostBrain:
                 "hot_topics": top_keywords[:3],
                 "sentiment":  "분석 실패",
                 "memes":      [],
-                "summary":    raw_text[:200] if "raw_text" in dir() else "응답 파싱 실패",
+                "summary":    raw_text[:200] if raw_text else "응답 파싱 실패",
             }
         except Exception as e:
             if self._is_rate_limit_error(e):
@@ -457,13 +502,15 @@ class GhostBrain:
                 ) from e
             raise
 
-        # ── 6. 공통 메타데이터 주입 ─────────────────────────
+        # ── 7. 공통 메타데이터 주입 ─────────────────────────
         result["top_keywords"] = top_keywords
         # keyword_counts: Plotly 빈도 차트용 (word → 실제 등장 횟수)
         result["keyword_counts"] = dict(counter.most_common(top_k))
+        result["author_stats"] = author_stats   # author dominance 요약 문자열
         result["stats"] = {
             "titles_count":   len(titles),
             "comments_count": len(comments),
+            "authors_count":  len(authors),
             "keywords_found": len(filtered),
         }
 
