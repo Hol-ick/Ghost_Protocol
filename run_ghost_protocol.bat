@@ -2,6 +2,7 @@
 chcp 65001 >nul 2>&1
 title Ghost Protocol v5.0 — Launchpad
 
+
 :: ═══════════════════════════════════════════════════════════
 ::  GHOST PROTOCOL v5.0  ·  LAUNCHPAD EDITION
 ::  One-click launcher — always starts from project root
@@ -11,6 +12,15 @@ title Ghost Protocol v5.0 — Launchpad
 :: 배치 파일 위치를 기준으로 경로를 결정 (dist/ 등 어디서 실행해도 안전)
 cd /d "%~dp0"
 
+
+:: ── [추가] 가상환경 자동 활성화 ────────────────────────────
+if exist ".venv\Scripts\activate.bat" (
+    call .venv\Scripts\activate.bat
+    echo [INFO] .venv 가상환경이 활성화되었습니다.
+) else if exist "venv\Scripts\activate.bat" (
+    call venv\Scripts\activate.bat
+    echo [INFO] venv 가상환경이 활성화되었습니다.
+)
 :: ── 시작 배너 ──────────────────────────────────────────────
 cls
 echo.
