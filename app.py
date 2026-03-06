@@ -18,6 +18,7 @@ import time
 if sys.platform.startswith("win"):
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
+import plotly.graph_objects as go
 import streamlit as st
 
 from ghost_protocol import database
@@ -1140,10 +1141,7 @@ with _intel_col_result:
             # 밈
             f'  <div class="intel-section-label">💬 TRENDING MEMES</div>'
             f'  <div class="intel-chips">{_meme_chips if _meme_chips else "<span style=\"color:#333;font-size:0.72rem\">감지된 밈 없음</span>"}</div>'
-            # 요약
-            f'  <div class="intel-section-label">📝 SUMMARY</div>'
-            f'  <div class="intel-summary">{_html.escape(_ir.get("summary", ""))}</div>'
-            # 키워드 클라우드
+            # 키워드 클라우드 (Summary는 카드 아래 독립 박스로 렌더링)
             f'  <div class="intel-section-label" style="margin-top:14px">🔑 TOP KEYWORDS</div>'
             f'  <div class="intel-chips">{_kw_chips}</div>'
             # 수집 스탯
@@ -1151,6 +1149,95 @@ with _intel_col_result:
             f'</div>',
             unsafe_allow_html=True,
         )
+
+        # ── Option A: Summary 강화 렌더링 (독립 callout 박스) ──────────
+        _summary_text = _ir.get("summary", "").strip()
+        if _summary_text:
+            _summary_body = _html.escape(_summary_text).replace("\n", "<br>")
+            st.markdown(
+                f'<div style="'
+                f'background:rgba(0,240,255,0.04);'
+                f'border:1px solid rgba(0,240,255,0.13);'
+                f'border-left:3px solid rgba(0,240,255,0.45);'
+                f'border-radius:0 12px 12px 0;'
+                f'padding:16px 22px;'
+                f'margin-top:14px;">'
+                f'<div style="color:#555;font-size:0.62rem;font-weight:700;'
+                f'letter-spacing:2px;text-transform:uppercase;margin-bottom:10px">'
+                f'📝 SITUATION SUMMARY</div>'
+                f'<p style="margin:0;color:#D0D0D0;font-size:0.9rem;line-height:1.85;'
+                f'font-style:italic;">'
+                f'{_summary_body}'
+                f'</p>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+        # ── Option C: Plotly 키워드 빈도 막대 그래프 ─────────────────
+        _kw_all    = _ir.get("top_keywords", [])[:30]
+        _kw_counts = _ir.get("keyword_counts", {})
+        if _kw_all:
+            # keyword_counts 없으면 순위 기반 대체값 (구형 캐시 하위호환)
+            if not _kw_counts:
+                _kw_counts = {w: len(_kw_all) - i for i, w in enumerate(_kw_all)}
+
+            _chart_n     = min(20, len(_kw_all))
+            _chart_words = _kw_all[:_chart_n]
+            _chart_vals  = [_kw_counts.get(w, 1) for w in _chart_words]
+
+            # 역순: Plotly horizontal bar는 아래부터 쌓이므로 뒤집어야 상위가 위에 표시됨
+            _cw_rev = _chart_words[::-1]
+            _cv_rev = _chart_vals[::-1]
+
+            _fig = go.Figure(go.Bar(
+                x=_cv_rev,
+                y=_cw_rev,
+                orientation="h",
+                marker=dict(
+                    # 빈도 값으로 컬러스케일 → 높을수록 밝은 시안
+                    color=_cv_rev,
+                    colorscale=[[0, "#1C3A50"], [0.45, "#006688"], [1.0, "#00F0FF"]],
+                    showscale=False,
+                    line=dict(width=0),
+                ),
+                hovertemplate="<b>%{y}</b><br>빈도: %{x}회<extra></extra>",
+            ))
+            _fig.update_layout(
+                template="plotly_dark",
+                paper_bgcolor="#141820",
+                plot_bgcolor="#141820",
+                height=max(320, _chart_n * 22),   # 키워드 수에 따라 동적 높이
+                margin=dict(l=0, r=16, t=36, b=8),
+                title=dict(
+                    text="📊 KEYWORD FREQUENCY  —  TOP 20",
+                    font=dict(size=10, color="#444444", family="monospace"),
+                    x=0,
+                    pad=dict(b=6),
+                ),
+                xaxis=dict(
+                    gridcolor="rgba(255,255,255,0.05)",
+                    tickfont=dict(size=9, color="#555555", family="monospace"),
+                    title=None,
+                    zeroline=False,
+                ),
+                yaxis=dict(
+                    tickfont=dict(size=11, color="#BBBBBB"),
+                    title=None,
+                    automargin=True,
+                ),
+                hoverlabel=dict(
+                    bgcolor="#1A2030",
+                    font_size=12,
+                    font_family="monospace",
+                    bordercolor="rgba(0,240,255,0.3)",
+                ),
+            )
+            st.plotly_chart(
+                _fig,
+                use_container_width=True,
+                config={"displayModeBar": False},
+            )
+
     else:
         st.markdown(
             '<div class="intel-card">'

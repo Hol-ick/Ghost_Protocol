@@ -459,6 +459,8 @@ class GhostBrain:
 
         # ── 6. 공통 메타데이터 주입 ─────────────────────────
         result["top_keywords"] = top_keywords
+        # keyword_counts: Plotly 빈도 차트용 (word → 실제 등장 횟수)
+        result["keyword_counts"] = dict(counter.most_common(top_k))
         result["stats"] = {
             "titles_count":   len(titles),
             "comments_count": len(comments),
