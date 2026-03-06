@@ -16,6 +16,13 @@ import sys
 import threading
 import time
 
+from dotenv import load_dotenv
+
+load_dotenv()  # .env 파일을 환경변수로 주입 (없어도 무해)
+
+# ── API Key: .env → 환경변수에서 한 번만 읽어 모듈 상수로 고정 ──────────
+_GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "").strip()
+
 if sys.platform.startswith("win"):
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
@@ -419,7 +426,6 @@ st.markdown("""
 def _init_state() -> None:
     defaults: dict = {
         # ── Worker 통신 ──────────────────────────────
-        "brain_api_key":          os.getenv("GEMINI_API_KEY", ""),
         "swarm_log":              [],
         "swarm_preview_title":    "",
         "swarm_preview_content":  "",
@@ -1006,8 +1012,7 @@ def _monitor_fragment() -> None:
 # ══════════════════════════════════════════════════════════════════════════════
 
 # ── 공통 변수 계산 ────────────────────────────────────────────────────────────
-_env_key    = os.getenv("GEMINI_API_KEY", "")
-has_any_key = bool(st.session_state.get("brain_api_key", "") or _env_key)
+has_any_key = bool(_GEMINI_API_KEY)  # .env에서 로드된 키만 사용
 
 _gallery_id   = st.session_state.get("target_gallery_id", "stockus")
 _gallery_type = _TYPE_MAP.get(st.session_state.get("target_type_label",  "마이너 (mgallery)"), "mgallery")
@@ -1016,6 +1021,26 @@ _length       = st.session_state.get("target_length",   "보통 (3~4문장)")
 _headless     = st.session_state.get("target_headless", True)
 _is_running   = st.session_state.get("swarm_running",   False)
 
+
+# ── API Key 누락 시 전역 경고 배너 ─────────────────────────────────────────
+if not _GEMINI_API_KEY:
+    st.markdown(
+        '<div style="background:rgba(255,75,75,0.08);border:1px solid rgba(255,75,75,0.35);'
+        'border-left:4px solid #FF4B4B;border-radius:12px;padding:16px 22px;margin-bottom:18px;'
+        'display:flex;align-items:center;gap:14px">'
+        '<span style="font-size:1.5rem">🔑</span>'
+        '<div>'
+        '<div style="font-weight:800;font-size:0.8rem;letter-spacing:2px;'
+        'text-transform:uppercase;color:#FF4B4B;margin-bottom:4px">GEMINI API KEY 없음 — 실행 불가</div>'
+        '<div style="font-size:0.82rem;color:#AAAAAA;line-height:1.6">'
+        '프로젝트 루트에 <code style="background:#1A1A1A;padding:1px 6px;border-radius:4px;'
+        'color:#00F0FF">.env</code> 파일을 생성하고 '
+        '<code style="background:#1A1A1A;padding:1px 6px;border-radius:4px;color:#00F0FF">'
+        'GEMINI_API_KEY=AIza...</code> 를 추가한 뒤 앱을 재시작하세요.<br>'
+        '<span style="color:#666;font-size:0.75rem">참고: <code>.env.example</code> 파일을 복사해서 사용하세요.</span>'
+        '</div></div></div>',
+        unsafe_allow_html=True,
+    )
 
 # ══════════════════════════════════════════════
 # HEADER BAR — 로고 + Settings Popover
@@ -1032,20 +1057,37 @@ with hdr_logo:
 with hdr_settings:
     st.markdown('<div class="settings-wrap">', unsafe_allow_html=True)
     with st.popover("⚙️  Settings", use_container_width=True):
-        st.markdown(
-            '<div style="font-size:0.65rem;font-weight:700;letter-spacing:2px;'
-            'text-transform:uppercase;color:#555;margin-bottom:14px">🔑 API KEY</div>',
-            unsafe_allow_html=True,
-        )
-        st.text_input(
-            "Gemini API Key",
-            type="password",
-            key="brain_api_key",
-            label_visibility="collapsed",
-            placeholder="AIza...",
-        )
-        if _env_key and not st.session_state.get("brain_api_key", ""):
-            st.caption("✅ .env 키 감지됨")
+        # ── API Key 상태 뱃지 (입력란 제거 — .env 전용) ─────────────
+        if _GEMINI_API_KEY:
+            _masked = f"{'*' * 8}{_GEMINI_API_KEY[-4:]}"
+            st.markdown(
+                f'<div style="display:flex;align-items:center;gap:8px;'
+                f'background:rgba(0,255,136,0.07);border:1px solid rgba(0,255,136,0.25);'
+                f'border-radius:10px;padding:10px 14px;margin-bottom:14px">'
+                f'<span style="font-size:1rem">🔑</span>'
+                f'<div>'
+                f'<div style="font-size:0.65rem;font-weight:700;letter-spacing:2px;'
+                f'text-transform:uppercase;color:#00FF88">API KEY LOADED</div>'
+                f'<div style="font-size:0.72rem;color:#888;font-family:monospace;margin-top:2px">'
+                f'{_masked}</div>'
+                f'</div></div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                '<div style="display:flex;align-items:center;gap:8px;'
+                'background:rgba(255,75,75,0.08);border:1px solid rgba(255,75,75,0.3);'
+                'border-radius:10px;padding:10px 14px;margin-bottom:14px">'
+                '<span style="font-size:1rem">🔑</span>'
+                '<div>'
+                '<div style="font-size:0.65rem;font-weight:700;letter-spacing:2px;'
+                'text-transform:uppercase;color:#FF4B4B">API KEY MISSING</div>'
+                '<div style="font-size:0.7rem;color:#888;margin-top:2px">'
+                '.env 파일에 GEMINI_API_KEY를 추가하세요</div>'
+                '</div></div>',
+                unsafe_allow_html=True,
+            )
+            st.caption("📄 `.env.example` 파일을 참고해 `.env`를 생성하세요.")
 
         st.divider()
         st.markdown(
@@ -1116,7 +1158,7 @@ with st.expander("🔍  STEP 1  —  SITUATION ROOM  ·  TREND ANALYSIS"):
         st.markdown('</div>', unsafe_allow_html=True)
 
         if not has_any_key:
-            st.caption("🔑 Settings에 API Key를 입력하면 활성화됩니다.")
+            st.caption("🔑 .env 파일에 GEMINI_API_KEY를 설정하고 앱을 재시작하세요.")
 
     # ── 결과 패널 (fragment) ─────────────────────────────────────────────
     with _intel_result_area:
@@ -1207,7 +1249,7 @@ st.markdown('</div>', unsafe_allow_html=True)
 
 if not _is_running and _fire_disabled:
     if not has_any_key:
-        st.caption("🔑 Settings(⚙️)에 Gemini API Key를 입력하면 활성화됩니다.")
+        st.caption("🔑 .env 파일에 GEMINI_API_KEY를 설정하고 앱을 재시작하세요.")
     elif not _topic_val:
         st.caption("🎯 Step 2에서 폭격할 주제를 입력하면 활성화됩니다.")
 
@@ -1227,7 +1269,7 @@ if fire_clicked:
     _w_count = st.session_state.get("swarm_wave_count", 3)
 
     if not has_any_key:
-        st.error("⚠️ Gemini API Key가 없습니다. ⚙️ Settings에서 입력하세요.")
+        st.error("⚠️ GEMINI_API_KEY가 설정되지 않았습니다. 프로젝트 루트의 .env 파일을 확인하고 앱을 재시작하세요.")
     elif not _topic:
         st.error("⚠️ 주제를 입력하세요.")
     else:
@@ -1256,7 +1298,7 @@ if fire_clicked:
                 kwargs={
                     "log_q":        _log_q,
                     "stop_ev":      _stop_ev,
-                    "api_key":      st.session_state.brain_api_key,
+                    "api_key":      _GEMINI_API_KEY,
                     "topic":        _topic,
                     "wave_count":   _w_count,
                     "gallery_id":   _gallery_id,
@@ -1278,7 +1320,7 @@ if _intel_fire:
     _igid = st.session_state.get("intel_gallery_id", "").strip()
 
     if not has_any_key:
-        st.error("⚠️ Gemini API Key가 없습니다. ⚙️ Settings에서 입력하세요.")
+        st.error("⚠️ GEMINI_API_KEY가 설정되지 않았습니다. 프로젝트 루트의 .env 파일을 확인하고 앱을 재시작하세요.")
     elif not _igid:
         st.error("⚠️ 갤러리 ID를 입력하세요.")
     elif _icache_valid and _icached:
@@ -1297,7 +1339,7 @@ if _intel_fire:
             target=_intel_worker,
             kwargs={
                 "log_q":        _intel_q,
-                "api_key":      st.session_state.brain_api_key,
+                "api_key":      _GEMINI_API_KEY,
                 "gallery_id":   _igid,
                 "gallery_type": _igtype_now,
                 "pages":        st.session_state.get("intel_pages", 3),
