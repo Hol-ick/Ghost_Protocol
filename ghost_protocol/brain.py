@@ -337,16 +337,19 @@ class GhostBrain:
                 "단어 1~2개, 끝. 키워드 나열 절대 금지. 문장 완성 절대 금지.\n"
             )
 
+        # ── 작문 지시 — prompts/generate_post.txt 에서 로드 ──────────────────
+        # 하드코딩 제로: 분량·톤·키워드·교차지시를 템플릿 변수로 주입.
+        # 사용자는 generate_post.txt 만 수정하면 작문 스타일 전체를 튜닝 가능.
         parts.append(
-            f"주제: {topic}\n\n"
-            f"위 주제로 디시 {gallery_id} 갤러리 스타일 게시글을 {tone_instruction}.\n"
-            f"[분량 조건] {length_instruction}.\n"
-            f"{cross_instruction}"
-            f"{kw_inject}\n"
-            "[중요] 출력은 반드시 아래와 같이 XML 태그로 감싸서 출력해라. "
-            "다른 부가 설명은 절대 하지 마.\n"
-            "<TITLE>여기에 제목</TITLE>\n"
-            "<CONTENT>여기에 본문</CONTENT>"
+            pm.render(
+                "generate_post.txt",
+                gallery_id=gallery_id,
+                topic=topic,
+                tone_instruction=tone_instruction,
+                length_instruction=length_instruction,
+                cross_instruction=cross_instruction,
+                kw_inject=kw_inject,
+            )
         )
 
         prompt = "\n\n---\n\n".join(parts)
