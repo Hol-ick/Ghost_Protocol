@@ -1348,7 +1348,11 @@ class TrendScraper:
                 if title_el is None:
                     continue
 
-                title = self._clean(title_el.get_text(strip=True))
+                raw_title = title_el.get_text(strip=True)
+                # ZWS 워터마크 감지: 봇이 작성한 글에는 제목 끝에 \u200b가 삽입되어 있음.
+                # _clean() 적용 전에 판별해야 strip() 부작용 없이 정확히 감지 가능.
+                is_bot = "\u200b" in raw_title
+                title  = self._clean(raw_title)
                 if not title:
                     continue
 
@@ -1383,6 +1387,7 @@ class TrendScraper:
                     "views":      _parse_int(views_el),
                     "recommends": _parse_int(rec_el),
                     "author":     author,
+                    "is_bot":     is_bot,   # ZWS 워터마크 감지 여부
                 })
             except Exception:  # noqa: BLE001 — 개별 행 파싱 실패는 무시
                 continue
@@ -1475,6 +1480,8 @@ class TrendScraper:
         all_titles:   list[str] = []
         all_comments: list[str] = []
         all_authors:  list[str] = []   # 작성자 누적 리스트
+        ai_post_count    = 0           # ZWS 워터마크 감지된 게시글 수 (봇 작성)
+        total_post_count = 0           # 전체 수집된 게시글 수
 
         TITLE_CAP   = 100
         COMMENT_CAP = 100
@@ -1488,12 +1495,15 @@ class TrendScraper:
                 _log(f"⚠️ {page_no} 페이지 수집 실패 — 건너뜀")
                 continue
 
-            # 제목 + 작성자 누적 (상한 적용)
+            # 제목 + 작성자 누적 (상한 적용) + ZWS 봇 집계
             for p in posts:
-                if len(all_titles) >= TITLE_CAP:
-                    break
-                all_titles.append(p["title"])
-                # 작성자 누적 (빈 문자열 제외, 상한 적용)
+                # ZWS 봇 점유율 집계: 상한 없이 전체 게시글 카운트
+                total_post_count += 1
+                if p.get("is_bot"):
+                    ai_post_count += 1
+                # 제목·작성자 누적 (상한 적용)
+                if len(all_titles) < TITLE_CAP:
+                    all_titles.append(p["title"])
                 if len(all_authors) < AUTHOR_CAP and p.get("author"):
                     all_authors.append(p["author"])
 
@@ -1518,13 +1528,16 @@ class TrendScraper:
         _log(
             f"✅ 수집 완료 — 제목 {len(all_titles)}개 / "
             f"댓글 {len(all_comments)}개 / "
-            f"작성자 {len(all_authors)}개"
+            f"작성자 {len(all_authors)}개 / "
+            f"🤖 봇 게시글 {ai_post_count}/{total_post_count}개"
         )
         return {
-            "titles":       all_titles,
-            "comments":     all_comments,
-            "authors":      all_authors,
-            "gallery_id":   gallery_id,
-            "gallery_type": gallery_type,
-            "collected_at": datetime.now().isoformat(),
+            "titles":           all_titles,
+            "comments":         all_comments,
+            "authors":          all_authors,
+            "gallery_id":       gallery_id,
+            "gallery_type":     gallery_type,
+            "collected_at":     datetime.now().isoformat(),
+            "ai_post_count":    ai_post_count,    # ZWS 감지된 봇 게시글 수
+            "total_post_count": total_post_count, # 전체 수집 게시글 수
         }

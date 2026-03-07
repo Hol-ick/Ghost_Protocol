@@ -859,6 +859,9 @@ def _intel_results_fragment() -> None:
                 st.markdown('<div class="topic-use-btn" style="margin-top:12px">', unsafe_allow_html=True)
                 if st.button(f"➡️  '{_hot[0]}'  —  FIRE 주제로 사용", key="use_as_topic_btn"):
                     ss.swarm_topic_input = _hot[0]
+                    # ── UX 동기화: INTEL 패널의 갤러리 설정을 FIRE 패널에 그대로 복사 ──
+                    ss.target_gallery_id = ss.get("intel_gallery_id", "")
+                    ss.target_type_label = ss.get("intel_type_label", "마이너 (mgallery)")
                     st.rerun(scope="app")
                 st.markdown('</div>', unsafe_allow_html=True)
 

@@ -384,26 +384,39 @@ class GhostBrain:
         except Exception:
             pass
 
-        # ── XML 태그 정규식 파싱 (닫는 태그 생략 허용) ──
+        # ── JSON / XML 듀얼 파서 ──────────────────────────────────────────────
+        # 1차: JSON 파싱 (현행 generate_post.txt 출력 형식)
+        # 2차: XML 태그 파싱 (레거시 fallback — 닫는 태그 생략 허용)
         text = response.text.strip()
 
-        # TITLE 추출 (닫는 태그가 없어도 줄바꿈 전까지 긁어옴, 앞뒤 공백 유연)
-        title_match = re.search(
-            r"<TITLE>\s*(.*?)\s*(?:</TITLE>|\n|$)", text, re.IGNORECASE | re.DOTALL
-        )
-        # CONTENT 추출 (닫는 태그가 없어도 문자열 끝까지 긁어옴, 앞뒤 공백 유연)
-        content_match = re.search(
-            r"<CONTENT>\s*(.*?)\s*(?:</CONTENT>|$)", text, re.IGNORECASE | re.DOTALL
-        )
+        _parsed_title:   str | None = None
+        _parsed_content: str | None = None
 
-        title = title_match.group(1).strip() if title_match else "무제"
-        content = content_match.group(1).strip() if content_match else text
+        # 1차 — JSON
+        try:
+            _json_out       = _parse_json_robust(text)
+            _parsed_title   = str(_json_out.get("title",   "")).strip() or None
+            _parsed_content = str(_json_out.get("content", "")).strip() or None
+        except Exception:
+            pass
 
-        # 혹시 모를 태그 찌꺼기 완벽 제거
-        title = re.sub(r"</?TITLE>", "", title, flags=re.IGNORECASE).strip()
-        content = re.sub(r"</?CONTENT>", "", content, flags=re.IGNORECASE).strip()
+        # 2차 — XML fallback (JSON 파싱 실패 또는 빈 값일 때)
+        if not _parsed_title and not _parsed_content:
+            _tm = re.search(
+                r"<TITLE>\s*(.*?)\s*(?:</TITLE>|\n|$)", text, re.IGNORECASE | re.DOTALL
+            )
+            _cm = re.search(
+                r"<CONTENT>\s*(.*?)\s*(?:</CONTENT>|$)", text, re.IGNORECASE | re.DOTALL
+            )
+            _parsed_title   = _tm.group(1).strip() if _tm else None
+            _parsed_content = _cm.group(1).strip() if _cm else None
 
-        # ── 👻 Stealth Watermark: Zero-Width Space 삽입 ──
+        title   = re.sub(r"</?TITLE>",   "", (_parsed_title   or "무제"), flags=re.IGNORECASE).strip()
+        content = re.sub(r"</?CONTENT>", "", (_parsed_content or text),   flags=re.IGNORECASE).strip()
+
+        # ── 👻 Stealth Watermark: Zero-Width Space 삽입 ──────────────────────
+        # brain.py에서 content에 ZWS 삽입 → poster.py에서 title에도 추가 삽입.
+        # Echo Chamber 효과 추적: scraper.py가 제목 내 ZWS 유무로 봇 게시글 판별.
         content = content + "\u200B"
 
         return {
@@ -450,6 +463,17 @@ class GhostBrain:
         comments: list[str] = raw_data.get("comments", [])
         authors:  list[str] = raw_data.get("authors",  [])
 
+        # ── ZWS 봇 점유율 계산 ─────────────────────────────────────────────
+        # scraper.collect_trending()이 주입한 ai_post_count / total_post_count를 사용.
+        # 최초 분석 시 ZWS 게시글이 없으면 0/N (0.0%)으로 자연스럽게 표시됨.
+        _ai_post_count    = raw_data.get("ai_post_count",    0)
+        _total_post_count = raw_data.get("total_post_count", 0)
+        if _total_post_count > 0:
+            _ai_pct  = _ai_post_count / _total_post_count * 100
+            ai_share = f"{_ai_post_count}/{_total_post_count}개 ({_ai_pct:.1f}%)"
+        else:
+            ai_share = "데이터 없음"
+
         # ── 1. 모든 텍스트 합치기 ──────────────────────────
         all_text = " ".join(titles + comments)
 
@@ -495,6 +519,7 @@ class GhostBrain:
             titles_text=titles_text,
             comments_text=comments_text,
             author_stats=author_stats,
+            ai_share=ai_share,
         )
 
         # ── 6. Gemini API 호출 (분석용 — Native JSON Mode + Schema 강제) ──
@@ -609,11 +634,14 @@ class GhostBrain:
         # keyword_counts: Plotly 빈도 차트용 (word → 실제 등장 횟수)
         result["keyword_counts"] = dict(counter.most_common(top_k))
         result["author_stats"] = author_stats   # author dominance 요약 문자열
+        result["ai_share"]     = ai_share       # ZWS 봇 점유율 문자열
         result["stats"] = {
-            "titles_count":   len(titles),
-            "comments_count": len(comments),
-            "authors_count":  len(authors),
-            "keywords_found": len(filtered),
+            "titles_count":    len(titles),
+            "comments_count":  len(comments),
+            "authors_count":   len(authors),
+            "keywords_found":  len(filtered),
+            "ai_post_count":   _ai_post_count,
+            "total_post_count": _total_post_count,
         }
 
         return result

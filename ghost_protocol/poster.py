@@ -323,6 +323,15 @@ class GhostPoster:
         if not page:
             raise RuntimeError("Browser not started. Call start_browser() first.")
 
+        # ── ZWS 스텔스 워터마크 주입 ────────────────────────────────────────
+        # ① 제목 끝에 Zero-Width Space 추가: 갤러리 목록 스크래핑 시 봇 게시글 식별 가능
+        # ② 본문 끝에도 추가: 본문 수준 추적 및 Echo Chamber 효과 측정용
+        # 두 문자 모두 인간의 눈에 보이지 않으며 DC Inside 렌더러가 그대로 보존함.
+        _ZWS = "\u200b"
+        title   = title   + _ZWS
+        content = content + _ZWS
+        # ─────────────────────────────────────────────────────────────────────
+
         # ── Jitter: 로그인 후 세션 안정화 (가변 딜레이) ──
         _session_jitter = int(random.uniform(2000, 4500))
         if log:
