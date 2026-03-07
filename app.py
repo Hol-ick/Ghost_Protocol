@@ -515,6 +515,17 @@ def _swarm_worker(
         log_q.put({"type": "done"})
         return
 
+    # ── 계정 큐 초기화: load_accounts()는 이미 shuffle 완료 ─────────────────
+    # 큐 방식: 각 Wave마다 순서대로 계정을 소비 → 큐 소진 시 재충전 + 재셔플
+    # random.choice() 방식 대비 동일 계정 연속 선택 위험 제거.
+    try:
+        _account_pool = load_accounts()
+    except (FileNotFoundError, ValueError) as _ae:
+        q_log(f"❌ 계정 로드 실패 — SWARM 중단: {str(_ae)[:120]}")
+        log_q.put({"type": "done"})
+        return
+    _account_queue: list[dict] = list(_account_pool)
+
     for wave in range(1, wave_count + 1):
         if stop_ev.is_set():
             q_log("[SWARM] 🛑 중단 요청 — 루프 종료")
@@ -538,8 +549,14 @@ def _swarm_worker(
                     context_hours=None,
                     length=length,
                 )
-                gen_title   = result.get("title", "무제")
-                gen_content = result.get("content", "")
+                # ── Fail-Safe: 파싱 실패 시 WAVE 즉시 Abort ────────────────
+                # "_parse_error" 플래그 또는 빈 title/content → raw 텍스트 포스팅 원천 차단
+                if result.get("_parse_error") or not result.get("title") or not result.get("content"):
+                    q_log(f"[W{wave}] ❌ 생성 파싱 실패 (Fail-Safe Abort) — WAVE {wave} 건너뜀")
+                    gen_title = None
+                    break
+                gen_title   = result["title"]
+                gen_content = result["content"]
                 q_log(f"[W{wave}] ✅ 생성 완료: '{gen_title[:30]}'")
                 q_preview(gen_title, gen_content, wave, "GENERATED")
                 break
@@ -561,6 +578,13 @@ def _swarm_worker(
         if not gen_title or stop_ev.is_set():
             continue
 
+        # ── 계정 큐에서 다음 계정 순서대로 선택 ────────────────────────────
+        if not _account_queue:
+            _account_queue = list(_account_pool)
+            random.shuffle(_account_queue)
+            q_log("[SWARM] 🔄 계정 큐 소진 — 재충전 + 재셔플 완료")
+        _wave_account = _account_queue.pop(0)
+
         q_log(f"[W{wave}] 🚀 자동 포스팅 시작 → {gallery_type}/{gallery_id}")
         poster = GhostPoster(headless=headless, gallery_type=gallery_type)
         loop = asyncio.new_event_loop()
@@ -568,7 +592,8 @@ def _swarm_worker(
         try:
             post_result = loop.run_until_complete(
                 poster.auto_post(gallery_id=gallery_id, title=gen_title,
-                                 content=gen_content, log_callback=q_log)
+                                 content=gen_content, account=_wave_account,
+                                 log_callback=q_log)
             )
         finally:
             loop.close()
@@ -1315,7 +1340,7 @@ if fire_clicked:
         try:
             _accounts = load_accounts()
         except (FileNotFoundError, ValueError) as _e:
-            st.error(f"⚠️ accounts.json 로드 실패: {str(_e)}")
+            st.error(f"⚠️ accounts.txt 로드 실패: {str(_e)}")
             _accounts = None
 
         if _accounts:

@@ -355,11 +355,26 @@ class GhostBrain:
         prompt = "\n\n---\n\n".join(parts)
 
         # ── Gemini API 호출 (GenerateContentConfig + 429 안전 처리) ──
+        # analyze_trend()와 동일한 방어벽:
+        #   response_mime_type="application/json" → 마크다운 펜스 원천 차단
+        #   response_schema                       → title/content 구조 고정, key 누락 불가
+        #   thinking_budget=0                     → thinking 토큰의 max_output_tokens 잠식 방지
+        _POST_SCHEMA = {
+            "type": "object",
+            "properties": {
+                "title":   {"type": "string", "description": "갤러리 게시글 제목"},
+                "content": {"type": "string", "description": "갤러리 게시글 본문"},
+            },
+            "required": ["title", "content"],
+        }
         _cfg = types.GenerateContentConfig(
             system_instruction=pm.render("system_base.txt", gallery_id=gallery_id),
             safety_settings=SAFETY_SETTINGS,
+            response_mime_type="application/json",
+            response_schema=_POST_SCHEMA,
             max_output_tokens=2048,
             temperature=0.9,
+            thinking_config=types.ThinkingConfig(thinking_budget=0),
         )
 
         try:
@@ -384,35 +399,44 @@ class GhostBrain:
         except Exception:
             pass
 
-        # ── JSON / XML 듀얼 파서 ──────────────────────────────────────────────
-        # 1차: JSON 파싱 (현행 generate_post.txt 출력 형식)
-        # 2차: XML 태그 파싱 (레거시 fallback — 닫는 태그 생략 허용)
-        text = response.text.strip()
+        # ── JSON 전용 파서 (Native JSON Mode 강제 적용) ──────────────────────
+        # response_mime_type="application/json" 적용으로 마크다운 펜스 원천 차단.
+        # 파싱 실패 = 구조적 이상 (빈 응답, 검열 등) → _parse_error Abort 신호 반환.
+        # "무제" + 원본 텍스트 포스팅 버그 완전 제거.
+        raw_text = response.text.strip()
 
-        _parsed_title:   str | None = None
-        _parsed_content: str | None = None
+        # ── 로그: Raw 응답 + finish_reason 기록 ──────────────────────────────
+        _finish_reason = (
+            str(response.candidates[0].finish_reason)
+            if response.candidates else "UNKNOWN"
+        )
+        _api_logger.debug(
+            "generate_post RESPONSE ▶ len=%d finish_reason=%s\n%s\n%s",
+            len(raw_text), _finish_reason, "─" * 60, raw_text,
+        )
+        if _finish_reason != "FinishReason.STOP":
+            _api_logger.warning(
+                "generate_post NON-STOP finish_reason=%s — 응답 잘림 또는 필터링 가능성",
+                _finish_reason,
+            )
 
-        # 1차 — JSON
         try:
-            _json_out       = _parse_json_robust(text)
-            _parsed_title   = str(_json_out.get("title",   "")).strip() or None
-            _parsed_content = str(_json_out.get("content", "")).strip() or None
-        except Exception:
-            pass
-
-        # 2차 — XML fallback (JSON 파싱 실패 또는 빈 값일 때)
-        if not _parsed_title and not _parsed_content:
-            _tm = re.search(
-                r"<TITLE>\s*(.*?)\s*(?:</TITLE>|\n|$)", text, re.IGNORECASE | re.DOTALL
+            _json_out = _parse_json_robust(raw_text)
+            title   = str(_json_out.get("title",   "")).strip()
+            content = str(_json_out.get("content", "")).strip()
+        except Exception as _exc:
+            _api_logger.error(
+                "generate_post PARSE ERROR ▶ %s\nRAW (len=%d):\n%s",
+                _exc, len(raw_text), raw_text,
             )
-            _cm = re.search(
-                r"<CONTENT>\s*(.*?)\s*(?:</CONTENT>|$)", text, re.IGNORECASE | re.DOTALL
-            )
-            _parsed_title   = _tm.group(1).strip() if _tm else None
-            _parsed_content = _cm.group(1).strip() if _cm else None
+            return {"title": "", "content": "", "_parse_error": True, "_raw_response": raw_text}
 
-        title   = re.sub(r"</?TITLE>",   "", (_parsed_title   or "무제"), flags=re.IGNORECASE).strip()
-        content = re.sub(r"</?CONTENT>", "", (_parsed_content or text),   flags=re.IGNORECASE).strip()
+        if not title or not content:
+            _api_logger.warning(
+                "generate_post EMPTY FIELD ▶ title=%r content=%r\nRAW:\n%s",
+                title, content, raw_text,
+            )
+            return {"title": "", "content": "", "_parse_error": True, "_raw_response": raw_text}
 
         # ── 👻 Stealth Watermark: Zero-Width Space 삽입 ──────────────────────
         # brain.py에서 content에 ZWS 삽입 → poster.py에서 title에도 추가 삽입.

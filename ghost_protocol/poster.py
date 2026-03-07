@@ -60,7 +60,9 @@ def load_accounts() -> list[dict]:
             "아이디를 한 줄에 하나씩 입력하세요."
         )
 
-    return [{"id": uid, "pw": _COMMON_PW} for uid in ids]
+    accounts = [{"id": uid, "pw": _COMMON_PW} for uid in ids]
+    random.shuffle(accounts)   # 로드 시점 1회 셔플 → 큐 방식의 라운드로빈 베이스
+    return accounts
 
 
 def pick_random_account() -> dict:
