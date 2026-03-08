@@ -600,7 +600,7 @@ class GhostPoster:
         ]:
             try:
                 el = page.locator(_sel).first
-                await el.wait_for(state="visible", timeout=3000)
+                await el.wait_for(state="attached", timeout=3000)
                 comment_input = el
                 if log:
                     log(f"[POSTER] ✅ 댓글 입력창 발견 ({_sel})")
@@ -616,7 +616,9 @@ class GhostPoster:
 
         # ── 댓글 타이핑 ──
         try:
-            await comment_input.click()
+            await comment_input.scroll_into_view_if_needed()
+            await page.wait_for_timeout(int(random.uniform(200, 400)))
+            await comment_input.click(force=True)
             await page.wait_for_timeout(int(random.uniform(400, 900)))
             await comment_input.type(comment, delay=int(random.uniform(60, 110)))
             await page.wait_for_timeout(int(random.uniform(500, 1200)))
@@ -639,9 +641,10 @@ class GhostPoster:
         ]:
             try:
                 btn = page.locator(_sel).first
-                await btn.wait_for(state="visible", timeout=2000)
+                await btn.wait_for(state="attached", timeout=2000)
+                await btn.scroll_into_view_if_needed()
                 await page.wait_for_timeout(int(random.uniform(600, 1200)))
-                await btn.click()
+                await btn.click(force=True)
                 submitted = True
                 if log:
                     log(f"[POSTER] 🖱️ 등록 버튼 클릭 ({_sel})")
@@ -653,9 +656,10 @@ class GhostPoster:
             # 텍스트 "등록" 버튼 fallback
             try:
                 btn = page.locator("button").filter(has_text="등록").last
-                await btn.wait_for(state="visible", timeout=2000)
+                await btn.wait_for(state="attached", timeout=2000)
+                await btn.scroll_into_view_if_needed()
                 await page.wait_for_timeout(int(random.uniform(600, 1200)))
-                await btn.click()
+                await btn.click(force=True)
                 submitted = True
                 if log:
                     log("[POSTER] 🖱️ 등록 버튼 클릭 (텍스트 fallback)")

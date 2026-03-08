@@ -62,6 +62,19 @@ _TONE_MAP = {
 _LEN_OPTS = ["아주 짧게 (1문장)", "짧게 (1~2문장)", "보통 (3~4문장)"]
 _INTEL_CACHE_TTL = 900  # 15분
 
+# ── SWARM 다중 인격 풀 ─────────────────────────────────────────────────────
+# 매 WAVE마다 랜덤으로 한 가지 페르소나를 선택하여 글투 다양성 확보.
+# "key"는 brain.py generate_post()의 tone_desc 맵과 1:1 대응.
+# UI의 고정 톤 설정을 SWARM 내에서 오버라이드함 — 현지인 군중 시뮬레이션.
+_PERSONA_POOL = [
+    {"name": "다혈질 분노조절 실패형",  "key": "aggressive"},
+    {"name": "무기력한 갤러리 지박령",  "key": "monologue"},
+    {"name": "비꼬는 시니컬 관전자",    "key": "cynical"},
+    {"name": "실없이 쪼개는 어그로형",  "key": "aggro"},
+    {"name": "건조한 무감각 관찰자",    "key": "neutral"},
+    {"name": "팩트폭격 분석충",         "key": "analytical"},
+]
+
 # ══════════════════════════════════════════════
 # CSS — Stealth Dark Bento Theme 2.0
 # ══════════════════════════════════════════════
@@ -558,6 +571,12 @@ def _swarm_worker(
         gen_content: str = ""
         _tc_list: list[dict] = []   # Wave 스코프 초기화 — 항상 정의됨 보장
 
+        # ── 다중 인격 랜덤 배정 ───────────────────────────────────────────────
+        # UI 톤 설정을 오버라이드하여 매 Wave마다 다른 현지인 말투로 작성.
+        _persona   = random.choice(_PERSONA_POOL)
+        _wave_tone = _persona["key"]
+        q_log(f"[W{wave}] 🎭 부여된 페르소나: {_persona['name']} ({_wave_tone})")
+
         for attempt in range(3):
             if stop_ev.is_set():
                 break
@@ -565,7 +584,7 @@ def _swarm_worker(
                 result = brain.generate_post(
                     topic=topic,
                     gallery_id=gallery_id,
-                    tone=tone,
+                    tone=_wave_tone,
                     context_hours=None,
                     length=length,
                     recent_posts=_recent_posts or None,
