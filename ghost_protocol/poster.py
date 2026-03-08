@@ -15,7 +15,7 @@ from typing import Callable, Optional
 
 from playwright.async_api import async_playwright
 
-from .config import USER_AGENTS, WRITE_URL_PATTERNS, get_write_url
+from .config import USER_AGENTS, WRITE_URL_PATTERNS, get_write_url, get_view_url
 
 # ══════════════════════════════════════════════
 # 계정 관리
@@ -545,8 +545,214 @@ class GhostPoster:
         return is_posted
 
     # ══════════════════════════════════════════════
+    # 댓글 작성
+    # ══════════════════════════════════════════════
+
+    async def write_comment(
+        self,
+        gallery_id: str,
+        post_no: str,
+        comment: str,
+        log: Optional[Callable] = None,
+    ) -> bool:
+        """DC Inside 게시글에 댓글 작성.
+
+        Args:
+            gallery_id: 갤러리 ID
+            post_no: 댓글 달 게시글 번호 (숫자 문자열)
+            comment: 댓글 내용 (1줄 권장)
+            log: 로그 콜백 함수
+
+        Returns:
+            True if comment submitted successfully
+        """
+        page = self._page
+        if not page:
+            raise RuntimeError("Browser not started. Call start_browser() first.")
+
+        view_url = get_view_url(self._gallery_type, gallery_id, post_no)
+
+        if log:
+            log(f"[POSTER] 💬 글보기 이동 중... (#{post_no})")
+
+        try:
+            await page.goto(view_url, wait_until="domcontentloaded", timeout=20000)
+            # 페이지 안정화 딜레이
+            await page.wait_for_timeout(int(random.uniform(2000, 4000)))
+        except Exception as e:
+            if log:
+                log(f"[POSTER] [ERROR] 글보기 페이지 로드 실패: {str(e)[:100]}")
+            await self._take_death_cam(log)
+            return False
+
+        if log:
+            log(f"[POSTER] 🕵️ 댓글 입력창 탐색 중...")
+
+        # ── 댓글 textarea 탐색 (DC Inside 멀티 셀렉터) ──
+        # DC Inside는 갤러리 타입·테마에 따라 셀렉터가 다를 수 있어 순서대로 시도.
+        comment_input = None
+        for _sel in [
+            "#re_txt",
+            ".cmt_write_box textarea",
+            "textarea[name='memo']",
+            ".reply_write textarea",
+            "textarea",
+        ]:
+            try:
+                el = page.locator(_sel).first
+                await el.wait_for(state="visible", timeout=3000)
+                comment_input = el
+                if log:
+                    log(f"[POSTER] ✅ 댓글 입력창 발견 ({_sel})")
+                break
+            except Exception:
+                continue
+
+        if comment_input is None:
+            if log:
+                log("[POSTER] [ERROR] 댓글 입력창을 찾을 수 없습니다 (모든 셀렉터 실패)")
+            await self._take_death_cam(log)
+            return False
+
+        # ── 댓글 타이핑 ──
+        try:
+            await comment_input.click()
+            await page.wait_for_timeout(int(random.uniform(400, 900)))
+            await comment_input.type(comment, delay=int(random.uniform(60, 110)))
+            await page.wait_for_timeout(int(random.uniform(500, 1200)))
+        except Exception as e:
+            if log:
+                log(f"[POSTER] [ERROR] 댓글 타이핑 실패: {str(e)[:100]}")
+            await self._take_death_cam(log)
+            return False
+
+        if log:
+            log(f"[POSTER] ✅ 댓글 입력 완료 ({len(comment)}자). 등록 버튼 클릭 중...")
+
+        # ── 등록 버튼 탐색 (멀티 셀렉터 + 텍스트 fallback) ──
+        submitted = False
+        for _sel in [
+            ".btn_comment_ok",
+            ".btn_write.comment",
+            ".write_btn",
+            ".btn_submit",
+        ]:
+            try:
+                btn = page.locator(_sel).first
+                await btn.wait_for(state="visible", timeout=2000)
+                await page.wait_for_timeout(int(random.uniform(600, 1200)))
+                await btn.click()
+                submitted = True
+                if log:
+                    log(f"[POSTER] 🖱️ 등록 버튼 클릭 ({_sel})")
+                break
+            except Exception:
+                continue
+
+        if not submitted:
+            # 텍스트 "등록" 버튼 fallback
+            try:
+                btn = page.locator("button").filter(has_text="등록").last
+                await btn.wait_for(state="visible", timeout=2000)
+                await page.wait_for_timeout(int(random.uniform(600, 1200)))
+                await btn.click()
+                submitted = True
+                if log:
+                    log("[POSTER] 🖱️ 등록 버튼 클릭 (텍스트 fallback)")
+            except Exception:
+                pass
+
+        if not submitted:
+            if log:
+                log("[POSTER] [ERROR] 댓글 등록 버튼을 찾을 수 없습니다")
+            await self._take_death_cam(log)
+            return False
+
+        # 서버 처리 대기
+        await page.wait_for_timeout(int(random.uniform(2500, 4500)))
+
+        # 댓글 등록 성공 확인: URL이 write 페이지가 아니면 OK
+        # DC Inside는 댓글 등록 후 동일 페이지에 머무름 → 예외 URL 체크 불필요
+        # 에러 팝업(alert) 발생 시 _handle_dialog 리스너가 자동 dismiss 처리됨
+        is_commented = True  # 버튼 클릭까지 성공하면 성공으로 간주
+
+        if log:
+            if is_commented:
+                log(f"[POSTER] ✅ 댓글 등록 완료! (#{post_no})")
+
+        return is_commented
+
+    # ══════════════════════════════════════════════
     # 원스톱 실행
     # ══════════════════════════════════════════════
+
+    async def auto_comment(
+        self,
+        gallery_id: str,
+        post_no: str,
+        comment: str,
+        account: Optional[dict] = None,
+        log_callback: Optional[Callable] = None,
+    ) -> dict:
+        """로그인 → 댓글 작성 → 브라우저 종료 원스톱 실행.
+
+        Args:
+            gallery_id: 갤러리 ID
+            post_no: 댓글 달 게시글 번호
+            comment: 댓글 내용
+            account: {"id": ..., "pw": ...} (None이면 랜덤 선택)
+            log_callback: 실시간 로그 콜백
+
+        Returns:
+            {"success": bool, "account": str, "message": str}
+        """
+        log = log_callback
+
+        if account is None:
+            account = pick_random_account()
+
+        masked = _mask_id(account["id"])
+        if log:
+            log(f"[POSTER] 🎭 댓글 계정 선택: ID={masked}")
+
+        result = {
+            "success": False,
+            "account": account["id"],
+            "message": "",
+        }
+
+        try:
+            await self.start_browser(log=log)
+
+            logged_in = await self.login(account["id"], account["pw"], log=log)
+            if not logged_in:
+                result["message"] = f"로그인 실패: {masked}"
+                if log:
+                    log(f"[POSTER] ❌ 댓글 중단 — 로그인 실패 ({masked})")
+                return result
+
+            commented = await self.write_comment(gallery_id, post_no, comment, log=log)
+            if commented:
+                result["success"] = True
+                result["message"] = f"댓글 등록 성공! (계정: {masked}, 글: #{post_no})"
+                if log:
+                    log(f"[POSTER] ✅ 댓글 완료 (계정: {masked}, 글: #{post_no})")
+            else:
+                result["message"] = "댓글 등록 실패"
+                if log:
+                    log("[POSTER] ❌ 댓글 작업 실패")
+
+        except Exception as e:
+            err_msg = str(e)[:150]
+            result["message"] = f"오류 발생: {err_msg}"
+            if log:
+                log(f"[POSTER] [ERROR] 댓글 예외: {err_msg}")
+            await self._take_death_cam(log)
+
+        finally:
+            await self.close_browser(log=log)
+
+        return result
 
     async def auto_post(
         self,

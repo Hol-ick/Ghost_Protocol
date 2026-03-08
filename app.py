@@ -537,9 +537,10 @@ def _swarm_worker(
         _recent_posts = [
             {"post_no": p["post_no"], "title": p["title"]}
             for p in _raw_list[:5]
-            if not p.get("is_bot")
+            # is_bot 필터 해제 (Phase 3.7): 자체 생성 스레드 연속성 통합 테스트 허용.
+            # 이전 WAVE에서 작성한 글에도 댓글 가능 → Echo Chamber 스레드 구성 검증.
         ]
-        q_log(f"[SWARM] 📋 댓글 타겟 후보 수집 완료: {len(_recent_posts)}개 (봇 글 제외)")
+        q_log(f"[SWARM] 📋 댓글 타겟 후보 수집 완료: {len(_recent_posts)}개")
     except Exception as _te:
         q_log(f"[SWARM] ⚠️ 댓글 타겟 수집 실패 (SWARM 계속): {str(_te)[:80]}")
         _recent_posts = []
@@ -555,6 +556,7 @@ def _swarm_worker(
 
         gen_title: str | None = None
         gen_content: str = ""
+        _tc_list: list[dict] = []   # Wave 스코프 초기화 — 항상 정의됨 보장
 
         for attempt in range(3):
             if stop_ev.is_set():
@@ -640,8 +642,54 @@ def _swarm_worker(
             q_log(f"[W{wave}] ❌ 포스팅 실패: {post_result['message']}")
             q_preview(gen_title, gen_content, wave, "❌ FAILED")
 
+        # ── 댓글 자동화 (target_comments 순회 실행) ──────────────────────────
+        # 포스팅 성공 여부와 무관하게 실행 (Gemini 스펙 "성공 또는 생략" 해석).
+        # 계정은 동일 Wave 계정(_wave_account) 재사용 → 포스팅과 같은 계정으로 댓글.
+        _comment_elapsed = 0
+        if _tc_list and not stop_ev.is_set():
+            q_log(f"[W{wave}] 💬 댓글 자동화 시작 — {len(_tc_list)}개 예약")
+            for _idx, _tc in enumerate(_tc_list, 1):
+                if stop_ev.is_set():
+                    break
+                _post_no = _tc.get("post_no", "")
+                _comment = _tc.get("comment", "")
+                if not _post_no or not _comment:
+                    continue
+
+                q_log(f"[W{wave}] 💬 [{_idx}/{len(_tc_list)}] #{_post_no} 댓글 시도 중...")
+                _c_poster = GhostPoster(headless=headless, gallery_type=gallery_type)
+                _c_loop   = asyncio.new_event_loop()
+                asyncio.set_event_loop(_c_loop)
+                try:
+                    _c_result = _c_loop.run_until_complete(
+                        _c_poster.auto_comment(
+                            gallery_id=gallery_id,
+                            post_no=_post_no,
+                            comment=_comment,
+                            account=_wave_account,
+                            log_callback=q_log,
+                        )
+                    )
+                finally:
+                    _c_loop.close()
+                    asyncio.set_event_loop(None)
+
+                if _c_result["success"]:
+                    q_log(f"[W{wave}] ✅ 댓글 성공 [{_idx}] #{_post_no}")
+                else:
+                    q_log(f"[W{wave}] ❌ 댓글 실패 [{_idx}]: {_c_result['message']}")
+
+                # 댓글 간 인간다운 딜레이 (마지막 댓글 후는 생략 — Wave 간 딜레이로 흡수)
+                if _idx < len(_tc_list) and not stop_ev.is_set():
+                    _c_wait = random.randint(15, 45)
+                    q_log(f"[W{wave}] ⏳ 다음 댓글까지 {_c_wait}초 대기...")
+                    _interruptible_sleep(_c_wait, stop_ev)
+                    _comment_elapsed += _c_wait
+
         if wave < wave_count and not stop_ev.is_set():
-            wait_sec = random.randint(60, 180)
+            # 댓글에서 소비된 시간만큼 Wave 간 딜레이에서 차감 (최소 30초 보장)
+            _base_wait = random.randint(60, 180)
+            wait_sec   = max(30, _base_wait - _comment_elapsed)
             q_log(f"[SWARM] ☕ 다음 WAVE까지 {wait_sec}초 대기...")
             _interruptible_sleep(wait_sec, stop_ev)
 
