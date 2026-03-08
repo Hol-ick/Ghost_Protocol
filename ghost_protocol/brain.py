@@ -249,8 +249,9 @@ class GhostBrain:
         context_hours: Optional[int] = 1,
         length: str = "보통 (3~4문장)",
         keywords: Optional[list[str]] = None,
+        recent_posts: Optional[list[dict]] = None,
     ) -> dict:
-        """DC Inside 스타일 게시글 생성 (XML 태그 파싱).
+        """DC Inside 스타일 게시글 생성 + 소셜 인터랙션 댓글 콤보.
 
         Args:
             topic: 글 주제 (예: "요즘 분위기 왜 이러냐")
@@ -259,10 +260,17 @@ class GhostBrain:
             context_hours: 컨텍스트 시간 범위 (None이면 미사용)
             length: 글 길이 ("짧게 (1~2문장)" / "보통 (3~4문장)" / "길게 (5문장 이상)")
             keywords: 핫 키워드 리스트 (본문 살 붙이기용)
+            recent_posts: 댓글 타겟 후보 목록 (봇 게시글 제외).
+                          각 dict: {"post_no": str, "title": str}
+                          None이면 댓글 타겟 없이 포스팅만 생성.
 
         Returns:
-            {"title": str, "content": str}
-            429 에러 시 안전한 에러 메시지 반환
+            {
+              "title":           str,
+              "content":         str,
+              "target_comments": [{"post_no": str, "comment": str}, ...],
+            }
+            파싱 실패 시: {"title": "", "content": "", "_parse_error": True, ...}
         """
         tone_desc = {
             "cynical": "tone == cynical 규칙을 따라 냉소적이고 비꼬는 듯한 어조로 써",
@@ -337,6 +345,26 @@ class GhostBrain:
                 "단어 1~2개, 끝. 키워드 나열 절대 금지. 문장 완성 절대 금지.\n"
             )
 
+        # ── 댓글 타겟 컨텍스트 빌드 ─────────────────────────────────────────
+        # recent_posts: fetch_post_list()가 반환한 비봇 게시글 (post_no, title).
+        # is_bot=True 게시글은 호출자(app.py)가 필터링하여 전달하지 않음.
+        # post_no 검증은 파서 단계에서 추가로 수행 (hallucination 방어).
+        if recent_posts:
+            _posts_lines = "\n".join(
+                f"- #{p.get('post_no', '?')} | {p.get('title', '')}"
+                for p in recent_posts
+            )
+            recent_posts_context = (
+                "\n[댓글 타겟 (최신 글 목록 — 봇 게시글 제외)]\n"
+                "아래 글 중 자연스럽게 반응할 수 있는 글을 최대 2개 골라, "
+                "짧고 건조한 댓글(1줄)을 각각 작성하라.\n"
+                "댓글은 독백체가 아닌 제3자의 무심한 반응처럼 써라. "
+                "적합한 타겟이 없으면 빈 배열로 남겨도 된다.\n"
+                f"{_posts_lines}\n"
+            )
+        else:
+            recent_posts_context = ""
+
         # ── 작문 지시 — prompts/generate_post.txt 에서 로드 ──────────────────
         # 하드코딩 제로: 분량·톤·키워드·교차지시를 템플릿 변수로 주입.
         # 사용자는 generate_post.txt 만 수정하면 작문 스타일 전체를 튜닝 가능.
@@ -349,6 +377,7 @@ class GhostBrain:
                 length_instruction=length_instruction,
                 cross_instruction=cross_instruction,
                 kw_inject=kw_inject,
+                recent_posts_context=recent_posts_context,
             )
         )
 
@@ -364,8 +393,26 @@ class GhostBrain:
             "properties": {
                 "title":   {"type": "string", "description": "갤러리 게시글 제목"},
                 "content": {"type": "string", "description": "갤러리 게시글 본문"},
+                "target_comments": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "post_no": {
+                                "type": "string",
+                                "description": "댓글을 달 DC Inside 게시글 번호 (숫자 문자열)",
+                            },
+                            "comment": {
+                                "type": "string",
+                                "description": "작성할 댓글 내용 (1줄, 건조한 반응)",
+                            },
+                        },
+                        "required": ["post_no", "comment"],
+                    },
+                    "description": "댓글 타겟 목록 (최대 2개). 타겟 없으면 빈 배열.",
+                },
             },
-            "required": ["title", "content"],
+            "required": ["title", "content", "target_comments"],
         }
         _cfg = types.GenerateContentConfig(
             system_instruction=pm.render("system_base.txt", gallery_id=gallery_id),
@@ -424,19 +471,33 @@ class GhostBrain:
             _json_out = _parse_json_robust(raw_text)
             title   = str(_json_out.get("title",   "")).strip()
             content = str(_json_out.get("content", "")).strip()
+
+            # ── target_comments: 실패해도 Wave Abort 없이 빈 배열로 safe fallback ──
+            # post_no가 숫자 문자열인 항목만 허용 → hallucinated/invalid ID 원천 차단
+            _tc_raw = _json_out.get("target_comments", [])
+            target_comments: list[dict] = [
+                {"post_no": str(tc["post_no"]).strip(), "comment": str(tc["comment"]).strip()}
+                for tc in (_tc_raw if isinstance(_tc_raw, list) else [])
+                if (
+                    isinstance(tc, dict)
+                    and str(tc.get("post_no", "")).strip().isdigit()
+                    and str(tc.get("comment", "")).strip()
+                )
+            ][:2]  # 최대 2개 강제 상한
+
         except Exception as _exc:
             _api_logger.error(
                 "generate_post PARSE ERROR ▶ %s\nRAW (len=%d):\n%s",
                 _exc, len(raw_text), raw_text,
             )
-            return {"title": "", "content": "", "_parse_error": True, "_raw_response": raw_text}
+            return {"title": "", "content": "", "target_comments": [], "_parse_error": True, "_raw_response": raw_text}
 
         if not title or not content:
             _api_logger.warning(
                 "generate_post EMPTY FIELD ▶ title=%r content=%r\nRAW:\n%s",
                 title, content, raw_text,
             )
-            return {"title": "", "content": "", "_parse_error": True, "_raw_response": raw_text}
+            return {"title": "", "content": "", "target_comments": [], "_parse_error": True, "_raw_response": raw_text}
 
         # ── 👻 Stealth Watermark: Zero-Width Space 삽입 ──────────────────────
         # brain.py에서 content에 ZWS 삽입 → poster.py에서 title에도 추가 삽입.
@@ -444,8 +505,9 @@ class GhostBrain:
         content = content + "\u200B"
 
         return {
-            "title": title,
-            "content": content,
+            "title":           title,
+            "content":         content,
+            "target_comments": target_comments,
         }
 
     # ══════════════════════════════════════════════

@@ -3,7 +3,7 @@
 - 포스팅 주제: $topic
 - 톤: $tone_instruction
 - 분량: $length_instruction
-
+$recent_posts_context
 [Task]
 타겟 갤러리($gallery_id)에 올라갈 게시글의 제목과 본문을 작성해라.
 
@@ -20,5 +20,7 @@ $cross_instruction$kw_inject
 반드시 아래 JSON 키값을 포함해라. 다른 부가 설명은 절대 하지 마.
 {
   "title": "여기에 제목",
-  "content": "여기에 본문"
+  "content": "여기에 본문",
+  "target_comments": [{"post_no": "게시글 번호", "comment": "댓글 내용"}, ...]
 }
+댓글 타겟이 없거나 자연스러운 반응을 찾지 못했으면 "target_comments": [] 로 반환.

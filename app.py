@@ -526,6 +526,24 @@ def _swarm_worker(
         return
     _account_queue: list[dict] = list(_account_pool)
 
+    # ── 댓글 타겟 후보 수집 (SWARM 시작 시 1회 스냅샷) ─────────────────────
+    # 봇 게시글(is_bot=True) 필터링: 자문자답 루프 방지
+    # Phase 3.6 현재: 데이터 파이프라인 검증 전용 — 브라우저 자동화 없음.
+    _recent_posts: list[dict] = []
+    try:
+        from ghost_protocol.scraper import TrendScraper as _TS
+        _ts = _TS()
+        _raw_list = _ts.fetch_post_list(gallery_id, gallery_type, page=1)
+        _recent_posts = [
+            {"post_no": p["post_no"], "title": p["title"]}
+            for p in _raw_list[:5]
+            if not p.get("is_bot")
+        ]
+        q_log(f"[SWARM] 📋 댓글 타겟 후보 수집 완료: {len(_recent_posts)}개 (봇 글 제외)")
+    except Exception as _te:
+        q_log(f"[SWARM] ⚠️ 댓글 타겟 수집 실패 (SWARM 계속): {str(_te)[:80]}")
+        _recent_posts = []
+
     for wave in range(1, wave_count + 1):
         if stop_ev.is_set():
             q_log("[SWARM] 🛑 중단 요청 — 루프 종료")
@@ -548,9 +566,11 @@ def _swarm_worker(
                     tone=tone,
                     context_hours=None,
                     length=length,
+                    recent_posts=_recent_posts or None,
                 )
                 # ── Fail-Safe: 파싱 실패 시 WAVE 즉시 Abort ────────────────
                 # "_parse_error" 플래그 또는 빈 title/content → raw 텍스트 포스팅 원천 차단
+                # target_comments 실패는 Wave Abort 사유가 아님 (빈 배열로 safe fallback)
                 if result.get("_parse_error") or not result.get("title") or not result.get("content"):
                     q_log(f"[W{wave}] ❌ 생성 파싱 실패 (Fail-Safe Abort) — WAVE {wave} 건너뜀")
                     gen_title = None
@@ -558,6 +578,18 @@ def _swarm_worker(
                 gen_title   = result["title"]
                 gen_content = result["content"]
                 q_log(f"[W{wave}] ✅ 생성 완료: '{gen_title[:30]}'")
+
+                # ── 댓글 타겟 로그 (Phase 3.6 — 데이터 검증) ────────────────
+                _tc_list = result.get("target_comments", [])
+                if _tc_list:
+                    for _tc in _tc_list:
+                        q_log(
+                            f"[W{wave}] 💬 댓글 예약 "
+                            f"#{_tc.get('post_no')} → \"{str(_tc.get('comment', ''))[:50]}\""
+                        )
+                else:
+                    q_log(f"[W{wave}] 💬 댓글 타겟 없음 (AI 판단)")
+
                 q_preview(gen_title, gen_content, wave, "GENERATED")
                 break
 
