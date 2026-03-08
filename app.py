@@ -905,6 +905,73 @@ def _intel_results_fragment() -> None:
             f'<span class="intel-stat-pill">키워드 <span>{_stats_d.get("keywords_found", 0)}</span>개</span>'
         )
 
+        # ── AI OCCUPATION RATE 대시보드 ─────────────────────────────────────
+        # 데이터: _ir["stats"]["ai_post_count"] / ["total_post_count"]
+        # → brain.analyze_trend()가 scraper.collect_trending() 결과에서 직접 주입.
+        # 백엔드 변경 불필요 — 이미 result dict에 포함되어 있음.
+        _ai_cnt    = int(_stats_d.get("ai_post_count",    0))
+        _total_cnt = int(_stats_d.get("total_post_count", 0))
+        _human_cnt = max(0, _total_cnt - _ai_cnt)
+
+        if _total_cnt > 0:
+            _ai_pct    = min(100.0, _ai_cnt / _total_cnt * 100)
+            _human_pct = 100.0 - _ai_pct
+            _bar_w     = f"{_ai_pct:.1f}%"
+            _pct_lbl   = f"{_ai_pct:.1f}%"
+            _ratio_lbl = f"{_ai_cnt} / {_total_cnt}개"
+        else:
+            _ai_pct    = 0.0
+            _human_pct = 100.0
+            _bar_w     = "0%"
+            _pct_lbl   = "—"
+            _ratio_lbl = "데이터 없음"
+
+        # 점유율에 따른 색상 3단계: 위협(≥50%) / 경계(≥20%) / 안전(<20%)
+        _bar_clr = (
+            "linear-gradient(90deg,#FF2020,#FF4B4B)"    if _ai_pct >= 50
+            else "linear-gradient(90deg,#FF8C00,#FFBF00)" if _ai_pct >= 20
+            else "linear-gradient(90deg,#00C2A0,#00F0FF)"
+        )
+        _pct_color = (
+            "#FF4B4B" if _ai_pct >= 50
+            else "#FFBF00" if _ai_pct >= 20
+            else "#00F0FF"
+        )
+
+        st.markdown(
+            f'<div style="background:#0D1117;border:1px solid rgba(255,75,75,0.30);'
+            f'border-radius:18px;padding:20px 28px;margin-bottom:16px;">'
+            f'  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">'
+            f'    <span style="color:#FF4B4B;font-size:0.60rem;font-weight:700;'
+            f'      letter-spacing:3px;text-transform:uppercase">⚡ AI OCCUPATION RATE</span>'
+            f'    <span style="color:#333;font-size:0.60rem;font-family:monospace">'
+            f'      {_html.escape(ss.get("intel_gallery_id",""))}'
+            f'    </span>'
+            f'  </div>'
+            f'  <div style="display:flex;align-items:baseline;gap:14px;margin-bottom:14px">'
+            f'    <span style="font-size:2.8rem;font-weight:900;color:{_pct_color};'
+            f'      font-family:monospace;line-height:1;letter-spacing:-1px">'
+            f'      {_html.escape(_pct_lbl)}'
+            f'    </span>'
+            f'    <span style="color:#555;font-size:0.82rem">{_html.escape(_ratio_lbl)}</span>'
+            f'  </div>'
+            f'  <div style="background:rgba(255,255,255,0.06);border-radius:99px;'
+            f'    height:10px;overflow:hidden;margin-bottom:10px">'
+            f'    <div style="width:{_bar_w};height:100%;background:{_bar_clr};'
+            f'      border-radius:99px"></div>'
+            f'  </div>'
+            f'  <div style="display:flex;justify-content:space-between">'
+            f'    <span style="color:#00C2A0;font-size:0.72rem">'
+            f'      🧑 HUMAN &nbsp;{_human_cnt}개 &nbsp;({_human_pct:.1f}%)'
+            f'    </span>'
+            f'    <span style="color:{_pct_color};font-size:0.72rem">'
+            f'      🤖 BOT &nbsp;{_ai_cnt}개 &nbsp;({_ai_pct:.1f}%)'
+            f'    </span>'
+            f'  </div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
         col_brief, col_chart = st.columns([2, 1], gap="large")
 
         with col_brief:
