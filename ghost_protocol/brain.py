@@ -499,11 +499,6 @@ class GhostBrain:
             )
             return {"title": "", "content": "", "target_comments": [], "_parse_error": True, "_raw_response": raw_text}
 
-        # ── 👻 Stealth Watermark: Zero-Width Space 삽입 ──────────────────────
-        # brain.py에서 content에 ZWS 삽입 → poster.py에서 title에도 추가 삽입.
-        # Echo Chamber 효과 추적: scraper.py가 제목 내 ZWS 유무로 봇 게시글 판별.
-        content = content + "\u200B"
-
         return {
             "title":           title,
             "content":         content,
@@ -549,9 +544,9 @@ class GhostBrain:
         comments: list[str] = raw_data.get("comments", [])
         authors:  list[str] = raw_data.get("authors",  [])
 
-        # ── ZWS 봇 점유율 계산 ─────────────────────────────────────────────
+        # ── 봇 점유율 계산 ──────────────────────────────────────────────────
         # scraper.collect_trending()이 주입한 ai_post_count / total_post_count를 사용.
-        # 최초 분석 시 ZWS 게시글이 없으면 0/N (0.0%)으로 자연스럽게 표시됨.
+        # ledger 기반 집계: 로컬 bot_ledger.json 대조로 정확도 보장.
         _ai_post_count    = raw_data.get("ai_post_count",    0)
         _total_post_count = raw_data.get("total_post_count", 0)
         if _total_post_count > 0:
@@ -720,7 +715,7 @@ class GhostBrain:
         # keyword_counts: Plotly 빈도 차트용 (word → 실제 등장 횟수)
         result["keyword_counts"] = dict(counter.most_common(top_k))
         result["author_stats"] = author_stats   # author dominance 요약 문자열
-        result["ai_share"]     = ai_share       # ZWS 봇 점유율 문자열
+        result["ai_share"]     = ai_share       # ledger 기반 봇 점유율 문자열
         result["stats"] = {
             "titles_count":    len(titles),
             "comments_count":  len(comments),

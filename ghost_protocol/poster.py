@@ -10,12 +10,14 @@ Pipeline:
 import asyncio
 import os
 import random
+import re
 import time
 from typing import Callable, Optional
 
 from playwright.async_api import async_playwright
 
 from .config import USER_AGENTS, WRITE_URL_PATTERNS, get_write_url, get_view_url
+from .ledger import ledger_add
 
 # ══════════════════════════════════════════════
 # 계정 관리
@@ -309,7 +311,7 @@ class GhostPoster:
         title: str,
         content: str,
         log: Optional[Callable] = None,
-    ) -> bool:
+    ) -> Optional[str]:
         """DC Inside 갤러리에 글 작성.
 
         Args:
@@ -319,20 +321,12 @@ class GhostPoster:
             log: 로그 콜백 함수
 
         Returns:
-            True if post submitted successfully
+            post_no (str) if posting succeeded, None if failed.
+            post_no may be "" if DC Inside redirect URL lacked the no= param.
         """
         page = self._page
         if not page:
             raise RuntimeError("Browser not started. Call start_browser() first.")
-
-        # ── ZWS 스텔스 워터마크 주입 ────────────────────────────────────────
-        # ① 제목 끝에 Zero-Width Space 추가: 갤러리 목록 스크래핑 시 봇 게시글 식별 가능
-        # ② 본문 끝에도 추가: 본문 수준 추적 및 Echo Chamber 효과 측정용
-        # 두 문자 모두 인간의 눈에 보이지 않으며 DC Inside 렌더러가 그대로 보존함.
-        _ZWS = "\u200b"
-        title   = title   + _ZWS
-        content = content + _ZWS
-        # ─────────────────────────────────────────────────────────────────────
 
         # ── Jitter: 로그인 후 세션 안정화 (가변 딜레이) ──
         _session_jitter = int(random.uniform(2000, 4500))
@@ -531,18 +525,26 @@ class GhostPoster:
         if log:
             log("[POSTER] 🚀 등록 버튼 클릭 완료 — 결과 확인 중...")
 
-        # 글쓰기 성공 확인
+        # 글쓰기 성공 확인: 리디렉트 후 URL이 write 페이지를 벗어나면 성공
         current_url = page.url
         is_posted = "write" not in current_url.lower()
 
-        if log:
-            if is_posted:
-                log(f"[POSTER] 🎉 글 등록 성공! → {gallery_id}")
-            else:
+        if not is_posted:
+            if log:
                 log(f"[POSTER] [ERROR] 글 등록 실패 — 페이지가 이동하지 않음 (URL: {current_url[:60]})")
-                await self._take_death_cam(log)
+            await self._take_death_cam(log)
+            return None
 
-        return is_posted
+        # ── post_no 추출: DC Inside 뷰 페이지 URL에서 no= 파라미터 파싱 ─────
+        # 예: .../board/view/?id=hwhy&no=5840 → "5840"
+        _m = re.search(r"[?&]no=(\d+)", current_url)
+        post_no = _m.group(1) if _m else ""
+
+        if log:
+            _no_label = f" (no={post_no})" if post_no else " (no 파라미터 없음)"
+            log(f"[POSTER] 🎉 글 등록 성공! → {gallery_id}{_no_label}")
+
+        return post_no
 
     # ══════════════════════════════════════════════
     # 댓글 작성
@@ -776,7 +778,7 @@ class GhostPoster:
             log_callback: 실시간 로그 콜백 (msg: str) -> None
 
         Returns:
-            {"success": bool, "account": str, "message": str}
+            {"success": bool, "account": str, "post_no": str, "message": str}
         """
         log = log_callback
 
@@ -791,6 +793,7 @@ class GhostPoster:
         result = {
             "success": False,
             "account": account["id"],
+            "post_no": "",
             "message": "",
         }
 
@@ -806,11 +809,19 @@ class GhostPoster:
                     log(f"[POSTER] ❌ 작업 중단 — 로그인 실패 ({masked})")
                 return result
 
-            # 글쓰기
-            posted = await self.write_post(gallery_id, title, content, log=log)
-            if posted:
+            # 글쓰기 — write_post()는 post_no(str) 반환, 실패 시 None
+            post_no = await self.write_post(gallery_id, title, content, log=log)
+            if post_no is not None:
                 result["success"] = True
-                result["message"] = f"글 등록 성공! (계정: {masked})"
+                result["post_no"] = post_no
+                result["message"] = (
+                    f"글 등록 성공! (계정: {masked}"
+                    + (f", no={post_no}" if post_no else "")
+                    + ")"
+                )
+                # ── 로컬 원장 기록: ledger에 post_no 추가 (ZWS 대체) ─────────
+                if post_no:
+                    ledger_add(gallery_id, post_no)
                 if log:
                     log(f"[POSTER] ✅ 전체 작업 완료! (계정: {masked}, 갤러리: {gallery_id})")
             else:

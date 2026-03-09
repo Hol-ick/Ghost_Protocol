@@ -828,12 +828,12 @@ class GalleryScraper:
                 # ── High-Quality Tagging (념글 판별) ──
                 result.is_winner = result.recommends >= 10
 
-                # ── Zero-Width Watermark Detection (Ghost Protocol AI 탐지) ──
-                _zwsp = "\u200B"
-                result.is_ai = (
-                    _zwsp in (result.title or "")
-                    or _zwsp in (result.content or "")
-                )
+                # ── Bot Detection: ledger 대조 (ZWS 워터마크 방식 폐기) ──
+                try:
+                    from .ledger import ledger_load_set as _lls
+                    result.is_ai = str(post_id) in _lls(self.gallery_id)
+                except Exception:
+                    result.is_ai = False
 
                 # ── Style tags + Clean text ──
                 result.style_tags = extract_style_tags(result.title, result.content)
@@ -1318,6 +1318,15 @@ class TrendScraper:
         except _requests.RequestException:
             return []
 
+        # ── 로컬 원장 로드 (페이지 단위 1회) ─────────────────────────────────
+        # bot_ledger.json 에 기록된 post_no 집합을 가져와 is_bot 판별에 사용.
+        # ZWS 워터마크 방식 폐기 — DC Inside 서버가 특수문자를 Sanitize하기 때문.
+        try:
+            from .ledger import ledger_load_set as _ledger_load_set
+            _bot_nos = _ledger_load_set(gallery_id)
+        except Exception:
+            _bot_nos = set()
+
         soup = _BeautifulSoup(resp.text, "html.parser")
         posts: list[dict] = []
 
@@ -1349,9 +1358,6 @@ class TrendScraper:
                     continue
 
                 raw_title = title_el.get_text(strip=True)
-                # ZWS 워터마크 감지: 봇이 작성한 글에는 제목 끝에 \u200b가 삽입되어 있음.
-                # _clean() 적용 전에 판별해야 strip() 부작용 없이 정확히 감지 가능.
-                is_bot = "\u200b" in raw_title
                 title  = self._clean(raw_title)
                 if not title:
                     continue
@@ -1387,7 +1393,7 @@ class TrendScraper:
                     "views":      _parse_int(views_el),
                     "recommends": _parse_int(rec_el),
                     "author":     author,
-                    "is_bot":     is_bot,   # ZWS 워터마크 감지 여부
+                    "is_bot":     post_no in _bot_nos,  # ledger 대조
                 })
             except Exception:  # noqa: BLE001 — 개별 행 파싱 실패는 무시
                 continue
@@ -1480,7 +1486,7 @@ class TrendScraper:
         all_titles:   list[str] = []
         all_comments: list[str] = []
         all_authors:  list[str] = []   # 작성자 누적 리스트
-        ai_post_count    = 0           # ZWS 워터마크 감지된 게시글 수 (봇 작성)
+        ai_post_count    = 0           # ledger 대조로 확인된 봇 게시글 수
         total_post_count = 0           # 전체 수집된 게시글 수
 
         TITLE_CAP   = 100
@@ -1495,9 +1501,9 @@ class TrendScraper:
                 _log(f"⚠️ {page_no} 페이지 수집 실패 — 건너뜀")
                 continue
 
-            # 제목 + 작성자 누적 (상한 적용) + ZWS 봇 집계
+            # 제목 + 작성자 누적 (상한 적용) + ledger 봇 집계
             for p in posts:
-                # ZWS 봇 점유율 집계: 상한 없이 전체 게시글 카운트
+                # ledger 봇 점유율 집계: 상한 없이 전체 게시글 카운트
                 total_post_count += 1
                 if p.get("is_bot"):
                     ai_post_count += 1
@@ -1538,6 +1544,6 @@ class TrendScraper:
             "gallery_id":       gallery_id,
             "gallery_type":     gallery_type,
             "collected_at":     datetime.now().isoformat(),
-            "ai_post_count":    ai_post_count,    # ZWS 감지된 봇 게시글 수
+            "ai_post_count":    ai_post_count,    # ledger 기반 봇 게시글 수
             "total_post_count": total_post_count, # 전체 수집 게시글 수
         }
