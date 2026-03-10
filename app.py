@@ -466,6 +466,21 @@ st.markdown("""
     .cs-row:last-child { margin-bottom: 0 !important; }
     .cs-label { color: #666 !important; font-size: 0.65rem !important; letter-spacing: 1px !important; text-transform: uppercase !important; }
     .cs-val   { color: #CCCCCC !important; font-size: 0.75rem !important; font-weight: 600 !important; font-family: monospace !important; }
+
+    /* ═══ 20. NEW: Left Control Panel Cards (Bento 3.0) ═══ */
+    .ctrl-card {
+        background: #111418 !important;
+        border: 1px solid rgba(255,255,255,0.07) !important;
+        border-radius: 16px !important;
+        padding: 18px 20px !important;
+        margin-bottom: 12px !important;
+    }
+    .ctrl-card-hdr {
+        font-size: 0.68rem !important; font-weight: 800 !important;
+        letter-spacing: 3px !important; text-transform: uppercase !important;
+        color: #00F0FF !important; text-shadow: 0 0 10px rgba(0,240,255,0.3) !important;
+        margin-bottom: 14px !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -1283,6 +1298,13 @@ def _monitor_fragment() -> None:
                 unsafe_allow_html=True,
             )
 
+    # ── Log Copy — 원클릭 복사 ───────────────────────────────────────────
+    # collapsed by default → 폴링 중에도 렌더링 비용 없음.
+    # 열면 st.code 우상단 📋 아이콘으로 전체 로그를 한 번에 복사 가능.
+    if ss.swarm_log:
+        with st.expander("📋 로그 복사", expanded=False):
+            st.code("\n".join(ss.swarm_log[-200:]), language="bash")
+
     # ── Mission Stats + Reset ────────────────────────────────────────────
     _wave_disp = f"{ss.swarm_wave_current}/{ss.swarm_wave_total}" if ss.swarm_wave_total else "—"
     sc1, sc2, sc3, sc4 = st.columns([1, 1, 1, 3])
@@ -1336,34 +1358,11 @@ def _monitor_fragment() -> None:
 # ══════════════════════════════════════════════════════════════════════════════
 
 # ══════════════════════════════════════════════
-# Sidebar — OTA 업데이터
+# Sidebar — OTA 업데이터 (left control panel로 이전 — sidebar는 CSS hidden)
 # ══════════════════════════════════════════════
-with st.sidebar:
-    st.markdown("### ⚙️ 시스템")
-    if st.button("🔄 업데이트 (Git Pull)", use_container_width=True,
-                 help="git pull 로 최신 코드를 받아 앱을 즉시 반영합니다."):
-        _r = subprocess.run(
-            ["git", "pull"],
-            capture_output=True, text=True,
-            cwd=str(Path(__file__).parent),
-        )
-        _out = (_r.stdout or _r.stderr or "").strip()
-        st.toast(
-            _out or "Git pull 완료",
-            icon="✅" if _r.returncode == 0 else "❌",
-        )
-        st.rerun()
 
 # ── 공통 변수 계산 ────────────────────────────────────────────────────────────
 has_any_key = bool(_GEMINI_API_KEY)  # .env에서 로드된 키만 사용
-
-_gallery_id   = st.session_state.get("target_gallery_id", "stockus")
-_gallery_type = _TYPE_MAP.get(st.session_state.get("target_type_label",  "마이너 (mgallery)"), "mgallery")
-_neural_tone  = _TONE_MAP.get(st.session_state.get("target_tone_label",  "🧊 냉소적 (Cynical)"),  "cynical")
-_length       = st.session_state.get("target_length",   "보통 (3~4문장)")
-_headless     = st.session_state.get("target_headless", True)
-_is_running   = st.session_state.get("swarm_running",   False)
-
 
 # ── API Key 누락 시 전역 경고 배너 ─────────────────────────────────────────
 if not _GEMINI_API_KEY:
@@ -1393,7 +1392,7 @@ hdr_logo, hdr_spacer, hdr_settings = st.columns([3, 5, 2])
 with hdr_logo:
     st.markdown(
         '<div class="logo-text">👻 <span>GHOST</span> PROTOCOL</div>'
-        '<div class="logo-sub">v5.0 · Launchpad · Bento 2.0</div>',
+        '<div class="logo-sub">v5.0 · Launchpad · Bento 3.0</div>',
         unsafe_allow_html=True,
     )
 
@@ -1452,123 +1451,127 @@ st.markdown(
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# STEP 1 — INTEL BENTO (Expander)
+# MAIN BENTO GRID — Left: Controls (38%) | Right: Output (62%)
 # ══════════════════════════════════════════════════════════════════════════════
-with st.expander("🔍  STEP 1  —  SITUATION ROOM  ·  TREND ANALYSIS"):
+main_left, main_right = st.columns([38, 62], gap="large")
 
-    _intel_ctrl, _intel_result_area = st.columns([1, 2], gap="large")
+with main_left:
+    # ════════════════════════════════════════
+    # STEP 1 — INTEL Control Card
+    # ════════════════════════════════════════
+    st.markdown('<div class="ctrl-card">', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="ctrl-card-hdr">🔍 STEP 1 — Situation Room</div>',
+        unsafe_allow_html=True,
+    )
 
-    # ── 컨트롤 패널 ─────────────────────────────────────────────────────
-    with _intel_ctrl:
-        # ── 갤러리 히스토리 빠른 선택 ────────────────────────────────────
-        _hist_entries = _history_load()
-        if _hist_entries:
-            st.caption("🕐 최근 분석")
-            _hcols = st.columns(min(len(_hist_entries), 4))
-            for _hi, _he in enumerate(_hist_entries[:4]):
-                with _hcols[_hi]:
-                    if st.button(
-                        _he["gallery_id"],
-                        key=f"hist_q_{_he['gallery_id']}",
-                        use_container_width=True,
-                    ):
-                        st.session_state.intel_gallery_id = _he["gallery_id"]
-                        st.session_state.intel_type_label = _he.get("type_label", "마이너 (mgallery)")
-                        st.rerun(scope="app")
+    # ── 갤러리 히스토리 빠른 선택 ────────────────────────────────────────
+    _hist_entries = _history_load()
+    if _hist_entries:
+        st.caption("🕐 최근 분석")
+        _hcols = st.columns(min(len(_hist_entries), 4))
+        for _hi, _he in enumerate(_hist_entries[:4]):
+            with _hcols[_hi]:
+                if st.button(
+                    _he["gallery_id"],
+                    key=f"hist_q_{_he['gallery_id']}",
+                    use_container_width=True,
+                ):
+                    st.session_state.intel_gallery_id = _he["gallery_id"]
+                    st.session_state.intel_type_label = _he.get("type_label", "마이너 (mgallery)")
+                    st.rerun(scope="app")
 
-        st.text_input(
-            "분석할 갤러리 ID",
-            key="intel_gallery_id",
-            placeholder="예: baseball_new9, soccer_new1, webtoon",
-        )
-        st.selectbox(
-            "갤러리 타입",
-            options=list(_TYPE_MAP.keys()),
-            key="intel_type_label",
-        )
-        st.slider("수집 페이지 수", min_value=1, max_value=5, key="intel_pages",
-                  help="페이지 수↑ = 정확도↑, 수집 시간↑")
+    st.text_input(
+        "분석할 갤러리 ID",
+        key="intel_gallery_id",
+        placeholder="예: baseball_new9, soccer_new1, webtoon",
+    )
+    st.selectbox(
+        "갤러리 타입",
+        options=list(_TYPE_MAP.keys()),
+        key="intel_type_label",
+    )
+    st.slider("수집 페이지 수", min_value=1, max_value=5, key="intel_pages",
+              help="페이지 수↑ = 정확도↑, 수집 시간↑")
 
-        # 캐시 상태 표시
-        _igid_now   = st.session_state.get("intel_gallery_id", "")
-        _igtype_now = _TYPE_MAP.get(st.session_state.get("intel_type_label", "마이너 (mgallery)"), "mgallery")
-        _ick        = f"{_igid_now}::{_igtype_now}"
-        _icached    = st.session_state.intel_cache.get(_ick)
-        _icache_age: float | None = None
-        _icache_valid = False
-        if _icached:
-            _icache_age   = time.time() - _icached.get("ts", 0)
-            _icache_valid = _icache_age < _INTEL_CACHE_TTL
-        if _icache_valid and _icache_age is not None:
-            st.caption(f"✅ 캐시 유효 — {int(_icache_age//60)}분 {int(_icache_age%60)}초 전 분석")
-        elif _icached:
-            st.caption("♻️ 캐시 만료 (15분) — 재분석 필요")
+    # 캐시 상태 표시
+    _igid_now   = st.session_state.get("intel_gallery_id", "")
+    _igtype_now = _TYPE_MAP.get(st.session_state.get("intel_type_label", "마이너 (mgallery)"), "mgallery")
+    _ick        = f"{_igid_now}::{_igtype_now}"
+    _icached    = st.session_state.intel_cache.get(_ick)
+    _icache_age: float | None = None
+    _icache_valid = False
+    if _icached:
+        _icache_age   = time.time() - _icached.get("ts", 0)
+        _icache_valid = _icache_age < _INTEL_CACHE_TTL
+    if _icache_valid and _icache_age is not None:
+        st.caption(f"✅ 캐시 유효 — {int(_icache_age//60)}분 {int(_icache_age%60)}초 전 분석")
+    elif _icached:
+        st.caption("♻️ 캐시 만료 (15분) — 재분석 필요")
 
-        _intel_is_running  = st.session_state.get("intel_running", False)
-        _intel_btn_disabled = not has_any_key or not _igid_now.strip() or _intel_is_running
+    _intel_is_running   = st.session_state.get("intel_running", False)
+    _intel_btn_disabled = not has_any_key or not _igid_now.strip() or _intel_is_running
 
-        st.markdown('<div class="intel-run-btn">', unsafe_allow_html=True)
-        _intel_fire = st.button(
-            "🔍  분석 시작" if not _intel_is_running else "⏳  분석 중...",
-            key="intel_fire_btn",
-            disabled=_intel_btn_disabled,
-            use_container_width=True,
-        )
-        st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown('<div class="intel-run-btn">', unsafe_allow_html=True)
+    _intel_fire = st.button(
+        "🔍  분석 시작" if not _intel_is_running else "⏳  분석 중...",
+        key="intel_fire_btn",
+        disabled=_intel_btn_disabled,
+        use_container_width=True,
+    )
+    st.markdown('</div>', unsafe_allow_html=True)
 
-        if not has_any_key:
-            st.caption("🔑 .env 파일에 GEMINI_API_KEY를 설정하고 앱을 재시작하세요.")
+    if not has_any_key:
+        st.caption("🔑 .env 파일에 GEMINI_API_KEY를 설정하고 앱을 재시작하세요.")
 
-    # ── 결과 패널 (fragment) ─────────────────────────────────────────────
-    with _intel_result_area:
-        _intel_results_fragment()
+    st.markdown('</div>', unsafe_allow_html=True)  # /ctrl-card INTEL
 
+    # ════════════════════════════════════════
+    # STEP 2 — Payload Control Card
+    # ════════════════════════════════════════
+    st.markdown('<div class="ctrl-card">', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="ctrl-card-hdr">⚡ STEP 2 — Payload'
+        '<span class="bento-step-badge" style="margin-left:8px;vertical-align:middle">'
+        'TARGET · TOPIC · WAVE</span></div>',
+        unsafe_allow_html=True,
+    )
 
-# ══════════════════════════════════════════════════════════════════════════════
-# STEP 2 — PAYLOAD BENTO (타겟 + 주제 + Wave)
-# ══════════════════════════════════════════════════════════════════════════════
-st.markdown(
-    '<div class="bento-step">'
-    '<div class="bento-step-header">'
-    '<span class="bento-step-title">⚡ Step 2  —  Payload</span>'
-    '<span class="bento-step-badge">TARGET · TOPIC · WAVE</span>'
-    '</div>',
-    unsafe_allow_html=True,
-)
-
-pay_left, pay_right = st.columns([3, 1], gap="large")
-
-with pay_left:
     st.text_input(
         "🎯 폭격할 주제를 입력하세요",
         key="swarm_topic_input",
         placeholder="예: 요즘 분위기 왜 이러냐 / 이슈 터진 거 실화냐 / 다들 어떻게 생각하냐",
     )
-    st.slider(
-        "💣 WAVE 횟수",
-        min_value=1, max_value=10, key="swarm_wave_count",
-        help="연속 폭격 횟수. 각 WAVE 사이에 60~180초 랜덤 대기.",
-    )
-    st.checkbox(
-        "♾️ 무한 모드 (Infinite Run)",
-        key="swarm_infinite",
-        help="활성화 시 WAVE 완료 후 10~30분 랜덤 쿨타임을 두고 무한 반복. 기존 🛑 STOP 버튼으로 중단 가능.",
-    )
-
-with pay_right:
     st.text_input(
         "Gallery ID",
         key="target_gallery_id",
         placeholder="예: baseball_new9",
         help="DC Inside 갤러리 ID",
     )
-    st.selectbox(
-        "갤러리 타입",
-        options=list(_TYPE_MAP.keys()),
-        key="target_type_label",
-        help="정규→board / 마이너→mgallery",
+
+    _pay_c1, _pay_c2 = st.columns([3, 2])
+    with _pay_c1:
+        st.selectbox(
+            "갤러리 타입",
+            options=list(_TYPE_MAP.keys()),
+            key="target_type_label",
+            help="정규→board / 마이너→mgallery",
+        )
+    with _pay_c2:
+        st.number_input(
+            "💣 WAVE",
+            min_value=1, max_value=10, step=1,
+            key="swarm_wave_count",
+            help="연속 폭격 횟수 (각 WAVE 사이 60~180초 랜덤 대기)",
+        )
+
+    st.checkbox(
+        "♾️ 무한 모드 (Infinite Run)",
+        key="swarm_infinite",
+        help="활성화 시 WAVE 완료 후 10~30분 랜덤 쿨타임을 두고 무한 반복. 🛑 STOP으로 중단.",
     )
-    # 재계산 (위젯 렌더 후 갱신)
+
+    # 재계산 (위젯 렌더 후 값 갱신)
     _gallery_id   = st.session_state.get("target_gallery_id", "")
     _gallery_type = _TYPE_MAP.get(st.session_state.get("target_type_label", "마이너 (mgallery)"), "mgallery")
     _neural_tone  = _TONE_MAP.get(st.session_state.get("target_tone_label", "🧊 냉소적 (Cynical)"), "cynical")
@@ -1582,47 +1585,64 @@ with pay_right:
         f'</div>',
         unsafe_allow_html=True,
     )
+    st.markdown('</div>', unsafe_allow_html=True)  # /ctrl-card PAYLOAD
 
-st.markdown('</div>', unsafe_allow_html=True)  # /bento-step
+    # ════════════════════════════════════════
+    # STEP 3 — FIRE Button
+    # ════════════════════════════════════════
+    _topic_val    = st.session_state.get("swarm_topic_input", "").strip()
+    _is_running   = st.session_state.get("swarm_running", False)
+    _fire_disabled = not has_any_key or not _topic_val or _is_running
 
+    st.markdown('<div class="fire-btn">', unsafe_allow_html=True)
+    fire_clicked = st.button(
+        "🔥  FIRE  —  폭격 개시" if not _is_running else "⏳  SWARM RUNNING...",
+        use_container_width=True,
+        type="primary",
+        disabled=_fire_disabled,
+    )
+    st.markdown('</div>', unsafe_allow_html=True)
 
-# ══════════════════════════════════════════════════════════════════════════════
-# STEP 3 — LAUNCH & MONITOR BENTO
-# ══════════════════════════════════════════════════════════════════════════════
-st.markdown(
-    '<div class="bento-step">'
-    '<div class="bento-step-header">'
-    '<span class="bento-step-title">🔥 Step 3  —  Launch & Monitor</span>'
-    '<span class="bento-step-badge">SWARM MODE</span>'
-    '</div>',
-    unsafe_allow_html=True,
-)
+    if not _is_running and _fire_disabled:
+        if not has_any_key:
+            st.caption("🔑 .env 파일에 GEMINI_API_KEY를 설정하고 앱을 재시작하세요.")
+        elif not _topic_val:
+            st.caption("🎯 Step 2에서 폭격할 주제를 입력하면 활성화됩니다.")
 
-_topic_val    = st.session_state.get("swarm_topic_input", "").strip()
-_is_running   = st.session_state.get("swarm_running", False)
-_fire_disabled = not has_any_key or not _topic_val or _is_running
+    st.markdown('<div style="height:10px"></div>', unsafe_allow_html=True)
 
-st.markdown('<div class="fire-btn">', unsafe_allow_html=True)
-fire_clicked = st.button(
-    "🔥  FIRE  —  폭격 개시" if not _is_running else "⏳  SWARM RUNNING...",
-    use_container_width=True,
-    type="primary",
-    disabled=_fire_disabled,
-)
-st.markdown('</div>', unsafe_allow_html=True)
+    # ── OTA Update (sidebar 대체 — sidebar는 CSS hidden) ─────────────────
+    if st.button("🔄 업데이트 (Git Pull)", use_container_width=True,
+                 help="git pull 로 최신 코드를 받아 앱을 즉시 반영합니다."):
+        _r = subprocess.run(
+            ["git", "pull"],
+            capture_output=True, text=True,
+            cwd=str(Path(__file__).parent),
+        )
+        _out = (_r.stdout or _r.stderr or "").strip()
+        st.toast(
+            _out or "Git pull 완료",
+            icon="✅" if _r.returncode == 0 else "❌",
+        )
+        st.rerun()
 
-if not _is_running and _fire_disabled:
-    if not has_any_key:
-        st.caption("🔑 .env 파일에 GEMINI_API_KEY를 설정하고 앱을 재시작하세요.")
-    elif not _topic_val:
-        st.caption("🎯 Step 2에서 폭격할 주제를 입력하면 활성화됩니다.")
+with main_right:
+    # ── STEP 1 결과 (Situation Room — fragment) ──────────────────────────
+    _intel_results_fragment()
 
-st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+    st.markdown(
+        '<hr style="border:none;border-top:1px solid rgba(255,255,255,0.06);margin:20px 0 16px 0">',
+        unsafe_allow_html=True,
+    )
 
-# ── Monitor Fragment (Preview + Terminal + Stats + STOP) ────────────────────
-_monitor_fragment()
-
-st.markdown('</div>', unsafe_allow_html=True)  # /bento-step
+    # ── STEP 3 모니터 (Launch & Monitor — fragment) ──────────────────────
+    st.markdown(
+        '<div style="font-size:0.68rem;font-weight:800;letter-spacing:3px;'
+        'text-transform:uppercase;color:#FF4B4B;margin-bottom:10px;'
+        'text-shadow:0 0 10px rgba(255,75,75,0.35)">🔥 STEP 3 — Launch &amp; Monitor</div>',
+        unsafe_allow_html=True,
+    )
+    _monitor_fragment()
 
 
 # ══════════════════════════════════════════════
