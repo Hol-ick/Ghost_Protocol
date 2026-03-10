@@ -487,6 +487,7 @@ def _init_state() -> None:
         "swarm_running":          False,
         "swarm_queue":            None,
         "swarm_stop_event":       None,
+        "swarm_infinite":         False,
         # ── INTEL ────────────────────────────────────
         "intel_running":          False,
         "intel_queue":            None,
@@ -542,9 +543,12 @@ def _swarm_worker(
     tone: str,
     length: str,
     headless: bool,
+    infinite: bool = False,
 ) -> None:
     """백그라운드 스레드: Swarm Loop 전체를 실행.
     UI와는 오직 queue.Queue를 통해서만 통신한다.
+    infinite=True 시: wave_count 사이클 완료 후 10~30분 쿨타임 → 무한 반복.
+    중단은 stop_ev.set() (기존 🛑 STOP 버튼) 으로 안전하게 처리됨.
     """
 
     def q_log(msg: str) -> None:
@@ -595,161 +599,192 @@ def _swarm_worker(
         q_log(f"[SWARM] ⚠️ 댓글 타겟 수집 실패 (SWARM 계속): {str(_te)[:80]}")
         _recent_posts = []
 
-    for wave in range(1, wave_count + 1):
-        if stop_ev.is_set():
-            q_log("[SWARM] 🛑 중단 요청 — 루프 종료")
-            break
+    _global_wave = 0
+    _cycle       = 0
 
-        q_log(f"═══════ WAVE {wave}/{wave_count} ═══════")
-        q_log(f"[W{wave}] 🧠 AI 작문 시작 → 주제: '{topic[:30]}'")
-        q_preview("", "", wave, "GENERATING")
+    while True:
+        _cycle += 1
+        if infinite:
+            q_log(f"[∞] 🔁 사이클 {_cycle} 시작 — {wave_count} WAVES 예정")
 
-        gen_title: str | None = None
-        gen_content: str = ""
-        _tc_list: list[dict] = []   # Wave 스코프 초기화 — 항상 정의됨 보장
-
-        # ── 다중 인격 랜덤 배정 ───────────────────────────────────────────────
-        # UI 톤 설정을 오버라이드하여 매 Wave마다 다른 현지인 말투로 작성.
-        _persona   = random.choice(_PERSONA_POOL)
-        _wave_tone = _persona["key"]
-        q_log(f"[W{wave}] 🎭 부여된 페르소나: {_persona['name']} ({_wave_tone})")
-
-        for attempt in range(3):
+        for wave in range(1, wave_count + 1):
             if stop_ev.is_set():
+                q_log("[SWARM] 🛑 중단 요청 — 루프 종료")
                 break
-            try:
-                result = brain.generate_post(
-                    topic=topic,
-                    gallery_id=gallery_id,
-                    tone=_wave_tone,
-                    context_hours=None,
-                    length=length,
-                    recent_posts=_recent_posts or None,
-                )
-                # ── Fail-Safe: 파싱 실패 시 WAVE 즉시 Abort ────────────────
-                # "_parse_error" 플래그 또는 빈 title/content → raw 텍스트 포스팅 원천 차단
-                # target_comments 실패는 Wave Abort 사유가 아님 (빈 배열로 safe fallback)
-                if result.get("_parse_error") or not result.get("title") or not result.get("content"):
-                    q_log(f"[W{wave}] ❌ 생성 파싱 실패 (Fail-Safe Abort) — WAVE {wave} 건너뜀")
-                    gen_title = None
-                    break
-                gen_title   = result["title"]
-                gen_content = result["content"]
-                q_log(f"[W{wave}] ✅ 생성 완료: '{gen_title[:30]}'")
+            _global_wave += 1
 
-                # ── 댓글 타겟 로그 (Phase 3.6 — 데이터 검증) ────────────────
-                _tc_list = result.get("target_comments", [])
-                if _tc_list:
-                    for _tc in _tc_list:
-                        q_log(
-                            f"[W{wave}] 💬 댓글 예약 "
-                            f"#{_tc.get('post_no')} → \"{str(_tc.get('comment', ''))[:50]}\""
-                        )
-                else:
-                    q_log(f"[W{wave}] 💬 댓글 타겟 없음 (AI 판단)")
-
-                q_preview(gen_title, gen_content, wave, "GENERATED")
-                break
-
-            except RateLimitError:
-                if attempt < 2:
-                    backoff = 60 * (2 ** attempt)
-                    q_log(f"[W{wave}] ⚠️ Rate Limit (429) — {backoff}초 대기 후 재시도 ({attempt+1}/3)...")
-                    _interruptible_sleep(backoff, stop_ev)
-                else:
-                    q_log(f"[W{wave}] ❌ Rate Limit 재시도 한도(3회) 초과 — WAVE {wave} 건너뜀")
-                    gen_title = None
-
-            except Exception as e:
-                q_log(f"[W{wave}] ❌ 생성 실패: {str(e)[:80]}")
-                gen_title = None
-                break
-
-        if not gen_title or stop_ev.is_set():
-            continue
-
-        # ── 계정 큐에서 다음 계정 순서대로 선택 ────────────────────────────
-        if not _account_queue:
-            _account_queue = list(_account_pool)
-            random.shuffle(_account_queue)
-            q_log("[SWARM] 🔄 계정 큐 소진 — 재충전 + 재셔플 완료")
-        _wave_account = _account_queue.pop(0)
-
-        q_log(f"[W{wave}] 🚀 자동 포스팅 시작 → {gallery_type}/{gallery_id}")
-        poster = GhostPoster(headless=headless, gallery_type=gallery_type)
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            post_result = loop.run_until_complete(
-                poster.auto_post(gallery_id=gallery_id, title=gen_title,
-                                 content=gen_content, account=_wave_account,
-                                 log_callback=q_log)
+            _wave_hdr = (
+                f"WAVE {_global_wave} (사이클 {_cycle}-{wave}/{wave_count})" if infinite
+                else f"WAVE {wave}/{wave_count}"
             )
-        finally:
-            loop.close()
-            asyncio.set_event_loop(None)
+            q_log(f"═══════ {_wave_hdr} ═══════")
+            q_log(f"[W{wave}] 🧠 AI 작문 시작 → 주제: '{topic[:30]}'")
+            q_preview("", "", wave, "GENERATING")
 
-        if post_result["success"]:
-            q_stat(success=1)
-            q_log(f"[W{wave}] 🎉 포스팅 성공! ({post_result['message']})")
-            q_preview(gen_title, gen_content, wave, "✅ POSTED")
-        else:
-            q_stat(fail=1)
-            q_log(f"[W{wave}] ❌ 포스팅 실패: {post_result['message']}")
-            q_preview(gen_title, gen_content, wave, "❌ FAILED")
+            gen_title: str | None = None
+            gen_content: str = ""
+            _tc_list: list[dict] = []   # Wave 스코프 초기화 — 항상 정의됨 보장
 
-        # ── 댓글 자동화 (target_comments 순회 실행) ──────────────────────────
-        # 포스팅 성공 여부와 무관하게 실행 (Gemini 스펙 "성공 또는 생략" 해석).
-        # 계정은 동일 Wave 계정(_wave_account) 재사용 → 포스팅과 같은 계정으로 댓글.
-        _comment_elapsed = 0
-        if _tc_list and not stop_ev.is_set():
-            q_log(f"[W{wave}] 💬 댓글 자동화 시작 — {len(_tc_list)}개 예약")
-            for _idx, _tc in enumerate(_tc_list, 1):
+            # ── 다중 인격 랜덤 배정 ─────────────────────────────────────────
+            # UI 톤 설정을 오버라이드하여 매 Wave마다 다른 현지인 말투로 작성.
+            _persona   = random.choice(_PERSONA_POOL)
+            _wave_tone = _persona["key"]
+            q_log(f"[W{wave}] 🎭 부여된 페르소나: {_persona['name']} ({_wave_tone})")
+
+            for attempt in range(3):
                 if stop_ev.is_set():
                     break
-                _post_no = _tc.get("post_no", "")
-                _comment = _tc.get("comment", "")
-                if not _post_no or not _comment:
-                    continue
-
-                q_log(f"[W{wave}] 💬 [{_idx}/{len(_tc_list)}] #{_post_no} 댓글 시도 중...")
-                _c_poster = GhostPoster(headless=headless, gallery_type=gallery_type)
-                _c_loop   = asyncio.new_event_loop()
-                asyncio.set_event_loop(_c_loop)
                 try:
-                    _c_result = _c_loop.run_until_complete(
-                        _c_poster.auto_comment(
-                            gallery_id=gallery_id,
-                            post_no=_post_no,
-                            comment=_comment,
-                            account=_wave_account,
-                            log_callback=q_log,
-                        )
+                    result = brain.generate_post(
+                        topic=topic,
+                        gallery_id=gallery_id,
+                        tone=_wave_tone,
+                        context_hours=None,
+                        length=length,
+                        recent_posts=_recent_posts or None,
                     )
-                finally:
-                    _c_loop.close()
-                    asyncio.set_event_loop(None)
+                    # ── Fail-Safe: 파싱 실패 시 WAVE 즉시 Abort ──────────────
+                    # "_parse_error" 플래그 또는 빈 title/content → raw 텍스트 포스팅 원천 차단
+                    # target_comments 실패는 Wave Abort 사유가 아님 (빈 배열로 safe fallback)
+                    if result.get("_parse_error") or not result.get("title") or not result.get("content"):
+                        q_log(f"[W{wave}] ❌ 생성 파싱 실패 (Fail-Safe Abort) — WAVE {wave} 건너뜀")
+                        gen_title = None
+                        break
+                    gen_title   = result["title"]
+                    gen_content = result["content"]
+                    q_log(f"[W{wave}] ✅ 생성 완료: '{gen_title[:30]}'")
 
-                if _c_result["success"]:
-                    q_log(f"[W{wave}] ✅ 댓글 성공 [{_idx}] #{_post_no}")
-                else:
-                    q_log(f"[W{wave}] ❌ 댓글 실패 [{_idx}]: {_c_result['message']}")
+                    # ── 댓글 타겟 로그 ───────────────────────────────────────
+                    _tc_list = result.get("target_comments", [])
+                    if _tc_list:
+                        for _tc in _tc_list:
+                            q_log(
+                                f"[W{wave}] 💬 댓글 예약 "
+                                f"#{_tc.get('post_no')} → \"{str(_tc.get('comment', ''))[:50]}\""
+                            )
+                    else:
+                        q_log(f"[W{wave}] 💬 댓글 타겟 없음 (AI 판단)")
 
-                # 댓글 간 인간다운 딜레이 (마지막 댓글 후는 생략 — Wave 간 딜레이로 흡수)
-                if _idx < len(_tc_list) and not stop_ev.is_set():
-                    _c_wait = random.randint(15, 45)
-                    q_log(f"[W{wave}] ⏳ 다음 댓글까지 {_c_wait}초 대기...")
-                    _interruptible_sleep(_c_wait, stop_ev)
-                    _comment_elapsed += _c_wait
+                    q_preview(gen_title, gen_content, wave, "GENERATED")
+                    break
 
-        if wave < wave_count and not stop_ev.is_set():
-            # 댓글에서 소비된 시간만큼 Wave 간 딜레이에서 차감 (최소 30초 보장)
-            _base_wait = random.randint(60, 180)
-            wait_sec   = max(30, _base_wait - _comment_elapsed)
-            q_log(f"[SWARM] ☕ 다음 WAVE까지 {wait_sec}초 대기...")
-            _interruptible_sleep(wait_sec, stop_ev)
+                except RateLimitError:
+                    if attempt < 2:
+                        backoff = 60 * (2 ** attempt)
+                        q_log(f"[W{wave}] ⚠️ Rate Limit (429) — {backoff}초 대기 후 재시도 ({attempt+1}/3)...")
+                        _interruptible_sleep(backoff, stop_ev)
+                    else:
+                        q_log(f"[W{wave}] ❌ Rate Limit 재시도 한도(3회) 초과 — WAVE {wave} 건너뜀")
+                        gen_title = None
 
-    q_log(f"═══════ SWARM COMPLETE — {wave_count} WAVES FIRED ═══════")
+                except Exception as e:
+                    q_log(f"[W{wave}] ❌ 생성 실패: {str(e)[:80]}")
+                    gen_title = None
+                    break
+
+            if not gen_title or stop_ev.is_set():
+                continue
+
+            # ── 계정 큐에서 다음 계정 순서대로 선택 ────────────────────────
+            if not _account_queue:
+                _account_queue = list(_account_pool)
+                random.shuffle(_account_queue)
+                q_log("[SWARM] 🔄 계정 큐 소진 — 재충전 + 재셔플 완료")
+            _wave_account = _account_queue.pop(0)
+
+            q_log(f"[W{wave}] 🚀 자동 포스팅 시작 → {gallery_type}/{gallery_id}")
+            poster = GhostPoster(headless=headless, gallery_type=gallery_type)
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                post_result = loop.run_until_complete(
+                    poster.auto_post(gallery_id=gallery_id, title=gen_title,
+                                     content=gen_content, account=_wave_account,
+                                     log_callback=q_log)
+                )
+            finally:
+                loop.close()
+                asyncio.set_event_loop(None)
+
+            if post_result["success"]:
+                q_stat(success=1)
+                q_log(f"[W{wave}] 🎉 포스팅 성공! ({post_result['message']})")
+                q_preview(gen_title, gen_content, wave, "✅ POSTED")
+            else:
+                q_stat(fail=1)
+                q_log(f"[W{wave}] ❌ 포스팅 실패: {post_result['message']}")
+                q_preview(gen_title, gen_content, wave, "❌ FAILED")
+
+            # ── 댓글 자동화 ────────────────────────────────────────────────
+            # 포스팅 성공 여부와 무관하게 실행. 계정은 동일 Wave 계정 재사용.
+            _comment_elapsed = 0
+            if _tc_list and not stop_ev.is_set():
+                q_log(f"[W{wave}] 💬 댓글 자동화 시작 — {len(_tc_list)}개 예약")
+                for _idx, _tc in enumerate(_tc_list, 1):
+                    if stop_ev.is_set():
+                        break
+                    _post_no = _tc.get("post_no", "")
+                    _comment = _tc.get("comment", "")
+                    if not _post_no or not _comment:
+                        continue
+
+                    q_log(f"[W{wave}] 💬 [{_idx}/{len(_tc_list)}] #{_post_no} 댓글 시도 중...")
+                    _c_poster = GhostPoster(headless=headless, gallery_type=gallery_type)
+                    _c_loop   = asyncio.new_event_loop()
+                    asyncio.set_event_loop(_c_loop)
+                    try:
+                        _c_result = _c_loop.run_until_complete(
+                            _c_poster.auto_comment(
+                                gallery_id=gallery_id,
+                                post_no=_post_no,
+                                comment=_comment,
+                                account=_wave_account,
+                                log_callback=q_log,
+                            )
+                        )
+                    finally:
+                        _c_loop.close()
+                        asyncio.set_event_loop(None)
+
+                    if _c_result["success"]:
+                        q_log(f"[W{wave}] ✅ 댓글 성공 [{_idx}] #{_post_no}")
+                    else:
+                        q_log(f"[W{wave}] ❌ 댓글 실패 [{_idx}]: {_c_result['message']}")
+
+                    # 댓글 간 인간다운 딜레이 (마지막 댓글은 Wave 간 딜레이로 흡수)
+                    if _idx < len(_tc_list) and not stop_ev.is_set():
+                        _c_wait = random.randint(15, 45)
+                        q_log(f"[W{wave}] ⏳ 다음 댓글까지 {_c_wait}초 대기...")
+                        _interruptible_sleep(_c_wait, stop_ev)
+                        _comment_elapsed += _c_wait
+
+            if wave < wave_count and not stop_ev.is_set():
+                # 댓글에서 소비된 시간만큼 Wave 간 딜레이에서 차감 (최소 30초 보장)
+                _base_wait = random.randint(60, 180)
+                wait_sec   = max(30, _base_wait - _comment_elapsed)
+                q_log(f"[SWARM] ☕ 다음 WAVE까지 {wait_sec}초 대기...")
+                _interruptible_sleep(wait_sec, stop_ev)
+
+        # ── 사이클 완료 후 처리 ───────────────────────────────────────────────
+        if stop_ev.is_set() or not infinite:
+            break
+
+        # 무한 모드: 다음 사이클 전 긴 쿨타임 (IP 차단 방지)
+        _cooldown = random.randint(600, 1800)  # 10~30분 랜덤
+        q_log(
+            f"[∞] 🌙 사이클 {_cycle} 완료 ({wave_count} WAVES) "
+            f"— 다음 사이클까지 {_cooldown // 60}분 {_cooldown % 60}초 대기 "
+            f"(🛑 STOP으로 즉시 중단 가능)"
+        )
+        _interruptible_sleep(_cooldown, stop_ev)
+        if stop_ev.is_set():
+            break
+        q_log(f"[∞] ☀️ 쿨타임 종료 — 사이클 {_cycle + 1} 시작")
+
+    if infinite:
+        q_log(f"[∞] ═══ INFINITE SWARM HALTED — 총 {_global_wave} WAVES 완료 ═══")
+    else:
+        q_log(f"═══════ SWARM COMPLETE — {wave_count} WAVES FIRED ═══════")
     log_q.put({"type": "done"})
 
 
@@ -1514,6 +1549,11 @@ with pay_left:
         min_value=1, max_value=10, key="swarm_wave_count",
         help="연속 폭격 횟수. 각 WAVE 사이에 60~180초 랜덤 대기.",
     )
+    st.checkbox(
+        "♾️ 무한 모드 (Infinite Run)",
+        key="swarm_infinite",
+        help="활성화 시 WAVE 완료 후 10~30분 랜덤 쿨타임을 두고 무한 반복. 기존 🛑 STOP 버튼으로 중단 가능.",
+    )
 
 with pay_right:
     st.text_input(
@@ -1612,8 +1652,9 @@ if fire_clicked:
             st.session_state.last_fired              = True
             st.session_state.swarm_running           = True
 
-            _log_q: queue.Queue     = queue.Queue()
+            _log_q: queue.Queue       = queue.Queue()
             _stop_ev: threading.Event = threading.Event()
+            _infinite: bool           = bool(st.session_state.get("swarm_infinite", False))
             st.session_state.swarm_queue      = _log_q
             st.session_state.swarm_stop_event = _stop_ev
 
@@ -1630,6 +1671,7 @@ if fire_clicked:
                     "tone":         _neural_tone,
                     "length":       _length,
                     "headless":     _headless,
+                    "infinite":     _infinite,
                 },
                 daemon=True,
             ).start()

@@ -828,12 +828,13 @@ class GalleryScraper:
                 # ── High-Quality Tagging (념글 판별) ──
                 result.is_winner = result.recommends >= 10
 
-                # ── Bot Detection: 전각 마침표(．, U+FF0E) 1차 + ledger 2차 백업 ──
+                # ── Bot Detection (딥 스크래핑): 본문 전각 마침표(U+FF0E) 1차 + ledger 2차 ──
+                # 마커가 본문 끝에 삽입되므로 style_tags/clean_text 적용 전에 체크.
                 try:
                     from .ledger import ledger_load_set as _lls
-                    result.is_ai = "\uff0e" in result.title or str(post_id) in _lls(self.gallery_id)
+                    result.is_ai = "\uff0e" in result.content or str(post_id) in _lls(self.gallery_id)
                 except Exception:
-                    result.is_ai = "\uff0e" in result.title
+                    result.is_ai = "\uff0e" in result.content
 
                 # ── Style tags + Clean text ──
                 result.style_tags = extract_style_tags(result.title, result.content)
@@ -1320,7 +1321,7 @@ class TrendScraper:
 
         # ── 로컬 원장 로드 (페이지 단위 1회) ─────────────────────────────────
         # bot_ledger.json 에 기록된 post_no 집합을 가져와 is_bot 2차 백업 판별에 사용.
-        # 1차: 전각 마침표(．, U+FF0E) — 제목 끝 부착, 한국어 키보드 입력 불가 → False Positive 없음.
+        # 목록 스캔: 본문 접근 불가 → ledger 대조만으로 is_bot 판별 (딥 스크래퍼가 마커 확인).
         try:
             from .ledger import ledger_load_set as _ledger_load_set
             _bot_nos = _ledger_load_set(gallery_id)
@@ -1393,8 +1394,8 @@ class TrendScraper:
                     "views":      _parse_int(views_el),
                     "recommends": _parse_int(rec_el),
                     "author":     author,
-                    # 전각 마침표(．, U+FF0E) 1차 체크 → ledger 2차 백업
-                    "is_bot":     "\uff0e" in raw_title or post_no in _bot_nos,
+                    # 목록 스캔: 본문 접근 불가 → ledger 대조만으로 판별
+                    "is_bot":     post_no in _bot_nos,
                 })
             except Exception:  # noqa: BLE001 — 개별 행 파싱 실패는 무시
                 continue

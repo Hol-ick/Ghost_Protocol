@@ -379,14 +379,9 @@ class GhostPoster:
         if log:
             log("[POSTER] ✍️ 갤러리 글쓰기 페이지 로드 완료")
 
-        # ── 제목 입력 (전각 마침표 마커 삽입) ──
-        # 전각 마침표(．, U+FF0E)를 제목 맨 끝에 부착 — 한국어 키보드로 입력 불가.
-        # 가시적 문자라 DC 서버 Sanitize 대상이 아님 (invisible char 필터 비적용).
-        # 이중 삽입 방지: 이미 ．로 끝나는 경우 추가 생략 (LLM이 전각 문장부호 쓰는 엣지케이스).
-        _stripped = title.strip()
-        marked_title = _stripped if _stripped.endswith("\uff0e") else _stripped + "\uff0e"
+        # ── 제목 입력 (마커 없음 — 마커는 본문으로 이동) ──
         if log:
-            log(f"[POSTER] 📝 제목 입력 중: '{title[:30]}...' [전각 마침표 마커]")
+            log(f"[POSTER] 📝 제목 입력 중: '{title[:30]}...'")
 
         # Jitter: #subject 클릭 전 짧은 마우스 이동 시뮬레이션
         await page.wait_for_timeout(int(random.uniform(500, 1200)))
@@ -394,7 +389,7 @@ class GhostPoster:
         try:
             subject_input = page.locator("#subject")
             await subject_input.click()
-            await subject_input.type(marked_title, delay=int(random.uniform(70, 120)))
+            await subject_input.type(title.strip(), delay=int(random.uniform(70, 120)))
             await page.wait_for_timeout(int(random.uniform(400, 800)))
         except Exception as e:
             if log:
@@ -488,15 +483,21 @@ class GhostPoster:
             if log:
                 log(f"[POSTER] ⚠️ 짤방 삽입 실패 (무시하고 계속): {str(e)[:80]}")
 
-        # ── 본문 타이핑 ──
+        # ── 본문 타이핑 (전각 마침표 스텔스 마커 본문 끝에 삽입) ──
+        # 제목 끝 마커는 HTML 목록 페이지에서 보여 식별 위험 존재.
+        # 본문 끝은 목록에 노출되지 않아 스텔스성이 훨씬 높음.
+        # 이중 삽입 방지: LLM이 이미 ．로 끝나는 본문을 드물게 생성하는 엣지케이스 처리.
+        _c_stripped  = content.rstrip()
+        marked_content = _c_stripped if _c_stripped.endswith("\uff0e") else _c_stripped + "\uff0e"
+
         if log:
-            log("[POSTER] ⌨️ 본문 타이핑 시작...")
+            log("[POSTER] ⌨️ 본문 타이핑 시작... [전각 마침표 마커 본문 말미 삽입]")
 
         # Jitter: 에디터 포커스 후 타이핑 시작 전 짧은 멈춤
         await page.wait_for_timeout(int(random.uniform(800, 1800)))
 
         try:
-            await page.keyboard.type(content, delay=int(random.uniform(80, 130)))
+            await page.keyboard.type(marked_content, delay=int(random.uniform(80, 130)))
             # Jitter: 타이핑 완료 후 검토하는 척 멈춤
             await page.wait_for_timeout(int(random.uniform(1000, 2500)))
         except Exception as e:
