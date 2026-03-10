@@ -279,6 +279,7 @@ class GhostBrain:
             "monologue": "tone == monologue 규칙을 따라 배설형 독백으로 써. 추임새/감정기호 절대 금지. 허무하고 우울하게",
             "aggressive": "tone == aggressive 규칙을 따라 극도로 공격적이고 분노에 찬 어조로 써",
             "aggro": "tone == aggro 규칙을 따라 어그로 극대화. 팩트 비틀기, 극단적 단어 사용",
+            "ventilator": "tone == ventilator 규칙을 따라 현재 갤러리 분위기에 피로감을 느끼는 현지인처럼 무심하게 써. 날씨·밥·딴짓 같은 일상 소재로 자연스럽게 화제를 전환해",
         }
 
         length_desc = {
@@ -335,8 +336,18 @@ class GhostBrain:
             )
 
         # monologue × 아주 짧게 교차 지시 (가장 치명적 조합 — 별도 강화)
+        # ventilator 전용 지시: [포스팅 주제] 무시하고 일상 화제 전환
         cross_instruction = ""
-        if tone == "monologue" and length == "아주 짧게 (1문장)":
+        if tone == "ventilator":
+            cross_instruction = (
+                "\n[⚠️ 최우선 지시: ventilator 페르소나]\n"
+                "[포스팅 주제]는 참고하지 마라. 지금 갤러리 분위기 자체에 지쳐서 완전히 딴소리를 하는 글을 써라.\n"
+                "소재는 반드시 아래 중 하나에서 골라라:\n"
+                "  날씨 / 먹은 것·먹고 싶은 것 / 잠 / 유튜브·게임 딴짓 / 몸 컨디션 / 아무 일상\n"
+                "갤러리 떡밥·갈등·이슈는 단 한 마디도 언급 금지.\n"
+                "제목도 본문도 완전히 현지인이 심심해서 올린 일상 글 느낌으로 짧게 끝낼 것.\n"
+            )
+        elif tone == "monologue" and length == "아주 짧게 (1문장)":
             cross_instruction = (
                 "\n[⚠️ 최우선 지시: monologue × 아주 짧게 조합]\n"
                 "본문은 탄식 한 방으로 끝내라. 아래 예시처럼:\n"
@@ -724,5 +735,7 @@ class GhostBrain:
             "ai_post_count":   _ai_post_count,
             "total_post_count": _total_post_count,
         }
+        # 원본 게시글 목록 pass-through (UI 디버깅용, analyze_trend에서 가공 안 함)
+        result["raw_posts"] = raw_data.get("raw_posts", [])
 
         return result

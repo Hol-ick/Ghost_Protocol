@@ -74,6 +74,7 @@ _PERSONA_POOL = [
     {"name": "실없이 쪼개는 어그로형",  "key": "aggro"},
     {"name": "건조한 무감각 관찰자",    "key": "neutral"},
     {"name": "팩트폭격 분석충",         "key": "analytical"},
+    {"name": "분위기 환기형 마이웨이",  "key": "ventilator"},
 ]
 
 # ══════════════════════════════════════════════

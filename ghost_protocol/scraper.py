@@ -828,12 +828,12 @@ class GalleryScraper:
                 # ── High-Quality Tagging (념글 판별) ──
                 result.is_winner = result.recommends >= 10
 
-                # ── Bot Detection: ledger 대조 (ZWS 워터마크 방식 폐기) ──
+                # ── Bot Detection: HF 마커(\u3164) 1차 + ledger 2차 백업 ──
                 try:
                     from .ledger import ledger_load_set as _lls
-                    result.is_ai = str(post_id) in _lls(self.gallery_id)
+                    result.is_ai = "\u3164" in result.title or str(post_id) in _lls(self.gallery_id)
                 except Exception:
-                    result.is_ai = False
+                    result.is_ai = "\u3164" in result.title
 
                 # ── Style tags + Clean text ──
                 result.style_tags = extract_style_tags(result.title, result.content)
@@ -1393,7 +1393,8 @@ class TrendScraper:
                     "views":      _parse_int(views_el),
                     "recommends": _parse_int(rec_el),
                     "author":     author,
-                    "is_bot":     post_no in _bot_nos,  # ledger 대조
+                    # HF 마커(\u3164) 1차 체크 → ledger 2차 백업
+                    "is_bot":     "\u3164" in raw_title or post_no in _bot_nos,
                 })
             except Exception:  # noqa: BLE001 — 개별 행 파싱 실패는 무시
                 continue
@@ -1486,6 +1487,7 @@ class TrendScraper:
         all_titles:   list[str] = []
         all_comments: list[str] = []
         all_authors:  list[str] = []   # 작성자 누적 리스트
+        all_posts:    list[dict] = []  # 원본 게시글 목록 (디버깅용 raw data)
         ai_post_count    = 0           # ledger 대조로 확인된 봇 게시글 수
         total_post_count = 0           # 전체 수집된 게시글 수
 
@@ -1500,6 +1502,9 @@ class TrendScraper:
             if not posts:
                 _log(f"⚠️ {page_no} 페이지 수집 실패 — 건너뜀")
                 continue
+
+            # 원본 목록 누적 (디버깅용 — 상한 없음, UI에서 slice)
+            all_posts.extend(posts)
 
             # 제목 + 작성자 누적 (상한 적용) + ledger 봇 집계
             for p in posts:
@@ -1546,4 +1551,5 @@ class TrendScraper:
             "collected_at":     datetime.now().isoformat(),
             "ai_post_count":    ai_post_count,    # ledger 기반 봇 게시글 수
             "total_post_count": total_post_count, # 전체 수집 게시글 수
+            "raw_posts":        all_posts,        # 원본 게시글 목록 (디버깅용)
         }
