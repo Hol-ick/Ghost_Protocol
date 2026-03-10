@@ -346,7 +346,7 @@ class GhostPoster:
             if log:
                 log(f"[POSTER] [ERROR] 글쓰기 페이지 로드 실패: {str(e)[:100]}")
             await self._take_death_cam(log)
-            return False
+            return None
 
         # ── WAF/Cloudflare 빈 화면 방어 ──
         # "Just a moment..." 페이지가 뜨면 최대 15초 대기하며 우회 완료 대기
@@ -395,7 +395,7 @@ class GhostPoster:
             if log:
                 log(f"[POSTER] [ERROR] #subject 셀렉터 실패: {str(e)[:100]}")
             await self._take_death_cam(log)
-            return False
+            return None
 
         if log:
             log("[POSTER] ✅ 제목 입력 완료")
@@ -430,7 +430,7 @@ class GhostPoster:
             if log:
                 log("[POSTER] [ERROR] 에디터 영역을 찾을 수 없습니다 (iframe/contenteditable 모두 실패)")
             await self._take_death_cam(log)
-            return False
+            return None
 
         if log:
             log("[POSTER] ✅ 에디터 포커스 완료.")
@@ -498,7 +498,7 @@ class GhostPoster:
             if log:
                 log(f"[POSTER] [ERROR] 본문 타이핑 중 에러: {str(e)[:100]}")
             await self._take_death_cam(log)
-            return False
+            return None
 
         if log:
             line_count = len(content.split("\n"))
@@ -514,34 +514,54 @@ class GhostPoster:
         try:
             submit_btn = page.locator(".btn_blue.btn_svc.write")
             await submit_btn.click()
-            # Jitter: 서버 처리 + 페이지 전환 대기
-            await page.wait_for_timeout(int(random.uniform(3000, 5000)))
         except Exception as e:
             if log:
                 log(f"[POSTER] [ERROR] .btn_blue.btn_svc.write 클릭 실패: {str(e)[:100]}")
             await self._take_death_cam(log)
-            return False
+            return None
 
         if log:
-            log("[POSTER] 🚀 등록 버튼 클릭 완료 — 결과 확인 중...")
+            log("[POSTER] 🚀 등록 버튼 클릭 완료 — board/view 리디렉트 대기 중...")
 
-        # 글쓰기 성공 확인: 리디렉트 후 URL이 write 페이지를 벗어나면 성공
+        # ── 리디렉트 대기: board/view URL로 전환될 때까지 최대 12초 ───────────
+        # wait_for_timeout 고정 대기 방식은 서버 응답 지연 시 race condition 발생.
+        # wait_for_url로 실제 URL 변경을 감지해야 post_no 추출 신뢰성 보장.
+        try:
+            await page.wait_for_url("**/board/view/**", timeout=12000)
+        except Exception:
+            # 타임아웃 또는 DC Inside가 다른 URL 패턴으로 리디렉트한 경우
+            # 추가 2초 대기 후 현재 URL로 판단
+            if log:
+                log("[POSTER] ⚠️ board/view 리디렉트 감지 실패 — 2초 추가 대기 후 URL 확인")
+            await page.wait_for_timeout(2000)
+
+        # 글쓰기 성공 확인: write 페이지를 벗어났으면 성공
         current_url = page.url
         is_posted = "write" not in current_url.lower()
 
         if not is_posted:
             if log:
-                log(f"[POSTER] [ERROR] 글 등록 실패 — 페이지가 이동하지 않음 (URL: {current_url[:60]})")
+                log(f"[POSTER] [ERROR] 글 등록 실패 — 페이지가 이동하지 않음 (URL: {current_url[:70]})")
             await self._take_death_cam(log)
             return None
 
-        # ── post_no 추출: DC Inside 뷰 페이지 URL에서 no= 파라미터 파싱 ─────
+        # ── post_no 추출 (1차: URL 파싱) ────────────────────────────────────
         # 예: .../board/view/?id=hwhy&no=5840 → "5840"
         _m = re.search(r"[?&]no=(\d+)", current_url)
         post_no = _m.group(1) if _m else ""
 
+        # ── post_no 추출 (2차 Fallback: DOM input[name='no']) ────────────────
+        # DC Inside 글 보기 페이지의 댓글 form에 숨김 input으로 포함되어 있음.
+        if not post_no:
+            try:
+                _no_el = page.locator("input[name='no']").first
+                _val = await _no_el.get_attribute("value", timeout=3000)
+                post_no = (_val or "").strip()
+            except Exception:
+                pass
+
         if log:
-            _no_label = f" (no={post_no})" if post_no else " (no 파라미터 없음)"
+            _no_label = f" (no={post_no})" if post_no else " (no 파라미터 추출 불가)"
             log(f"[POSTER] 🎉 글 등록 성공! → {gallery_id}{_no_label}")
 
         return post_no
@@ -819,9 +839,14 @@ class GhostPoster:
                     + (f", no={post_no}" if post_no else "")
                     + ")"
                 )
-                # ── 로컬 원장 기록: ledger에 post_no 추가 (ZWS 대체) ─────────
+                # ── 로컬 원장 기록: ledger에 post_no 추가 ────────────────────
                 if post_no:
                     ledger_add(gallery_id, post_no)
+                    if log:
+                        log(f"[LEDGER] ✅ 글 번호 {post_no} 장부 기록 완료 ({gallery_id})")
+                else:
+                    if log:
+                        log("[LEDGER] ⚠️ post_no 없음 — 장부 기록 생략 (점유율 집계 제외)")
                 if log:
                     log(f"[POSTER] ✅ 전체 작업 완료! (계정: {masked}, 갤러리: {gallery_id})")
             else:

@@ -80,4 +80,5 @@ def ledger_load_set(gallery_id: str) -> set:
     """
     with _LOCK:
         data = _load_raw()
-    return {str(p) for p in data.get(gallery_id, [])}
+    # str().strip() 강제 캐스팅: int/float 혼입 및 공백 잔여 원천 차단
+    return {str(p).strip() for p in data.get(gallery_id, []) if str(p).strip()}
