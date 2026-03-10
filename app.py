@@ -9,6 +9,7 @@ Pipeline: INTEL (Trend Analysis) → PAYLOAD (Topic + Config) → LAUNCH (FIRE +
 
 import asyncio
 import html as _html
+import json
 import os
 import queue
 import random
@@ -74,6 +75,39 @@ _PERSONA_POOL = [
     {"name": "건조한 무감각 관찰자",    "key": "neutral"},
     {"name": "팩트폭격 분석충",         "key": "analytical"},
 ]
+
+# ══════════════════════════════════════════════
+# Gallery History — 갤러리 히스토리 퀵셀렉트
+# ══════════════════════════════════════════════
+_GALLERY_HISTORY_PATH = "gallery_history.json"
+_HISTORY_MAX = 8  # 최대 저장 항목 수
+
+
+def _history_load() -> list[dict]:
+    """로컬 갤러리 히스토리를 로드. 파일 없거나 손상 시 빈 리스트 반환."""
+    try:
+        with open(_GALLERY_HISTORY_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def _history_save(gallery_id: str, type_label: str) -> None:
+    """갤러리 ID + 타입을 히스토리에 최신순으로 저장 (중복 제거, 최대 _HISTORY_MAX)."""
+    if not gallery_id.strip():
+        return
+    data = _history_load()
+    # 동일 gallery_id 기존 항목 제거 후 맨 앞에 삽입 (최신순)
+    data = [e for e in data if e.get("gallery_id") != gallery_id]
+    data.insert(0, {"gallery_id": gallery_id, "type_label": type_label})
+    data = data[:_HISTORY_MAX]
+    try:
+        with open(_GALLERY_HISTORY_PATH, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass  # 파일 쓰기 실패는 무시 (UX 차단 방지)
+
 
 # ══════════════════════════════════════════════
 # CSS — Stealth Dark Bento Theme 2.0
@@ -872,6 +906,12 @@ def _intel_results_fragment() -> None:
                 ss.intel_running = False
                 ss.intel_queue   = None
                 _intel_done = True
+                # 분석 성공 시 갤러리 히스토리 저장 (파일 기반, 비파괴적)
+                if ss.intel_result:
+                    _history_save(
+                        ss.get("intel_gallery_id", ""),
+                        ss.get("intel_type_label", "마이너 (mgallery)"),
+                    )
 
     # ── 표시할 결과 결정 (live result > cache) ─────────────────────────
     _ir = ss.intel_result
@@ -1066,6 +1106,22 @@ def _intel_results_fragment() -> None:
             if ss["_intel_fig"] is not None:
                 st.plotly_chart(ss["_intel_fig"], use_container_width=True,
                                 config={"displayModeBar": False})
+
+        # ── 원본 게시글 디버깅 뷰 (ledger 대조 확인용) ─────────────────────
+        _raw_posts = _ir.get("raw_posts", [])
+        if _raw_posts:
+            with st.expander(f"🔍 수집 게시글 원본 ({len(_raw_posts)}개) — Ledger 대조 디버깅", expanded=False):
+                import pandas as pd
+                _df_data = [
+                    {
+                        "글번호": str(p.get("post_no", "")),
+                        "제목": str(p.get("title", ""))[:45],
+                        "작성자": str(p.get("author", "")),
+                        "🤖 봇": "✅ BOT" if p.get("is_bot") else "—",
+                    }
+                    for p in _raw_posts[:100]
+                ]
+                st.dataframe(pd.DataFrame(_df_data), use_container_width=True, hide_index=True)
 
     elif ss.get("intel_running"):
         # 수집/분석 진행 중
@@ -1347,6 +1403,22 @@ with st.expander("🔍  STEP 1  —  SITUATION ROOM  ·  TREND ANALYSIS"):
 
     # ── 컨트롤 패널 ─────────────────────────────────────────────────────
     with _intel_ctrl:
+        # ── 갤러리 히스토리 빠른 선택 ────────────────────────────────────
+        _hist_entries = _history_load()
+        if _hist_entries:
+            st.caption("🕐 최근 분석")
+            _hcols = st.columns(min(len(_hist_entries), 4))
+            for _hi, _he in enumerate(_hist_entries[:4]):
+                with _hcols[_hi]:
+                    if st.button(
+                        _he["gallery_id"],
+                        key=f"hist_q_{_he['gallery_id']}",
+                        use_container_width=True,
+                    ):
+                        st.session_state.intel_gallery_id = _he["gallery_id"]
+                        st.session_state.intel_type_label = _he.get("type_label", "마이너 (mgallery)")
+                        st.rerun(scope="app")
+
         st.text_input(
             "분석할 갤러리 ID",
             key="intel_gallery_id",
