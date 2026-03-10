@@ -379,13 +379,14 @@ class GhostPoster:
         if log:
             log("[POSTER] ✍️ 갤러리 글쓰기 페이지 로드 완료")
 
-        # ── 제목 입력 (NBSP 스텔스 마커 삽입) ──
-        # 첫 번째 일반 공백을 NBSP(\u00A0)로 치환 — 시각적으로 동일, DC 서버 Sanitize 미적용.
-        # 공백 없는 단일어 제목은 치환 불가 → 마킹 생략 후 Ledger 백업에 의존.
-        marked_title = title.replace(" ", "\u00A0", 1) if " " in title else title
+        # ── 제목 입력 (전각 마침표 마커 삽입) ──
+        # 전각 마침표(．, U+FF0E)를 제목 맨 끝에 부착 — 한국어 키보드로 입력 불가.
+        # 가시적 문자라 DC 서버 Sanitize 대상이 아님 (invisible char 필터 비적용).
+        # 이중 삽입 방지: 이미 ．로 끝나는 경우 추가 생략 (LLM이 전각 문장부호 쓰는 엣지케이스).
+        _stripped = title.strip()
+        marked_title = _stripped if _stripped.endswith("\uff0e") else _stripped + "\uff0e"
         if log:
-            _marker_note = "[NBSP 마커]" if " " in title else "[공백 없음 — 마킹 생략]"
-            log(f"[POSTER] 📝 제목 입력 중: '{title[:30]}...' {_marker_note}")
+            log(f"[POSTER] 📝 제목 입력 중: '{title[:30]}...' [전각 마침표 마커]")
 
         # Jitter: #subject 클릭 전 짧은 마우스 이동 시뮬레이션
         await page.wait_for_timeout(int(random.uniform(500, 1200)))
