@@ -828,12 +828,12 @@ class GalleryScraper:
                 # ── High-Quality Tagging (념글 판별) ──
                 result.is_winner = result.recommends >= 10
 
-                # ── Bot Detection: HF 마커(\u3164) 1차 + ledger 2차 백업 ──
+                # ── Bot Detection: ZWS 미드 인젝션(\u200B) 1차 + ledger 2차 백업 ──
                 try:
                     from .ledger import ledger_load_set as _lls
-                    result.is_ai = "\u3164" in result.title or str(post_id) in _lls(self.gallery_id)
+                    result.is_ai = "\u200B" in result.title or str(post_id) in _lls(self.gallery_id)
                 except Exception:
-                    result.is_ai = "\u3164" in result.title
+                    result.is_ai = "\u200B" in result.title
 
                 # ── Style tags + Clean text ──
                 result.style_tags = extract_style_tags(result.title, result.content)
@@ -1319,8 +1319,8 @@ class TrendScraper:
             return []
 
         # ── 로컬 원장 로드 (페이지 단위 1회) ─────────────────────────────────
-        # bot_ledger.json 에 기록된 post_no 집합을 가져와 is_bot 판별에 사용.
-        # ZWS 워터마크 방식 폐기 — DC Inside 서버가 특수문자를 Sanitize하기 때문.
+        # bot_ledger.json 에 기록된 post_no 집합을 가져와 is_bot 2차 백업 판별에 사용.
+        # 1차: ZWS 미드 인젝션(\u200B) — Edge Trimming 우회 (제목 내부에 삽입).
         try:
             from .ledger import ledger_load_set as _ledger_load_set
             _bot_nos = _ledger_load_set(gallery_id)
@@ -1393,8 +1393,8 @@ class TrendScraper:
                     "views":      _parse_int(views_el),
                     "recommends": _parse_int(rec_el),
                     "author":     author,
-                    # HF 마커(\u3164) 1차 체크 → ledger 2차 백업
-                    "is_bot":     "\u3164" in raw_title or post_no in _bot_nos,
+                    # ZWS 미드 인젝션(\u200B) 1차 체크 → ledger 2차 백업
+                    "is_bot":     "\u200B" in raw_title or post_no in _bot_nos,
                 })
             except Exception:  # noqa: BLE001 — 개별 행 파싱 실패는 무시
                 continue

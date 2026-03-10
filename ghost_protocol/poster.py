@@ -379,12 +379,16 @@ class GhostPoster:
         if log:
             log("[POSTER] ✍️ 갤러리 글쓰기 페이지 로드 완료")
 
-        # ── 제목 입력 (한글 채움 문자 마커 삽입) ──
-        # \u3164(한글 채움 문자)를 제목 끝에 붙여 스크래퍼가 봇 게시글을 식별하도록 함.
-        # DC Inside 서버는 \u3164를 정상 한글 코드 포인트로 인식 → 제거하지 않음.
-        marked_title = title + "\u3164"
+        # ── 제목 입력 (ZWS 미드 인젝션 마커 삽입) ──
+        # Edge Trimming 우회: 마커를 제목 끝이 아닌 첫 글자와 두 번째 글자 사이에 삽입.
+        # DC Inside 서버의 trim()은 양 끝만 제거하므로 내부 ZWS(\u200B)는 생존.
+        # 안전 처리: 제목이 빈 문자열일 경우 마킹 생략 (Fail-Safe — app.py가 이미 필터링).
+        if len(title) >= 2:
+            marked_title = title[:1] + "\u200B" + title[1:]
+        else:
+            marked_title = title  # 1글자 이하 — 마킹 생략 (write_post caller가 보장)
         if log:
-            log(f"[POSTER] 📝 제목 입력 중: '{title[:30]}...' [HF 마커 삽입]")
+            log(f"[POSTER] 📝 제목 입력 중: '{title[:30]}...' [ZWS 미드 인젝션]")
 
         # Jitter: #subject 클릭 전 짧은 마우스 이동 시뮬레이션
         await page.wait_for_timeout(int(random.uniform(500, 1200)))
