@@ -379,16 +379,13 @@ class GhostPoster:
         if log:
             log("[POSTER] ✍️ 갤러리 글쓰기 페이지 로드 완료")
 
-        # ── 제목 입력 (ZWS 미드 인젝션 마커 삽입) ──
-        # Edge Trimming 우회: 마커를 제목 끝이 아닌 첫 글자와 두 번째 글자 사이에 삽입.
-        # DC Inside 서버의 trim()은 양 끝만 제거하므로 내부 ZWS(\u200B)는 생존.
-        # 안전 처리: 제목이 빈 문자열일 경우 마킹 생략 (Fail-Safe — app.py가 이미 필터링).
-        if len(title) >= 2:
-            marked_title = title[:1] + "\u200B" + title[1:]
-        else:
-            marked_title = title  # 1글자 이하 — 마킹 생략 (write_post caller가 보장)
+        # ── 제목 입력 (NBSP 스텔스 마커 삽입) ──
+        # 첫 번째 일반 공백을 NBSP(\u00A0)로 치환 — 시각적으로 동일, DC 서버 Sanitize 미적용.
+        # 공백 없는 단일어 제목은 치환 불가 → 마킹 생략 후 Ledger 백업에 의존.
+        marked_title = title.replace(" ", "\u00A0", 1) if " " in title else title
         if log:
-            log(f"[POSTER] 📝 제목 입력 중: '{title[:30]}...' [ZWS 미드 인젝션]")
+            _marker_note = "[NBSP 마커]" if " " in title else "[공백 없음 — 마킹 생략]"
+            log(f"[POSTER] 📝 제목 입력 중: '{title[:30]}...' {_marker_note}")
 
         # Jitter: #subject 클릭 전 짧은 마우스 이동 시뮬레이션
         await page.wait_for_timeout(int(random.uniform(500, 1200)))
@@ -847,6 +844,7 @@ class GhostPoster:
                     + ")"
                 )
                 # ── 로컬 원장 기록: ledger에 post_no 추가 ────────────────────
+                # gallery_id 정규화: ledger.py가 정규화를 이중으로 수행하지만 방어적으로 적용
                 if post_no:
                     ledger_add(gallery_id, post_no)
                     if log:

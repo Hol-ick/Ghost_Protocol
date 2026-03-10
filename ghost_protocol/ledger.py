@@ -21,6 +21,23 @@ from pathlib import Path
 _LEDGER_PATH = Path(__file__).parent.parent / "bot_ledger.json"
 _LOCK = threading.Lock()
 
+# gallery_id 정규화: URL 접두사가 섞여 들어오는 경우를 방어
+_GID_PREFIXES = ("board/", "mgallery/", "mini/")
+
+
+def _normalize_gid(gallery_id: str) -> str:
+    """Strip known URL prefixes and whitespace from gallery_id.
+
+    Ensures ledger_add() and ledger_load_set() always use the same key
+    regardless of whether callers pass 'hwhy' or 'board/hwhy'.
+    """
+    gid = gallery_id.strip()
+    for pfx in _GID_PREFIXES:
+        if gid.startswith(pfx):
+            gid = gid[len(pfx):]
+            break  # 접두사는 최대 1개
+    return gid
+
 
 # ══════════════════════════════════════════════
 # Internal helpers (caller must hold _LOCK)
@@ -60,13 +77,15 @@ def ledger_add(gallery_id: str, post_no: str | int) -> None:
     """Record a bot-posted post_no for gallery_id.
 
     Thread-safe. No-op if already recorded. Silently ignores empty values.
+    gallery_id is normalized (prefix-stripped) before use as a key.
     """
     _no = str(post_no).strip()
-    if not _no or not gallery_id:
+    _gid = _normalize_gid(gallery_id)
+    if not _no or not _gid:
         return
     with _LOCK:
         data = _load_raw()
-        entries: list = data.setdefault(gallery_id, [])
+        entries: list = data.setdefault(_gid, [])
         if _no not in entries:
             entries.append(_no)
             _save_raw(data)
@@ -77,8 +96,10 @@ def ledger_load_set(gallery_id: str) -> set:
 
     Loads the ledger once per call — callers should cache this when
     iterating over many posts (e.g., fetch_post_list loop).
+    gallery_id is normalized (prefix-stripped) before use as a key.
     """
+    _gid = _normalize_gid(gallery_id)
     with _LOCK:
         data = _load_raw()
     # str().strip() 강제 캐스팅: int/float 혼입 및 공백 잔여 원천 차단
-    return {str(p).strip() for p in data.get(gallery_id, []) if str(p).strip()}
+    return {str(p).strip() for p in data.get(_gid, []) if str(p).strip()}

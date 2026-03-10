@@ -828,12 +828,12 @@ class GalleryScraper:
                 # ── High-Quality Tagging (념글 판별) ──
                 result.is_winner = result.recommends >= 10
 
-                # ── Bot Detection: ZWS 미드 인젝션(\u200B) 1차 + ledger 2차 백업 ──
+                # ── Bot Detection: NBSP(\u00A0) 마커 1차 + ledger 2차 백업 ──
                 try:
                     from .ledger import ledger_load_set as _lls
-                    result.is_ai = "\u200B" in result.title or str(post_id) in _lls(self.gallery_id)
+                    result.is_ai = "\u00A0" in result.title or str(post_id) in _lls(self.gallery_id)
                 except Exception:
-                    result.is_ai = "\u200B" in result.title
+                    result.is_ai = "\u00A0" in result.title
 
                 # ── Style tags + Clean text ──
                 result.style_tags = extract_style_tags(result.title, result.content)
@@ -1320,7 +1320,7 @@ class TrendScraper:
 
         # ── 로컬 원장 로드 (페이지 단위 1회) ─────────────────────────────────
         # bot_ledger.json 에 기록된 post_no 집합을 가져와 is_bot 2차 백업 판별에 사용.
-        # 1차: ZWS 미드 인젝션(\u200B) — Edge Trimming 우회 (제목 내부에 삽입).
+        # 1차: NBSP(\u00A0) 마커 — 제목의 첫 공백을 NBSP로 치환, DC 서버 Sanitize 미적용.
         try:
             from .ledger import ledger_load_set as _ledger_load_set
             _bot_nos = _ledger_load_set(gallery_id)
@@ -1393,8 +1393,8 @@ class TrendScraper:
                     "views":      _parse_int(views_el),
                     "recommends": _parse_int(rec_el),
                     "author":     author,
-                    # ZWS 미드 인젝션(\u200B) 1차 체크 → ledger 2차 백업
-                    "is_bot":     "\u200B" in raw_title or post_no in _bot_nos,
+                    # NBSP(\u00A0) 마커 1차 체크 → ledger 2차 백업
+                    "is_bot":     "\u00A0" in raw_title or post_no in _bot_nos,
                 })
             except Exception:  # noqa: BLE001 — 개별 행 파싱 실패는 무시
                 continue

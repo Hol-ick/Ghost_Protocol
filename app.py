@@ -13,9 +13,11 @@ import json
 import os
 import queue
 import random
+import subprocess
 import sys
 import threading
 import time
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -1297,6 +1299,25 @@ def _monitor_fragment() -> None:
 # ╚═╝  ╚═╝╚══════╝╚═╝  ╚═══╝╚═════╝ ╚══════╝╚═╝  ╚═╝
 #
 # ══════════════════════════════════════════════════════════════════════════════
+
+# ══════════════════════════════════════════════
+# Sidebar — OTA 업데이터
+# ══════════════════════════════════════════════
+with st.sidebar:
+    st.markdown("### ⚙️ 시스템")
+    if st.button("🔄 업데이트 (Git Pull)", use_container_width=True,
+                 help="git pull 로 최신 코드를 받아 앱을 즉시 반영합니다."):
+        _r = subprocess.run(
+            ["git", "pull"],
+            capture_output=True, text=True,
+            cwd=str(Path(__file__).parent),
+        )
+        _out = (_r.stdout or _r.stderr or "").strip()
+        st.toast(
+            _out or "Git pull 완료",
+            icon="✅" if _r.returncode == 0 else "❌",
+        )
+        st.rerun()
 
 # ── 공통 변수 계산 ────────────────────────────────────────────────────────────
 has_any_key = bool(_GEMINI_API_KEY)  # .env에서 로드된 키만 사용
