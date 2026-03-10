@@ -1,0 +1,9 @@
+[
+  {"name": "다혈질 분노조절 실패형",  "key": "aggressive"},
+  {"name": "무기력한 갤러리 지박령",  "key": "monologue"},
+  {"name": "비꼬는 시니컬 관전자",    "key": "cynical"},
+  {"name": "실없이 쪼개는 어그로형",  "key": "aggro"},
+  {"name": "건조한 무감각 관찰자",    "key": "neutral"},
+  {"name": "팩트폭격 분석충",         "key": "analytical"},
+  {"name": "분위기 환기형 마이웨이",  "key": "ventilator"}
+]

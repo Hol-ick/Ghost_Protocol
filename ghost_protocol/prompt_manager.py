@@ -21,6 +21,7 @@
 
 from __future__ import annotations
 
+import json
 from functools import lru_cache
 from pathlib import Path
 from string import Template
@@ -61,6 +62,19 @@ def load(name: str) -> str:
         파일 내용 (UTF-8 문자열)
     """
     return _read_file(name)
+
+
+@lru_cache(maxsize=None)
+def load_json(name: str) -> dict | list:
+    """프롬프트 JSON 파일을 읽어 파싱된 객체를 반환 (결과 캐시됨).
+
+    Args:
+        name: 파일명 (예: "tones.json", "personas.json")
+
+    Returns:
+        json.loads() 결과 (dict 또는 list)
+    """
+    return json.loads(_read_file(name))
 
 
 def render(name: str, **kwargs) -> str:

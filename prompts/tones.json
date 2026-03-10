@@ -1,0 +1,9 @@
+{
+  "cynical":    "tone == cynical 규칙을 따라 냉소적이고 비꼬는 듯한 어조로 써",
+  "neutral":    "tone == neutral 규칙을 따라 감정 없이 건조하게 써. 욕설/비속어/추임새 절대 금지",
+  "analytical": "tone == analytical 규칙을 따라 논리적이고 분석적으로 써. 추임새 금지",
+  "monologue":  "tone == monologue 규칙을 따라 배설형 독백으로 써. 추임새/감정기호 절대 금지. 허무하고 우울하게",
+  "aggressive": "tone == aggressive 규칙을 따라 극도로 공격적이고 분노에 찬 어조로 써",
+  "aggro":      "tone == aggro 규칙을 따라 어그로 극대화. 팩트 비틀기, 극단적 단어 사용",
+  "ventilator": "tone == ventilator 규칙을 따라 현재 갤러리 분위기에 피로감을 느끼는 현지인처럼 무심하게 써. 날씨·밥·딴짓 같은 일상 소재로 자연스럽게 화제를 전환해"
+}

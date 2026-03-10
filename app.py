@@ -33,6 +33,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from ghost_protocol import database
+from ghost_protocol import prompt_manager as pm
 from ghost_protocol.brain import GhostBrain, RateLimitError
 from ghost_protocol.poster import GhostPoster, load_accounts
 
@@ -65,19 +66,11 @@ _TONE_MAP = {
 _LEN_OPTS = ["아주 짧게 (1문장)", "짧게 (1~2문장)", "보통 (3~4문장)"]
 _INTEL_CACHE_TTL = 900  # 15분
 
-# ── SWARM 다중 인격 풀 ─────────────────────────────────────────────────────
+# ── SWARM 다중 인격 풀 — prompts/personas.json 에서 로드 ───────────────────
 # 매 WAVE마다 랜덤으로 한 가지 페르소나를 선택하여 글투 다양성 확보.
-# "key"는 brain.py generate_post()의 tone_desc 맵과 1:1 대응.
+# "key"는 brain.py generate_post()의 tones.json 맵과 1:1 대응.
 # UI의 고정 톤 설정을 SWARM 내에서 오버라이드함 — 현지인 군중 시뮬레이션.
-_PERSONA_POOL = [
-    {"name": "다혈질 분노조절 실패형",  "key": "aggressive"},
-    {"name": "무기력한 갤러리 지박령",  "key": "monologue"},
-    {"name": "비꼬는 시니컬 관전자",    "key": "cynical"},
-    {"name": "실없이 쪼개는 어그로형",  "key": "aggro"},
-    {"name": "건조한 무감각 관찰자",    "key": "neutral"},
-    {"name": "팩트폭격 분석충",         "key": "analytical"},
-    {"name": "분위기 환기형 마이웨이",  "key": "ventilator"},
-]
+_PERSONA_POOL: list[dict] = pm.load_json("personas.json")
 
 # ══════════════════════════════════════════════
 # Gallery History — 갤러리 히스토리 퀵셀렉트
