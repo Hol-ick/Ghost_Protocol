@@ -12,6 +12,7 @@ import os
 import random
 import re
 import time
+from pathlib import Path
 from typing import Callable, Optional
 
 from playwright.async_api import async_playwright
@@ -30,6 +31,36 @@ ACCOUNTS_PATH = os.path.join(
 _COMMON_PW = "q1w2e3r4%%"
 
 LOGIN_URL = "https://sign.dcinside.com/login"
+
+# ══════════════════════════════════════════════
+# 세션 캐시 (Playwright storage_state 기반)
+# ══════════════════════════════════════════════
+# 계정별 쿠키/로컬스토리지를 sessions/<account>.json 에 보관.
+# 봇 실행 시 저장된 세션을 먼저 시도(Fast-path)하고,
+# 세션 만료 시에만 타이핑 로그인(Slow-path) 후 세션을 갱신한다.
+_SESSIONS_DIR = Path(__file__).parent.parent / "sessions"
+
+
+def _session_path(account_id: str) -> Path:
+    """계정 ID → sessions/session_<safe_id>.json 경로 반환.
+
+    account_id의 영숫자/하이픈/밑줄 이외 문자는 '_' 로 치환하여
+    파일명 안전성을 보장한다.
+    """
+    safe = re.sub(r"[^\w\-]", "_", account_id)
+    return _SESSIONS_DIR / f"session_{safe}.json"
+
+
+def _sessions_dir_init() -> None:
+    """sessions/ 디렉토리 생성 + 소유자 전용 권한 설정.
+
+    Unix: 0o700 (rwx------), Windows: mkdir만 실행 (chmod 무시).
+    """
+    _SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(_SESSIONS_DIR, 0o700)
+    except OSError:
+        pass  # Windows — no-op
 
 
 def load_accounts() -> list[dict]:
@@ -118,8 +149,18 @@ class GhostPoster:
     # 브라우저 관리 (scraper.py와 동일한 스텔스 설정)
     # ══════════════════════════════════════════════
 
-    async def start_browser(self, log: Optional[Callable] = None) -> None:
-        """브라우저 시작 — 헤드리스 탐지 우회."""
+    async def start_browser(
+        self,
+        log: Optional[Callable] = None,
+        storage_state: Optional[str] = None,
+    ) -> None:
+        """브라우저 시작 — 헤드리스 탐지 우회.
+
+        Args:
+            storage_state: sessions/*.json 경로 문자열.
+                           지정 시 해당 파일에서 쿠키/로컬스토리지를 복원.
+                           None이면 새 빈 컨텍스트로 시작.
+        """
         if log:
             log("[POSTER] 🌐 브라우저 스텔스 모드 시작...")
 
@@ -135,11 +176,16 @@ class GhostPoster:
                 ],
             )
             ua = random.choice(USER_AGENTS)
-            self._context = await self._browser.new_context(
-                user_agent=ua,
-                locale="ko-KR",
-                timezone_id="Asia/Seoul",
-            )
+            _ctx_kwargs: dict = {
+                "user_agent": ua,
+                "locale": "ko-KR",
+                "timezone_id": "Asia/Seoul",
+            }
+            if storage_state:
+                _ctx_kwargs["storage_state"] = storage_state
+                if log:
+                    log("[POSTER] 🍪 저장된 세션 파일 로드 중...")
+            self._context = await self._browser.new_context(**_ctx_kwargs)
             # navigator.webdriver 속성 숨기기
             await self._context.add_init_script(
                 "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
@@ -196,6 +242,86 @@ class GhostPoster:
 
         if log:
             log("[POSTER] ✅ 브라우저 종료 완료")
+
+    # ══════════════════════════════════════════════
+    # 세션 캐시 헬퍼
+    # ══════════════════════════════════════════════
+
+    async def _is_logged_in_fast(
+        self, gallery_id: str, log: Optional[Callable] = None
+    ) -> bool:
+        """저장된 세션으로 글쓰기 페이지 직접 진입 가능 여부 확인 (Fast-path).
+
+        글쓰기 URL에 이동 후:
+          - 로그인 페이지로 리디렉트  →  세션 만료  →  False 반환
+          - #subject 입력창 발견      →  세션 유효  →  True 반환
+          - 그 외 (WAF / 예외)       →  False 반환 (Slow-path 위임)
+
+        True 반환 시 현재 페이지는 이미 글쓰기 URL이므로
+        write_post() 내부 goto()가 동일 URL을 재로드하게 됨.
+        """
+        page = self._page
+        if not page:
+            return False
+
+        write_url = get_write_url(self._gallery_type, gallery_id)
+        if log:
+            log("[POSTER] ⚡ Fast-path: 저장된 세션으로 글쓰기 페이지 직접 진입 시도...")
+
+        try:
+            await page.goto(write_url, wait_until="domcontentloaded", timeout=15000)
+            await page.wait_for_timeout(int(random.uniform(1500, 2500)))
+        except Exception as e:
+            if log:
+                log(f"[POSTER] ⚡ Fast-path 탐색 실패: {str(e)[:80]}")
+            return False
+
+        # 로그인 페이지로 리디렉트됐으면 세션 만료
+        if "login" in page.url.lower():
+            if log:
+                log("[POSTER] ⚡ Fast-path: 세션 만료 (로그인 페이지 리디렉트) → Slow-path 전환")
+            return False
+
+        # #subject 입력창으로 글쓰기 에디터 진입 확인
+        try:
+            await page.locator("#subject").wait_for(state="attached", timeout=5000)
+            if log:
+                log("[POSTER] ⚡ Fast-path: 세션 유효 — 로그인 건너뜀 ✅")
+            return True
+        except Exception:
+            if log:
+                log("[POSTER] ⚡ Fast-path: #subject 미발견 — 세션 불확실 → Slow-path 전환")
+            return False
+
+    async def _save_session_atomic(
+        self, sess_path: Path, log: Optional[Callable] = None
+    ) -> None:
+        """브라우저 컨텍스트의 세션(쿠키+로컬스토리지)을 원자적으로 저장.
+
+        temp 파일에 먼저 쓴 뒤 os.replace()로 교체 → 부분 쓰기 방지.
+        Unix에서는 0o600 권한으로 다른 사용자 접근 차단.
+        예외 발생 시 조용히 무시하고 임시 파일을 정리한다.
+        """
+        if not self._context:
+            return
+        tmp = sess_path.with_suffix(".tmp")
+        try:
+            _sessions_dir_init()
+            await self._context.storage_state(path=str(tmp))
+            os.replace(tmp, sess_path)
+            try:
+                os.chmod(sess_path, 0o600)  # Unix: rw-------
+            except OSError:
+                pass  # Windows — no-op
+            if log:
+                log(f"[SESSION] 💾 세션 저장 완료: {sess_path.name}")
+        except Exception as e:
+            if log:
+                log(f"[SESSION] ⚠️ 세션 저장 실패 (무시하고 계속): {str(e)[:80]}")
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
 
     # ══════════════════════════════════════════════
     # 로그인
@@ -754,19 +880,41 @@ class GhostPoster:
         }
 
         try:
-            await self.start_browser(log=log)
+            # ── 세션 캐시 준비 ──────────────────────────────────────────────
+            _sessions_dir_init()
+            sess_path    = _session_path(account["id"])
+            _has_session = sess_path.exists()
 
-            logged_in = await self.login(account["id"], account["pw"], log=log)
-            if not logged_in:
-                result["message"] = f"로그인 실패: {masked}"
-                if log:
-                    log(f"[POSTER] ❌ 댓글 중단 — 로그인 실패 ({masked})")
-                return result
+            # 브라우저 시작 (저장된 세션이 있으면 쿠키/로컬스토리지 복원)
+            await self.start_browser(
+                log=log,
+                storage_state=str(sess_path) if _has_session else None,
+            )
+
+            # ── Fast-path: 저장된 세션으로 글쓰기 페이지 직접 진입 시도 ──
+            # 댓글은 글보기 페이지에서 작성하지만, 글쓰기 페이지 진입 가능 여부로
+            # 로그인 상태를 판별 (댓글 전용 URL에는 세션 검증 UI 요소가 없어 판단 불가).
+            _session_valid = False
+            if _has_session:
+                _session_valid = await self._is_logged_in_fast(gallery_id, log=log)
+
+            # ── Slow-path: 세션 없거나 만료 → ID/PW 타이핑 로그인 ──────────
+            if not _session_valid:
+                logged_in = await self.login(account["id"], account["pw"], log=log)
+                if not logged_in:
+                    result["message"] = f"로그인 실패: {masked}"
+                    if log:
+                        log(f"[POSTER] ❌ 댓글 중단 — 로그인 실패 ({masked})")
+                    return result
+                # 로그인 성공 직후 세션 저장 (다음 실행 Fast-path 대비)
+                await self._save_session_atomic(sess_path, log=log)
 
             commented = await self.write_comment(gallery_id, post_no, comment, log=log)
             if commented:
                 result["success"] = True
                 result["message"] = f"댓글 등록 성공! (계정: {masked}, 글: #{post_no})"
+                # 댓글 성공 후 세션 갱신 (쿠키 TTL 연장)
+                await self._save_session_atomic(sess_path, log=log)
                 if log:
                     log(f"[POSTER] ✅ 댓글 완료 (계정: {masked}, 글: #{post_no})")
             else:
@@ -824,18 +972,34 @@ class GhostPoster:
         }
 
         try:
-            # 브라우저 시작
-            await self.start_browser(log=log)
+            # ── 세션 캐시 준비 ──────────────────────────────────────────────
+            _sessions_dir_init()
+            sess_path   = _session_path(account["id"])
+            _has_session = sess_path.exists()
 
-            # 로그인
-            logged_in = await self.login(account["id"], account["pw"], log=log)
-            if not logged_in:
-                result["message"] = f"로그인 실패: {masked}"
-                if log:
-                    log(f"[POSTER] ❌ 작업 중단 — 로그인 실패 ({masked})")
-                return result
+            # 브라우저 시작 (저장된 세션이 있으면 쿠키/로컬스토리지 복원)
+            await self.start_browser(
+                log=log,
+                storage_state=str(sess_path) if _has_session else None,
+            )
 
-            # 글쓰기 — write_post()는 post_no(str) 반환, 실패 시 None
+            # ── Fast-path: 저장된 세션으로 글쓰기 페이지 직접 진입 시도 ──
+            _session_valid = False
+            if _has_session:
+                _session_valid = await self._is_logged_in_fast(gallery_id, log=log)
+
+            # ── Slow-path: 세션 없거나 만료 → ID/PW 타이핑 로그인 ──────────
+            if not _session_valid:
+                logged_in = await self.login(account["id"], account["pw"], log=log)
+                if not logged_in:
+                    result["message"] = f"로그인 실패: {masked}"
+                    if log:
+                        log(f"[POSTER] ❌ 작업 중단 — 로그인 실패 ({masked})")
+                    return result
+                # 로그인 성공 직후 세션 저장 (다음 실행 Fast-path 대비)
+                await self._save_session_atomic(sess_path, log=log)
+
+            # ── 글쓰기 — write_post()는 post_no(str) 반환, 실패 시 None ──
             post_no = await self.write_post(gallery_id, title, content, log=log)
             if post_no is not None:
                 result["success"] = True
@@ -845,6 +1009,8 @@ class GhostPoster:
                     + (f", no={post_no}" if post_no else "")
                     + ")"
                 )
+                # 글 등록 성공 후 세션 갱신 (쿠키 TTL 연장)
+                await self._save_session_atomic(sess_path, log=log)
                 # ── 로컬 원장 기록: ledger에 post_no 추가 ────────────────────
                 # gallery_id 정규화: ledger.py가 정규화를 이중으로 수행하지만 방어적으로 적용
                 if post_no:

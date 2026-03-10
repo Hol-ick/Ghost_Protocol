@@ -74,3 +74,6 @@ logs/
 # ── 🎭 Playwright ────────────────────────────
 playwright-report/
 test-results/
+
+# ── 🍪 세션 캐시 (계정 쿠키 — 절대 커밋 금지) ──
+sessions/
