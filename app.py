@@ -947,6 +947,7 @@ def _batch_gen_worker(
     tone: str,
     length: str,
     infinite: bool = False,
+    auto_refresh: bool = False,
 ) -> None:
     """백그라운드 스레드: N개 Wave 분량의 대본(제목+본문)을 일괄 사전 생성.
     포스팅은 하지 않는다. 완료 시 batch_done 메시지로 scripts 리스트를 반환.
@@ -965,6 +966,32 @@ def _batch_gen_worker(
         q_log(f"❌ Brain 초기화 실패: {str(e)[:120]}")
         log_q.put({"type": "batch_done", "scripts": []})
         return
+
+    # ── 세계관 자동 갱신 (무한 모드 전용: 직전 배치 발행 직후 최신 갤러리 반영) ──
+    # auto_refresh=True → 1페이지 재스캔 + analyze_trend() 실행.
+    # 성공 시: topic 로컬 변수를 새 ai_analysis로 교체 → 이 배치 전체에 적용.
+    # 실패 시: 기존 topic 그대로 유지 (silent fallback).
+    if auto_refresh and not stop_ev.is_set():
+        q_log("[🔄 AUTO-REFRESH] 갤러리 재스캔 + 세계관 갱신 중...")
+        try:
+            from ghost_protocol.scraper import TrendScraper as _AR_TS
+            _ar_raw = _AR_TS().collect_trending(
+                gallery_id=gallery_id, gallery_type=gallery_type, pages=1,
+            )
+            if _ar_raw.get("titles"):
+                _ar_result = brain.analyze_trend(_ar_raw)
+                _fresh_topic = (_ar_result.get("ai_analysis") or "").strip()
+                if _fresh_topic:
+                    topic = _fresh_topic   # 이 배치의 $topic 갱신
+                    log_q.put({"type": "context_updated",
+                               "topic": topic, "intel": _ar_result})
+                    q_log("[AUTO-REFRESH] ✅ 세계관 갱신 완료 — 최신 브리핑으로 대본 생성")
+                else:
+                    q_log("[AUTO-REFRESH] ⚠️ 분석 비어있음 — 기존 토픽 유지")
+            else:
+                q_log("[AUTO-REFRESH] ⚠️ 수집 데이터 없음 — 기존 토픽 유지")
+        except Exception as _ar_e:
+            q_log(f"[AUTO-REFRESH] ⚠️ 갱신 실패, 기존 토픽으로 폴백: {str(_ar_e)[:80]}")
 
     # 댓글 타겟 후보 수집 (1회)
     _recent_posts: list[dict] = []
@@ -1212,7 +1239,7 @@ def _start_next_batch(ss: "st.session_state") -> None:  # type: ignore[name-defi
     ss.swarm_wave_total     = cfg.get("wave_count", 10)
     threading.Thread(
         target=_batch_gen_worker,
-        kwargs={**cfg, "log_q": _bgq, "stop_ev": _bgev},
+        kwargs={**cfg, "log_q": _bgq, "stop_ev": _bgev, "auto_refresh": True},
         daemon=True,
     ).start()
 
@@ -1772,6 +1799,14 @@ def _batch_gen_fragment() -> None:
             elif msg["type"] == "batch_progress":
                 ss.swarm_wave_current = msg["wave"]
                 ss.swarm_wave_total   = msg["total"]
+            elif msg["type"] == "context_updated":
+                # 세계관 갱신 완료 — Intel 패널 + 다음 무한 사이클 토픽 동기화
+                _fresh_intel = msg.get("intel")
+                if _fresh_intel:
+                    ss.intel_result = _fresh_intel
+                _cfg = ss.get("_batch_gen_config")
+                if _cfg and msg.get("topic"):
+                    _cfg["topic"] = msg["topic"]
             elif msg["type"] == "batch_done":
                 ss.review_scripts    = msg["scripts"]
                 ss.batch_generating  = False
