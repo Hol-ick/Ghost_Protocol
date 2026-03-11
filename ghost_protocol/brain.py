@@ -327,21 +327,21 @@ class GhostBrain:
             cross_instruction = _cross.get("monologue_ultrashort", cross_instruction)
 
         # ── 댓글 타겟 컨텍스트 빌드 ─────────────────────────────────────────
-        # recent_posts: fetch_post_list()가 반환한 비봇 게시글 (post_no, title).
-        # is_bot=True 게시글은 호출자(app.py)가 필터링하여 전달하지 않음.
-        # post_no 검증은 파서 단계에서 추가로 수행 (hallucination 방어).
+        # recent_posts 각 항목: {"post_no": str, "title": str, "existing_comments": list[str]}
+        # existing_comments: 호출자(app.py)가 AJAX로 프리패치한 기존 댓글 (최대 5개, 없으면 [])
+        # post_no 검증은 파서 단계에서 수행 (hallucination 방어).
         if recent_posts:
-            _posts_lines = "\n".join(
-                f"- #{p.get('post_no', '?')} | {p.get('title', '')}"
-                for p in recent_posts
-            )
-            recent_posts_context = (
-                "\n[댓글 타겟 (최신 글 목록 — 봇 게시글 제외)]\n"
-                "아래 글 중 자연스럽게 반응할 수 있는 글을 최대 2개 골라, "
-                "짧고 건조한 댓글(1줄)을 각각 작성하라.\n"
-                "댓글은 독백체가 아닌 제3자의 무심한 반응처럼 써라. "
-                "적합한 타겟이 없으면 빈 배열로 남겨도 된다.\n"
-                f"{_posts_lines}\n"
+            _posts_formatted: list[str] = []
+            for p in recent_posts:
+                _line = f"#{p.get('post_no', '?')} | {p.get('title', '')}"
+                _existing = p.get("existing_comments", [])
+                if _existing:
+                    _cmt_sample = " / ".join(f'"{c[:40]}"' for c in _existing[:3])
+                    _line += f"\n  └ 기존 댓글: {_cmt_sample}"
+                _posts_formatted.append(_line)
+            recent_posts_context = pm.render(
+                "generate_comment.txt",
+                posts_context="\n".join(_posts_formatted),
             )
         else:
             recent_posts_context = ""

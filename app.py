@@ -667,24 +667,27 @@ def _swarm_worker(
         return
     _account_queue: list[dict] = list(_account_pool)
 
-    # ── 댓글 타겟 후보 수집 (SWARM 시작 시 1회 스냅샷) ─────────────────────
-    # 봇 게시글(is_bot=True) 필터링: 자문자답 루프 방지
-    # Phase 3.6 현재: 데이터 파이프라인 검증 전용 — 브라우저 자동화 없음.
-    _recent_posts: list[dict] = []
+    # ── 댓글 타겟 풀 수집 + 기존 댓글 프리패치 (SWARM 시작 시 1회 스냅샷) ──────
+    _enriched_pool: list[dict] = []
     try:
         from ghost_protocol.scraper import TrendScraper as _TS
         _ts = _TS()
         _raw_list = _ts.fetch_post_list(gallery_id, gallery_type, page=1)
-        _recent_posts = [
-            {"post_no": p["post_no"], "title": p["title"]}
-            for p in _raw_list[:5]
-            # is_bot 필터 해제 (Phase 3.7): 자체 생성 스레드 연속성 통합 테스트 허용.
-            # 이전 WAVE에서 작성한 글에도 댓글 가능 → Echo Chamber 스레드 구성 검증.
-        ]
-        q_log(f"[SWARM] 📋 댓글 타겟 후보 수집 완료: {len(_recent_posts)}개")
+        _candidates = [p for p in _raw_list if not p.get("is_bot")][:15]
+        for _c in _candidates:
+            _cmts: list[str] = []
+            try:
+                _cmts = _ts.fetch_comments_ajax(gallery_id, _c["post_no"], gallery_type)[:5]
+            except Exception:
+                pass
+            _enriched_pool.append({
+                "post_no":           _c["post_no"],
+                "title":             _c["title"],
+                "existing_comments": _cmts,
+            })
+        q_log(f"[SWARM] 📋 댓글 타겟 풀: {len(_enriched_pool)}개 (맥락 프리패치 완료)")
     except Exception as _te:
         q_log(f"[SWARM] ⚠️ 댓글 타겟 수집 실패 (SWARM 계속): {str(_te)[:80]}")
-        _recent_posts = []
 
     _global_wave = 0
     _cycle       = 0
@@ -722,13 +725,17 @@ def _swarm_worker(
                 if stop_ev.is_set():
                     break
                 try:
+                    _wave_targets = (
+                        random.sample(_enriched_pool, min(5, len(_enriched_pool)))
+                        if _enriched_pool else None
+                    )
                     result = brain.generate_post(
                         topic=topic,
                         gallery_id=gallery_id,
                         tone=_wave_tone,
                         context_hours=None,
                         length=length,
-                        recent_posts=_recent_posts or None,
+                        recent_posts=_wave_targets,
                     )
                     # ── Fail-Safe: 파싱 실패 시 WAVE 즉시 Abort ──────────────
                     # "_parse_error" 플래그 또는 빈 title/content → raw 텍스트 포스팅 원천 차단
@@ -993,17 +1000,27 @@ def _batch_gen_worker(
         except Exception as _ar_e:
             q_log(f"[AUTO-REFRESH] ⚠️ 갱신 실패, 기존 토픽으로 폴백: {str(_ar_e)[:80]}")
 
-    # 댓글 타겟 후보 수집 (1회)
-    _recent_posts: list[dict] = []
+    # ── 댓글 타겟 풀 수집 + 기존 댓글 프리패치 (배치 시작 시 1회) ────────────
+    # 봇 글 제외 최대 15개 수집 → 기존 댓글 AJAX 프리패치 → enriched_pool 구성.
+    # 매 Wave마다 이 풀에서 랜덤 서브셋 5개를 뽑아 군중 쏠림 현상 방지.
+    _enriched_pool: list[dict] = []
     try:
         from ghost_protocol.scraper import TrendScraper as _TS
         _ts = _TS()
         _raw_list = _ts.fetch_post_list(gallery_id, gallery_type, page=1)
-        _recent_posts = [
-            {"post_no": p["post_no"], "title": p["title"]}
-            for p in _raw_list[:5]
-        ]
-        q_log(f"[BATCH] 📋 댓글 타겟 후보 수집: {len(_recent_posts)}개")
+        _candidates = [p for p in _raw_list if not p.get("is_bot")][:15]
+        for _c in _candidates:
+            _cmts: list[str] = []
+            try:
+                _cmts = _ts.fetch_comments_ajax(gallery_id, _c["post_no"], gallery_type)[:5]
+            except Exception:
+                pass
+            _enriched_pool.append({
+                "post_no":           _c["post_no"],
+                "title":             _c["title"],
+                "existing_comments": _cmts,
+            })
+        q_log(f"[BATCH] 📋 댓글 타겟 풀: {len(_enriched_pool)}개 (맥락 프리패치 완료)")
     except Exception as _te:
         q_log(f"[BATCH] ⚠️ 댓글 타겟 수집 실패 (계속): {str(_te)[:80]}")
 
@@ -1039,13 +1056,18 @@ def _batch_gen_worker(
             if stop_ev.is_set():
                 break
             try:
+                # 매 Wave마다 타겟 풀에서 랜덤 서브셋 선택 — 군중 쏠림 방지
+                _wave_targets = (
+                    random.sample(_enriched_pool, min(5, len(_enriched_pool)))
+                    if _enriched_pool else None
+                )
                 result = brain.generate_post(
                     topic=topic,
                     gallery_id=gallery_id,
                     tone=_wave_tone,
                     context_hours=None,
                     length=length,
-                    recent_posts=_recent_posts or None,
+                    recent_posts=_wave_targets,
                 )
                 if result.get("_parse_error") or not result.get("title") or not result.get("content"):
                     q_log(f"[BATCH] ❌ [{wave}] 파싱 실패 — 건너뜀")
