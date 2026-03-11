@@ -474,6 +474,73 @@ st.markdown("""
         color: #00F0FF !important; text-shadow: 0 0 10px rgba(0,240,255,0.3) !important;
         margin-bottom: 14px !important;
     }
+
+    /* ═══ 21. NEW: 대본 제작 버튼 (GENERATE) ═══ */
+    .generate-btn > button {
+        background: linear-gradient(135deg, #1A3A1A, #1F5C1F) !important;
+        color: #00FF88 !important;
+        font-size: 1.05rem !important; font-weight: 900 !important;
+        letter-spacing: 4px !important; text-transform: uppercase !important;
+        padding: 0.85rem 2rem !important; border-radius: 14px !important;
+        border: 1px solid rgba(0,255,136,0.35) !important;
+        box-shadow: 0 6px 24px rgba(0,255,136,0.25) !important;
+        transition: all 0.2s !important;
+    }
+    .generate-btn > button:hover {
+        background: linear-gradient(135deg, #1F5C1F, #2A7A2A) !important;
+        box-shadow: 0 8px 32px rgba(0,255,136,0.4) !important;
+        transform: translateY(-2px) !important;
+    }
+    .generate-btn > button:disabled {
+        background: #1A1A1A !important; color: #444 !important;
+        box-shadow: none !important; transform: none !important; opacity: 0.5 !important;
+        border-color: rgba(255,255,255,0.08) !important;
+    }
+
+    /* ═══ 22. NEW: 대본 최종 승인 버튼 (CONFIRM) ═══ */
+    .confirm-btn > button {
+        background: linear-gradient(135deg, #2A4A00, #3D6E00) !important;
+        color: #AAFF44 !important;
+        font-size: 1.08rem !important; font-weight: 900 !important;
+        letter-spacing: 3px !important;
+        padding: 1rem 2rem !important; border-radius: 14px !important;
+        border: 1px solid rgba(170,255,68,0.4) !important;
+        box-shadow: 0 6px 28px rgba(170,255,68,0.3) !important;
+        transition: all 0.2s !important;
+    }
+    .confirm-btn > button:hover {
+        background: linear-gradient(135deg, #3D6E00, #527A00) !important;
+        box-shadow: 0 8px 36px rgba(170,255,68,0.5) !important;
+        transform: translateY(-2px) !important;
+    }
+
+    /* ═══ 23. NEW: Review Card ═══ */
+    .review-card {
+        background: #12161C !important;
+        border: 1px solid rgba(255,255,255,0.07) !important;
+        border-radius: 12px !important;
+        padding: 14px 18px !important;
+        margin-bottom: 10px !important;
+    }
+    .review-card-failed {
+        background: #160A0A !important;
+        border-color: rgba(255,75,75,0.2) !important;
+    }
+    .rc-wave-badge {
+        color: #BC8CFF !important; font-size: 0.62rem !important;
+        font-weight: 700 !important; letter-spacing: 2px !important;
+        text-transform: uppercase !important;
+    }
+    .rc-title {
+        color: #FAFAFA !important; font-size: 0.9rem !important;
+        font-weight: 700 !important; margin: 8px 0 6px 0 !important;
+        line-height: 1.4 !important;
+    }
+    .rc-body {
+        color: #888888 !important; font-size: 0.78rem !important;
+        line-height: 1.6 !important; max-height: 72px !important;
+        overflow-y: hidden !important; white-space: pre-wrap !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -496,6 +563,13 @@ def _init_state() -> None:
         "swarm_queue":            None,
         "swarm_stop_event":       None,
         "swarm_infinite":         False,
+        # ── Batch Generation (Human-in-the-loop) ─────────────────────
+        "batch_generating":       False,   # 대본 일괄 생성 중
+        "batch_gen_queue":        None,
+        "batch_gen_stop_event":   None,
+        "review_scripts":         [],      # 생성된 대본 목록 [{wave, persona_name, tone, title, content, target_comments, _failed}]
+        "review_ready":           False,   # 검수 보드 표시 상태
+        "_batch_gen_config":      {},      # 무한 모드 재배치용 설정 저장
         # ── INTEL ────────────────────────────────────
         "intel_running":          False,
         "intel_queue":            None,
@@ -850,6 +924,282 @@ def _intel_worker(
         _log(f"❌ 분석 실패: {str(e)[:120]}")
 
     log_q.put({"type": "intel_done"})
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 배치 생성 워커 — LLM 호출만, 포스팅 없음
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _batch_gen_worker(
+    log_q: queue.Queue,
+    stop_ev: threading.Event,
+    *,
+    api_key: str,
+    topic: str,
+    wave_count: int,
+    gallery_id: str,
+    gallery_type: str,
+    tone: str,
+    length: str,
+    infinite: bool = False,
+) -> None:
+    """백그라운드 스레드: N개 Wave 분량의 대본(제목+본문)을 일괄 사전 생성.
+    포스팅은 하지 않는다. 완료 시 batch_done 메시지로 scripts 리스트를 반환.
+    infinite=True 면 wave_count를 최대 10으로 제한하여 한 묶음만 생성.
+    """
+
+    def q_log(msg: str) -> None:
+        log_q.put({"type": "log", "data": msg})
+
+    actual_count = min(wave_count, 10) if infinite else wave_count
+
+    try:
+        brain = GhostBrain(api_key=api_key or None)
+        database.init_db()
+    except Exception as e:
+        q_log(f"❌ Brain 초기화 실패: {str(e)[:120]}")
+        log_q.put({"type": "batch_done", "scripts": []})
+        return
+
+    # 댓글 타겟 후보 수집 (1회)
+    _recent_posts: list[dict] = []
+    try:
+        from ghost_protocol.scraper import TrendScraper as _TS
+        _ts = _TS()
+        _raw_list = _ts.fetch_post_list(gallery_id, gallery_type, page=1)
+        _recent_posts = [
+            {"post_no": p["post_no"], "title": p["title"]}
+            for p in _raw_list[:5]
+        ]
+        q_log(f"[BATCH] 📋 댓글 타겟 후보 수집: {len(_recent_posts)}개")
+    except Exception as _te:
+        q_log(f"[BATCH] ⚠️ 댓글 타겟 수집 실패 (계속): {str(_te)[:80]}")
+
+    scripts: list[dict] = []
+
+    for wave in range(1, actual_count + 1):
+        if stop_ev.is_set():
+            q_log("[BATCH] 🛑 중단 요청 — 대본 생성 중단")
+            break
+
+        q_log(f"[BATCH] 🎬 대본 {wave}/{actual_count} 생성 중...")
+        log_q.put({"type": "batch_progress", "wave": wave, "total": actual_count})
+
+        _persona   = random.choice(_PERSONA_POOL)
+        _wave_tone = _persona["key"]
+        q_log(f"[BATCH] 🎭 [{wave}] 페르소나: {_persona['name']} ({_wave_tone})")
+
+        gen_title: str | None = None
+        gen_content: str = ""
+        _tc_list: list[dict] = []
+
+        for attempt in range(3):
+            if stop_ev.is_set():
+                break
+            try:
+                result = brain.generate_post(
+                    topic=topic,
+                    gallery_id=gallery_id,
+                    tone=_wave_tone,
+                    context_hours=None,
+                    length=length,
+                    recent_posts=_recent_posts or None,
+                )
+                if result.get("_parse_error") or not result.get("title") or not result.get("content"):
+                    q_log(f"[BATCH] ❌ [{wave}] 파싱 실패 — 건너뜀")
+                    break
+                gen_title   = result["title"]
+                gen_content = result["content"]
+                _tc_list    = result.get("target_comments", [])
+                q_log(f"[BATCH] ✅ [{wave}] 생성 완료: '{gen_title[:30]}'")
+                break
+
+            except RateLimitError:
+                if attempt < 2:
+                    backoff = 60 * (2 ** attempt)
+                    q_log(f"[BATCH] ⚠️ [{wave}] Rate Limit — {backoff}초 대기 ({attempt+1}/3)...")
+                    _interruptible_sleep(backoff, stop_ev)
+                else:
+                    q_log(f"[BATCH] ❌ [{wave}] Rate Limit 재시도 한도 초과")
+            except Exception as e:
+                q_log(f"[BATCH] ❌ [{wave}] 생성 오류: {str(e)[:80]}")
+                break
+
+        scripts.append({
+            "wave":             wave,
+            "persona_name":     _persona["name"],
+            "tone":             _wave_tone,
+            "title":            gen_title or "",
+            "content":          gen_content,
+            "target_comments":  _tc_list,
+            "_failed":          gen_title is None,
+        })
+
+    ok_count = sum(1 for s in scripts if not s.get("_failed"))
+    q_log(f"[BATCH] 🎬 대본 생성 완료 — 성공 {ok_count}/{len(scripts)}개")
+    log_q.put({"type": "batch_done", "scripts": scripts})
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 연재 실행 워커 — 사전 생성된 대본을 순차 발행
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _post_exec_worker(
+    log_q: queue.Queue,
+    stop_ev: threading.Event,
+    *,
+    scripts: list[dict],
+    gallery_id: str,
+    gallery_type: str,
+    headless: bool,
+) -> None:
+    """백그라운드 스레드: 검수 완료된 대본을 Wave 간 쿨타임에 맞춰 순차 발행.
+    메시지 포맷은 기존 _swarm_worker와 동일 (log / preview / stat / done).
+    """
+
+    def q_log(msg: str) -> None:
+        log_q.put({"type": "log", "data": msg})
+
+    def q_preview(title: str, content: str, wave: int, status: str) -> None:
+        log_q.put({"type": "preview", "title": title, "content": content,
+                   "wave": wave, "status": status})
+
+    def q_stat(success: int = 0, fail: int = 0) -> None:
+        log_q.put({"type": "stat", "success": success, "fail": fail})
+
+    try:
+        _account_pool = load_accounts()
+    except (FileNotFoundError, ValueError) as _ae:
+        q_log(f"❌ 계정 로드 실패 — 연재 중단: {str(_ae)[:120]}")
+        log_q.put({"type": "done"})
+        return
+
+    _account_queue: list[dict] = list(_account_pool)
+    valid_scripts = [s for s in scripts if not s.get("_failed") and s.get("title")]
+
+    if not valid_scripts:
+        q_log("[EXEC] ⚠️ 발행 가능한 대본이 없습니다.")
+        log_q.put({"type": "done"})
+        return
+
+    q_log(f"[EXEC] 📬 연재 시작 — {len(valid_scripts)}개 대본 발행 예정")
+
+    for i, script in enumerate(valid_scripts):
+        if stop_ev.is_set():
+            q_log("[EXEC] 🛑 중단 요청 — 연재 중단")
+            break
+
+        wave        = script["wave"]
+        gen_title   = script["title"]
+        gen_content = script["content"]
+        _tc_list    = script.get("target_comments", [])
+
+        q_log(f"═══════ WAVE {wave} ({i + 1}/{len(valid_scripts)}) ═══════")
+        q_log(f"[W{wave}] 🚀 포스팅 시작 → {gallery_type}/{gallery_id}")
+        q_preview(gen_title, gen_content, wave, "POSTING...")
+
+        # 계정 큐 순환
+        if not _account_queue:
+            _account_queue = list(_account_pool)
+            random.shuffle(_account_queue)
+            q_log("[EXEC] 🔄 계정 큐 재충전")
+        _wave_account = _account_queue.pop(0)
+
+        poster = GhostPoster(headless=headless, gallery_type=gallery_type)
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            post_result = loop.run_until_complete(
+                poster.auto_post(gallery_id=gallery_id, title=gen_title,
+                                 content=gen_content, account=_wave_account,
+                                 log_callback=q_log)
+            )
+        finally:
+            loop.close()
+            asyncio.set_event_loop(None)
+
+        if post_result["success"]:
+            q_stat(success=1)
+            q_log(f"[W{wave}] 🎉 포스팅 성공! ({post_result['message']})")
+            q_preview(gen_title, gen_content, wave, "✅ POSTED")
+        else:
+            q_stat(fail=1)
+            q_log(f"[W{wave}] ❌ 포스팅 실패: {post_result['message']}")
+            q_preview(gen_title, gen_content, wave, "❌ FAILED")
+
+        # 댓글 자동화
+        _comment_elapsed = 0
+        if _tc_list and not stop_ev.is_set():
+            q_log(f"[W{wave}] 💬 댓글 자동화 — {len(_tc_list)}개 예약")
+            for _idx, _tc in enumerate(_tc_list, 1):
+                if stop_ev.is_set():
+                    break
+                _post_no = _tc.get("post_no", "")
+                _comment = _tc.get("comment", "")
+                if not _post_no or not _comment:
+                    continue
+
+                q_log(f"[W{wave}] 💬 [{_idx}/{len(_tc_list)}] #{_post_no} 댓글 시도 중...")
+                _c_poster = GhostPoster(headless=headless, gallery_type=gallery_type)
+                _c_loop   = asyncio.new_event_loop()
+                asyncio.set_event_loop(_c_loop)
+                try:
+                    _c_result = _c_loop.run_until_complete(
+                        _c_poster.auto_comment(
+                            gallery_id=gallery_id,
+                            post_no=_post_no,
+                            comment=_comment,
+                            account=_wave_account,
+                            log_callback=q_log,
+                        )
+                    )
+                finally:
+                    _c_loop.close()
+                    asyncio.set_event_loop(None)
+
+                if _c_result["success"]:
+                    q_log(f"[W{wave}] ✅ 댓글 성공 [{_idx}]")
+                else:
+                    q_log(f"[W{wave}] ❌ 댓글 실패 [{_idx}]: {_c_result['message']}")
+
+                if _idx < len(_tc_list) and not stop_ev.is_set():
+                    _c_wait = random.randint(15, 45)
+                    _interruptible_sleep(_c_wait, stop_ev)
+                    _comment_elapsed += _c_wait
+
+        # Wave 간 쿨타임
+        if i < len(valid_scripts) - 1 and not stop_ev.is_set():
+            _base_wait = random.randint(60, 180)
+            wait_sec   = max(30, _base_wait - _comment_elapsed)
+            q_log(f"[EXEC] ☕ 다음 WAVE까지 {wait_sec}초 대기...")
+            _interruptible_sleep(wait_sec, stop_ev)
+
+    q_log(f"═══════ EXECUTION COMPLETE — {len(valid_scripts)} WAVES FIRED ═══════")
+    log_q.put({"type": "done"})
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 헬퍼: 다음 배치 생성 시작 (무한 모드 자동 재배치용)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _start_next_batch(ss: "st.session_state") -> None:  # type: ignore[name-defined]
+    """저장된 _batch_gen_config를 이용해 다음 배치 생성 워커를 즉시 시작."""
+    cfg = ss.get("_batch_gen_config", {})
+    if not cfg:
+        return
+    _bgq  = queue.Queue()
+    _bgev = threading.Event()
+    ss.batch_generating    = True
+    ss.batch_gen_queue     = _bgq
+    ss.batch_gen_stop_event = _bgev
+    ss.swarm_log            = []
+    ss.swarm_wave_current   = 0
+    ss.swarm_wave_total     = cfg.get("wave_count", 10)
+    threading.Thread(
+        target=_batch_gen_worker,
+        kwargs={**cfg, "log_q": _bgq, "stop_ev": _bgev},
+        daemon=True,
+    ).start()
 
 
 # ══════════════════════════════════════════════
@@ -1333,10 +1683,241 @@ def _monitor_fragment() -> None:
 
     # ── 폴링 제어 ────────────────────────────────────────────────────────
     if _done_received:
-        st.rerun(scope="app")          # 전체 재실행 → FIRE 버튼 재활성화
+        # 무한 모드: 포스팅 완료 후 다음 배치 자동 시작
+        if ss.get("swarm_infinite") and ss.get("_batch_gen_config"):
+            _start_next_batch(ss)
+        st.rerun(scope="app")          # 전체 재실행 → 버튼 재활성화
     elif ss.get("swarm_running"):
         time.sleep(0.5)
         st.rerun()                     # fragment만 재실행
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# @st.fragment — 배치 대본 생성 진행 모니터
+# ══════════════════════════════════════════════════════════════════════════════
+@st.fragment
+def _batch_gen_fragment() -> None:
+    """대본 일괄 생성 진행 상황을 보여주는 fragment.
+
+    • batch_generating=True 동안 batch_gen_queue 드레인 → session_state 갱신
+    • batch_done 수신 시 review_ready=True 설정 → scope='app' 재실행
+    """
+    ss = st.session_state
+
+    _done = False
+    if ss.get("batch_generating") and ss.get("batch_gen_queue") is not None:
+        bq: queue.Queue = ss.batch_gen_queue
+        while True:
+            try:
+                msg = bq.get_nowait()
+            except queue.Empty:
+                break
+
+            if msg["type"] == "log":
+                ss.swarm_log.append(msg["data"])
+            elif msg["type"] == "batch_progress":
+                ss.swarm_wave_current = msg["wave"]
+                ss.swarm_wave_total   = msg["total"]
+            elif msg["type"] == "batch_done":
+                ss.review_scripts    = msg["scripts"]
+                ss.batch_generating  = False
+                ss.batch_gen_queue   = None
+                ss.review_ready      = bool(msg["scripts"])
+                _done = True
+
+    # 중단 버튼
+    if ss.get("batch_generating"):
+        st.markdown('<div class="stop-btn">', unsafe_allow_html=True)
+        if st.button("🛑  생성 중단", key="stop_batch_btn_frag", use_container_width=True):
+            if ss.get("batch_gen_stop_event"):
+                ss.batch_gen_stop_event.set()
+                ss.swarm_log.append("[BATCH] 🛑 생성 중단 요청 전송됨...")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    # 진행률
+    _cur   = ss.get("swarm_wave_current", 0)
+    _total = ss.get("swarm_wave_total", 0)
+    st.markdown(
+        f'<div class="section-hdr">🎬 대본 생성 중... {_cur}/{_total} WAVES</div>',
+        unsafe_allow_html=True,
+    )
+    if _total > 0:
+        st.progress(_cur / _total)
+
+    # 터미널
+    if ss.swarm_log:
+        st.markdown(render_terminal(ss.swarm_log, height_px=320), unsafe_allow_html=True)
+    else:
+        st.markdown(
+            '<div class="terminal" style="height:320px">'
+            '<div style="color:#30363D;font-style:italic">'
+            '// Batch generator initializing...'
+            '</div></div>',
+            unsafe_allow_html=True,
+        )
+
+    # 폴링 제어
+    if _done:
+        st.rerun(scope="app")
+    elif ss.get("batch_generating"):
+        time.sleep(0.5)
+        st.rerun()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# @st.fragment — 작가 검수 보드
+# ══════════════════════════════════════════════════════════════════════════════
+@st.fragment
+def _review_board_fragment() -> None:
+    """생성된 대본을 카드 형태로 펼쳐 보여주는 검수 보드 fragment.
+
+    작가가 내용을 확인 후 [대본 최종 승인] 버튼을 눌러야만 연재가 시작된다.
+    [폐기 및 재생성] 버튼은 대본을 삭제하고 IDLE 상태로 복귀.
+    """
+    ss      = st.session_state
+    scripts = ss.get("review_scripts", [])
+
+    if not scripts:
+        st.markdown(
+            '<div class="pd-empty">생성된 대본이 없습니다.<br>대본 제작 버튼을 다시 눌러주세요.</div>',
+            unsafe_allow_html=True,
+        )
+        return
+
+    valid   = [s for s in scripts if not s.get("_failed")]
+    failed  = [s for s in scripts if s.get("_failed")]
+    _total  = len(scripts)
+    _ok     = len(valid)
+
+    st.markdown(
+        f'<div class="section-hdr">📋 대본 검수 보드 — {_ok} / {_total} WAVES 생성 완료</div>',
+        unsafe_allow_html=True,
+    )
+
+    # 대본 카드
+    for s in scripts:
+        wave        = s["wave"]
+        title       = s.get("title", "")
+        content     = s.get("content", "")
+        failed_flag = s.get("_failed", False)
+        persona     = s.get("persona_name", "")
+        tone_key    = s.get("tone", "")
+        tc_list     = s.get("target_comments", [])
+
+        status_color = "#FF4B4B" if failed_flag else "#00FF88"
+        status_text  = "❌ 생성 실패" if failed_flag else "✅"
+        card_cls     = "review-card review-card-failed" if failed_flag else "review-card"
+
+        tc_html = ""
+        if tc_list:
+            tc_parts = [
+                f'<span class="intel-chip-kw" style="font-size:0.62rem">'
+                f'#{_html.escape(str(tc.get("post_no","?")))}'
+                f' → {_html.escape(str(tc.get("comment",""))[:28])}'
+                f'</span>'
+                for tc in tc_list
+            ]
+            tc_html = (
+                '<div style="margin-top:7px;display:flex;flex-wrap:wrap;gap:4px">'
+                + "".join(tc_parts)
+                + "</div>"
+            )
+
+        if failed_flag:
+            body_html = (
+                '<div style="color:#555;font-style:italic;font-size:0.78rem">'
+                'LLM 생성 실패 — 연재 시 자동 건너뜀</div>'
+            )
+        else:
+            body_html = (
+                f'<div class="rc-title">{_html.escape(title)}</div>'
+                f'<div class="rc-body">{_html.escape(content)}</div>'
+                f'{tc_html}'
+            )
+
+        st.markdown(
+            f'<div class="{card_cls}" style="border-left:3px solid {status_color}">'
+            f'  <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">'
+            f'    <span class="rc-wave-badge">WAVE {wave}</span>'
+            f'    <span style="color:#555;font-size:0.62rem">{_html.escape(persona)}</span>'
+            f'    <span class="intel-chip-kw" style="font-size:0.6rem">{_html.escape(tone_key)}</span>'
+            f'    <span style="margin-left:auto;color:{status_color};font-size:0.62rem;font-weight:700">'
+            f'      {status_text}</span>'
+            f'  </div>'
+            f'  {body_html}'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+    st.markdown('<div style="height:10px"></div>', unsafe_allow_html=True)
+
+    # 경고 메시지
+    if failed:
+        st.warning(f"⚠️ {len(failed)}개 Wave는 생성에 실패했습니다. 해당 Wave는 자동으로 건너뜁니다.")
+
+    if not valid:
+        st.error("❌ 발행 가능한 대본이 없습니다. 폐기 후 다시 생성하세요.")
+        if st.button("🗑️ 폐기 및 재생성", key="review_discard_only_btn", use_container_width=True):
+            ss.review_ready   = False
+            ss.review_scripts = []
+            st.rerun(scope="app")
+        return
+
+    # 승인 + 폐기 버튼
+    col_confirm, col_discard = st.columns([3, 1], gap="small")
+
+    with col_confirm:
+        st.markdown('<div class="confirm-btn">', unsafe_allow_html=True)
+        if st.button(
+            f"✅  대본 최종 승인 및 연재 시작  —  {_ok} WAVES",
+            key="confirm_publish_btn",
+            use_container_width=True,
+        ):
+            # 계정 확인
+            try:
+                load_accounts()
+            except (FileNotFoundError, ValueError) as _ae:
+                st.error(f"⚠️ accounts.txt 로드 실패: {str(_ae)}")
+                return
+
+            # 연재 실행 워커 시작
+            _post_q:  queue.Queue     = queue.Queue()
+            _post_ev: threading.Event = threading.Event()
+
+            ss.review_ready          = False
+            ss.swarm_running         = True
+            ss.swarm_queue           = _post_q
+            ss.swarm_stop_event      = _post_ev
+            ss.swarm_log             = []
+            ss.swarm_preview_title   = ""
+            ss.swarm_preview_content = ""
+            ss.swarm_wave_total      = _ok
+            ss.swarm_wave_current    = 0
+            ss.last_fired            = True
+
+            _cfg = ss.get("_batch_gen_config", {})
+            threading.Thread(
+                target=_post_exec_worker,
+                kwargs={
+                    "log_q":        _post_q,
+                    "stop_ev":      _post_ev,
+                    "scripts":      ss.review_scripts,
+                    "gallery_id":   _cfg.get("gallery_id", ""),
+                    "gallery_type": _cfg.get("gallery_type", "mgallery"),
+                    "headless":     _cfg.get("headless", True),
+                },
+                daemon=True,
+            ).start()
+
+            st.rerun(scope="app")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with col_discard:
+        if st.button("🗑️ 폐기", key="review_discard_btn", use_container_width=True,
+                     help="대본을 버리고 다시 생성합니다"):
+            ss.review_ready   = False
+            ss.review_scripts = []
+            st.rerun(scope="app")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1581,22 +2162,34 @@ with main_left:
     st.markdown('</div>', unsafe_allow_html=True)  # /ctrl-card PAYLOAD
 
     # ════════════════════════════════════════
-    # STEP 3 — FIRE Button
+    # STEP 3 — Generate Script Button
     # ════════════════════════════════════════
-    _topic_val    = st.session_state.get("swarm_topic_input", "").strip()
-    _is_running   = st.session_state.get("swarm_running", False)
-    _fire_disabled = not has_any_key or not _topic_val or _is_running
+    _topic_val      = st.session_state.get("swarm_topic_input", "").strip()
+    _is_running     = st.session_state.get("swarm_running", False)
+    _is_generating  = st.session_state.get("batch_generating", False)
+    _is_reviewing   = st.session_state.get("review_ready", False)
+    _any_busy       = _is_running or _is_generating or _is_reviewing
+    _fire_disabled  = not has_any_key or not _topic_val or _any_busy
 
-    st.markdown('<div class="fire-btn">', unsafe_allow_html=True)
+    if _is_generating:
+        _btn_label = "⏳  대본 생성 중..."
+    elif _is_reviewing:
+        _btn_label = "📋  검수 대기 중..."
+    elif _is_running:
+        _btn_label = "📬  연재 발행 중..."
+    else:
+        _btn_label = "🎬  대본 제작  —  생성 시작"
+
+    st.markdown('<div class="generate-btn">', unsafe_allow_html=True)
     fire_clicked = st.button(
-        "🔥  FIRE  —  폭격 개시" if not _is_running else "⏳  SWARM RUNNING...",
+        _btn_label,
         use_container_width=True,
         type="primary",
         disabled=_fire_disabled,
     )
     st.markdown('</div>', unsafe_allow_html=True)
 
-    if not _is_running and _fire_disabled:
+    if not _any_busy and _fire_disabled:
         if not has_any_key:
             st.caption("🔑 .env 파일에 GEMINI_API_KEY를 설정하고 앱을 재시작하세요.")
         elif not _topic_val:
@@ -1628,68 +2221,97 @@ with main_right:
         unsafe_allow_html=True,
     )
 
-    # ── STEP 3 모니터 (Launch & Monitor — fragment) ──────────────────────
-    st.markdown(
-        '<div style="font-size:0.68rem;font-weight:800;letter-spacing:3px;'
-        'text-transform:uppercase;color:#FF4B4B;margin-bottom:10px;'
-        'text-shadow:0 0 10px rgba(255,75,75,0.35)">🔥 STEP 3 — Launch &amp; Monitor</div>',
-        unsafe_allow_html=True,
-    )
-    _monitor_fragment()
+    # ── STEP 3 영역: 상태에 따라 fragment 전환 ───────────────────────────
+    _ss = st.session_state
+    if _ss.get("batch_generating"):
+        st.markdown(
+            '<div style="font-size:0.68rem;font-weight:800;letter-spacing:3px;'
+            'text-transform:uppercase;color:#00FF88;margin-bottom:10px;'
+            'text-shadow:0 0 10px rgba(0,255,136,0.3)">🎬 STEP 3 — Script Generation</div>',
+            unsafe_allow_html=True,
+        )
+        _batch_gen_fragment()
+
+    elif _ss.get("review_ready") and not _ss.get("swarm_running"):
+        st.markdown(
+            '<div style="font-size:0.68rem;font-weight:800;letter-spacing:3px;'
+            'text-transform:uppercase;color:#AAFF44;margin-bottom:10px;'
+            'text-shadow:0 0 10px rgba(170,255,68,0.3)">📋 STEP 3 — Review Board</div>',
+            unsafe_allow_html=True,
+        )
+        _review_board_fragment()
+
+    else:
+        st.markdown(
+            '<div style="font-size:0.68rem;font-weight:800;letter-spacing:3px;'
+            'text-transform:uppercase;color:#FF4B4B;margin-bottom:10px;'
+            'text-shadow:0 0 10px rgba(255,75,75,0.35)">📬 STEP 3 — Launch &amp; Monitor</div>',
+            unsafe_allow_html=True,
+        )
+        _monitor_fragment()
 
 
-# ══════════════════════════════════════════════
-# FIRE — 백그라운드 워커 시작
-# ══════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════════
+# 대본 제작 버튼 — 배치 생성 워커 시작 (포스팅 없음)
+# ══════════════════════════════════════════════════════════════════════════════
 if fire_clicked:
-    _topic   = st.session_state.get("swarm_topic_input", "").strip()
-    _w_count = st.session_state.get("swarm_wave_count", 3)
+    _topic    = st.session_state.get("swarm_topic_input", "").strip()
+    _w_count  = st.session_state.get("swarm_wave_count", 3)
+    _infinite = bool(st.session_state.get("swarm_infinite", False))
 
     if not has_any_key:
         st.error("⚠️ GEMINI_API_KEY가 설정되지 않았습니다. 프로젝트 루트의 .env 파일을 확인하고 앱을 재시작하세요.")
     elif not _topic:
         st.error("⚠️ 주제를 입력하세요.")
     else:
-        try:
-            _accounts = load_accounts()
-        except (FileNotFoundError, ValueError) as _e:
-            st.error(f"⚠️ accounts.txt 로드 실패: {str(_e)}")
-            _accounts = None
+        # 생성할 실제 wave 수 (infinite면 10개씩 묶음)
+        _actual_count = min(_w_count, 10) if _infinite else _w_count
 
-        if _accounts:
-            st.session_state.swarm_log              = []
-            st.session_state.swarm_preview_title    = ""
-            st.session_state.swarm_preview_content  = ""
-            st.session_state.swarm_wave_total        = _w_count
-            st.session_state.swarm_wave_current      = 0
-            st.session_state.last_fired              = True
-            st.session_state.swarm_running           = True
+        # 무한 모드 재배치를 위한 설정 저장
+        st.session_state["_batch_gen_config"] = {
+            "api_key":      _GEMINI_API_KEY,
+            "topic":        _topic,
+            "wave_count":   _actual_count,
+            "gallery_id":   _gallery_id,
+            "gallery_type": _gallery_type,
+            "tone":         _neural_tone,
+            "length":       _length,
+            "headless":     _headless,
+            "infinite":     _infinite,
+        }
 
-            _log_q: queue.Queue       = queue.Queue()
-            _stop_ev: threading.Event = threading.Event()
-            _infinite: bool           = bool(st.session_state.get("swarm_infinite", False))
-            st.session_state.swarm_queue      = _log_q
-            st.session_state.swarm_stop_event = _stop_ev
+        st.session_state.swarm_log            = []
+        st.session_state.swarm_preview_title  = ""
+        st.session_state.swarm_preview_content = ""
+        st.session_state.swarm_wave_total     = _actual_count
+        st.session_state.swarm_wave_current   = 0
+        st.session_state.review_scripts       = []
+        st.session_state.review_ready         = False
+        st.session_state.batch_generating     = True
 
-            threading.Thread(
-                target=_swarm_worker,
-                kwargs={
-                    "log_q":        _log_q,
-                    "stop_ev":      _stop_ev,
-                    "api_key":      _GEMINI_API_KEY,
-                    "topic":        _topic,
-                    "wave_count":   _w_count,
-                    "gallery_id":   _gallery_id,
-                    "gallery_type": _gallery_type,
-                    "tone":         _neural_tone,
-                    "length":       _length,
-                    "headless":     _headless,
-                    "infinite":     _infinite,
-                },
-                daemon=True,
-            ).start()
+        _bgq:  queue.Queue     = queue.Queue()
+        _bgev: threading.Event = threading.Event()
+        st.session_state.batch_gen_queue      = _bgq
+        st.session_state.batch_gen_stop_event = _bgev
 
-            st.rerun()  # 폴링 모드 진입 (fragment가 이후 polling 담당)
+        threading.Thread(
+            target=_batch_gen_worker,
+            kwargs={
+                "log_q":        _bgq,
+                "stop_ev":      _bgev,
+                "api_key":      _GEMINI_API_KEY,
+                "topic":        _topic,
+                "wave_count":   _actual_count,
+                "gallery_id":   _gallery_id,
+                "gallery_type": _gallery_type,
+                "tone":         _neural_tone,
+                "length":       _length,
+                "infinite":     _infinite,
+            },
+            daemon=True,
+        ).start()
+
+        st.rerun()  # _batch_gen_fragment 폴링 진입
 
 
 # ══════════════════════════════════════════════
