@@ -943,7 +943,6 @@ def _batch_gen_worker(
     tone: str,
     length: str,
     infinite: bool = False,
-    situation_summary: str = "",
 ) -> None:
     """백그라운드 스레드: N개 Wave 분량의 대본(제목+본문)을 일괄 사전 생성.
     포스팅은 하지 않는다. 완료 시 batch_done 메시지로 scripts 리스트를 반환.
@@ -1006,7 +1005,6 @@ def _batch_gen_worker(
                     context_hours=None,
                     length=length,
                     recent_posts=_recent_posts or None,
-                    situation_summary=situation_summary,
                 )
                 if result.get("_parse_error") or not result.get("title") or not result.get("content"):
                     q_log(f"[BATCH] ❌ [{wave}] 파싱 실패 — 건너뜀")
@@ -1521,12 +1519,13 @@ def _intel_results_fragment() -> None:
                         language="text",
                     )
 
-            # "FIRE 주제로 사용" 버튼
-            _hot = _ir.get("hot_topics", [])
-            if _hot:
+            # "AI 브리핑 → 주제로 사용" 버튼
+            # ai_analysis 전체 텍스트를 토픽 입력창에 주입 → $topic으로 자연 치환
+            _ai_briefing = (_ir.get("ai_analysis") or "").strip()
+            if _ai_briefing:
                 st.markdown('<div class="topic-use-btn" style="margin-top:12px">', unsafe_allow_html=True)
-                if st.button(f"➡️  '{_hot[0]}'  —  FIRE 주제로 사용", key="use_as_topic_btn"):
-                    ss.swarm_topic_input = _hot[0]
+                if st.button("➡️  AI 브리핑 전체를 주제로 사용", key="use_as_topic_btn"):
+                    ss.swarm_topic_input = _ai_briefing
                     # ── UX 동기화: INTEL 패널의 갤러리 설정을 FIRE 패널에 그대로 복사 ──
                     ss.target_gallery_id = ss.get("intel_gallery_id", "")
                     ss.target_type_label = ss.get("intel_type_label", "마이너 (mgallery)")
@@ -2321,16 +2320,15 @@ if fire_clicked:
 
         # 무한 모드 재배치를 위한 설정 저장
         st.session_state["_batch_gen_config"] = {
-            "api_key":            _GEMINI_API_KEY,
-            "topic":              _topic,
-            "wave_count":         _actual_count,
-            "gallery_id":         _gallery_id,
-            "gallery_type":       _gallery_type,
-            "tone":               _neural_tone,
-            "length":             _length,
-            "headless":           _headless,
-            "infinite":           _infinite,
-            "situation_summary":  _situation_summary,
+            "api_key":      _GEMINI_API_KEY,
+            "topic":        _topic,
+            "wave_count":   _actual_count,
+            "gallery_id":   _gallery_id,
+            "gallery_type": _gallery_type,
+            "tone":         _neural_tone,
+            "length":       _length,
+            "headless":     _headless,
+            "infinite":     _infinite,
         }
 
         st.session_state.swarm_log            = []
@@ -2347,23 +2345,19 @@ if fire_clicked:
         st.session_state.batch_gen_queue      = _bgq
         st.session_state.batch_gen_stop_event = _bgev
 
-        _intel = st.session_state.get("intel_result") or {}
-        _situation_summary = _intel.get("ai_analysis", "") or ""
-
         threading.Thread(
             target=_batch_gen_worker,
             kwargs={
-                "log_q":              _bgq,
-                "stop_ev":            _bgev,
-                "api_key":            _GEMINI_API_KEY,
-                "topic":              _topic,
-                "wave_count":         _actual_count,
-                "gallery_id":         _gallery_id,
-                "gallery_type":       _gallery_type,
-                "tone":               _neural_tone,
-                "length":             _length,
-                "infinite":           _infinite,
-                "situation_summary":  _situation_summary,
+                "log_q":        _bgq,
+                "stop_ev":      _bgev,
+                "api_key":      _GEMINI_API_KEY,
+                "topic":        _topic,
+                "wave_count":   _actual_count,
+                "gallery_id":   _gallery_id,
+                "gallery_type": _gallery_type,
+                "tone":         _neural_tone,
+                "length":       _length,
+                "infinite":     _infinite,
             },
             daemon=True,
         ).start()
