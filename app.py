@@ -72,6 +72,10 @@ _INTEL_CACHE_TTL = 900  # 15분
 # UI의 고정 톤 설정을 SWARM 내에서 오버라이드함 — 현지인 군중 시뮬레이션.
 _PERSONA_POOL: list[dict] = pm.load_json("personas.json")
 
+# 입체적 '돌연변이' 캐릭터 — 매 배치에 2~3개 강제 배정하여 서사 갈등 보장
+_MUTANT_KEYS: frozenset[str] = frozenset({"conviction_defender", "solution_proposer", "hopium"})
+_MUTANT_POOL: list[dict] = [p for p in _PERSONA_POOL if p["key"] in _MUTANT_KEYS]
+
 # ══════════════════════════════════════════════
 # Gallery History — 갤러리 히스토리 퀵셀렉트
 # ══════════════════════════════════════════════
@@ -976,6 +980,16 @@ def _batch_gen_worker(
     except Exception as _te:
         q_log(f"[BATCH] ⚠️ 댓글 타겟 수집 실패 (계속): {str(_te)[:80]}")
 
+    # ── 돌연변이 강제 배정 라인업 빌드 ────────────────────────────────────
+    # 총 actual_count 슬롯 중 2~3개는 conviction_defender / solution_proposer /
+    # hopium 중에서 반드시 1개씩 이상 배정. 나머지는 전체 풀에서 랜덤 채움.
+    # → 매 배치마다 서사 갈등(쉴드/훈수/희망회로)이 확정적으로 등장.
+    _mutant_count = random.randint(2, min(3, actual_count, len(_MUTANT_POOL)))
+    _guaranteed   = random.sample(_MUTANT_POOL, _mutant_count)
+    _filler       = [random.choice(_PERSONA_POOL) for _ in range(actual_count - _mutant_count)]
+    _wave_lineup  = _guaranteed + _filler
+    random.shuffle(_wave_lineup)
+
     scripts: list[dict] = []
 
     for wave in range(1, actual_count + 1):
@@ -986,7 +1000,7 @@ def _batch_gen_worker(
         q_log(f"[BATCH] 🎬 대본 {wave}/{actual_count} 생성 중...")
         log_q.put({"type": "batch_progress", "wave": wave, "total": actual_count})
 
-        _persona   = random.choice(_PERSONA_POOL)
+        _persona   = _wave_lineup[wave - 1]
         _wave_tone = _persona["key"]
         q_log(f"[BATCH] 🎭 [{wave}] 페르소나: {_persona['name']} ({_wave_tone})")
 
