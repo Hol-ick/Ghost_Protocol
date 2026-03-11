@@ -6,7 +6,10 @@
   {"name": "건조한 무감각 관찰자",    "key": "neutral"},
   {"name": "팩트폭격 분석충",         "key": "analytical"},
   {"name": "분위기 환기형 마이웨이",  "key": "ventilator"},
-  {"name": "주어 생략 쉐도우복서",  "key": "subject_omitter"},
-  {"name": "메타 떡밥 관전자",     "key": "meta_observer"},
-  {"name": "체념한 탈출호소인",   "key": "doomer"}
+  {"name": "주어 생략 쉐도우복서",    "key": "subject_omitter"},
+  {"name": "메타 떡밥 관전자",        "key": "meta_observer"},
+  {"name": "체념한 탈출호소인",       "key": "doomer"},
+  {"name": "소신발언 대깨쉴",         "key": "conviction_defender"},
+  {"name": "진지충 훈수꾼",           "key": "solution_proposer"},
+  {"name": "역배팅 희망회로",         "key": "hopium"}
 ]
