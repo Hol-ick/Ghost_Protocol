@@ -4,6 +4,7 @@
 - 톤: $tone_instruction
 - 분량: $length_instruction
 $recent_posts_context
+$situation_summary_block
 [🚨 HIGH-CONTEXT 강제 룰 — 가장 먼저 읽고 지켜라]
 위 [포스팅 주제] 단어를 제목과 본문에 단 한 글자도 그대로 쓰지 마라. 이게 이 배치에서 가장 중요한 룰이다.
 갤러리 안에 있는 사람들은 이미 다 알고 있다. 너는 그냥 현지인이다.

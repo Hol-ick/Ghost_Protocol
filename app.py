@@ -943,6 +943,7 @@ def _batch_gen_worker(
     tone: str,
     length: str,
     infinite: bool = False,
+    situation_summary: str = "",
 ) -> None:
     """백그라운드 스레드: N개 Wave 분량의 대본(제목+본문)을 일괄 사전 생성.
     포스팅은 하지 않는다. 완료 시 batch_done 메시지로 scripts 리스트를 반환.
@@ -1005,6 +1006,7 @@ def _batch_gen_worker(
                     context_hours=None,
                     length=length,
                     recent_posts=_recent_posts or None,
+                    situation_summary=situation_summary,
                 )
                 if result.get("_parse_error") or not result.get("title") or not result.get("content"):
                     q_log(f"[BATCH] ❌ [{wave}] 파싱 실패 — 건너뜀")
@@ -2319,15 +2321,16 @@ if fire_clicked:
 
         # 무한 모드 재배치를 위한 설정 저장
         st.session_state["_batch_gen_config"] = {
-            "api_key":      _GEMINI_API_KEY,
-            "topic":        _topic,
-            "wave_count":   _actual_count,
-            "gallery_id":   _gallery_id,
-            "gallery_type": _gallery_type,
-            "tone":         _neural_tone,
-            "length":       _length,
-            "headless":     _headless,
-            "infinite":     _infinite,
+            "api_key":            _GEMINI_API_KEY,
+            "topic":              _topic,
+            "wave_count":         _actual_count,
+            "gallery_id":         _gallery_id,
+            "gallery_type":       _gallery_type,
+            "tone":               _neural_tone,
+            "length":             _length,
+            "headless":           _headless,
+            "infinite":           _infinite,
+            "situation_summary":  _situation_summary,
         }
 
         st.session_state.swarm_log            = []
@@ -2344,19 +2347,23 @@ if fire_clicked:
         st.session_state.batch_gen_queue      = _bgq
         st.session_state.batch_gen_stop_event = _bgev
 
+        _intel = st.session_state.get("intel_result") or {}
+        _situation_summary = _intel.get("ai_analysis", "") or ""
+
         threading.Thread(
             target=_batch_gen_worker,
             kwargs={
-                "log_q":        _bgq,
-                "stop_ev":      _bgev,
-                "api_key":      _GEMINI_API_KEY,
-                "topic":        _topic,
-                "wave_count":   _actual_count,
-                "gallery_id":   _gallery_id,
-                "gallery_type": _gallery_type,
-                "tone":         _neural_tone,
-                "length":       _length,
-                "infinite":     _infinite,
+                "log_q":              _bgq,
+                "stop_ev":            _bgev,
+                "api_key":            _GEMINI_API_KEY,
+                "topic":              _topic,
+                "wave_count":         _actual_count,
+                "gallery_id":         _gallery_id,
+                "gallery_type":       _gallery_type,
+                "tone":               _neural_tone,
+                "length":             _length,
+                "infinite":           _infinite,
+                "situation_summary":  _situation_summary,
             },
             daemon=True,
         ).start()

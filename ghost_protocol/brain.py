@@ -250,6 +250,7 @@ class GhostBrain:
         length: str = "보통 (3~4문장)",
         keywords: Optional[list[str]] = None,
         recent_posts: Optional[list[dict]] = None,
+        situation_summary: str = "",
     ) -> dict:
         """DC Inside 스타일 게시글 생성 + 소셜 인터랙션 댓글 콤보.
 
@@ -346,6 +347,22 @@ class GhostBrain:
         else:
             recent_posts_context = ""
 
+        # ── 월드 컨텍스트 블록 (AI 브리핑 주입) ────────────────────────────
+        # situation_summary가 있을 때만 고인물 월드컨텍스트 섹션을 삽입.
+        # 없으면 빈 문자열 → generate_post.txt의 $situation_summary_block 자리가 비어 무해.
+        if situation_summary:
+            situation_summary_block = (
+                "[🌐 월드 컨텍스트 — AI 브리핑 (고인물 배경지식)]\n"
+                f"{situation_summary}\n\n"
+                "[핵심 룰] 위 브리핑은 너에게만 주어진 배경 정보다. "
+                "현재 갤러리에서 무슨 떡밥이 터졌는지 이미 완벽하게 알고 있는 고인물처럼 행동해라.\n"
+                "- 브리핑에 등장하는 핵심 명사(인명·팀명·이벤트명 등)를 대사에 직접 쓰지 마라.\n"
+                "- '이거', '지금 꼬라지', '이 상황', '걔네', '오늘 것' 같은 대명사로 간접 지칭해라.\n"
+                "- 브리핑을 요약·설명하지 마라 — 이미 알고 있는 고인물처럼 툭 반응만 해라.\n"
+            )
+        else:
+            situation_summary_block = ""
+
         # ── 작문 지시 — prompts/generate_post.txt 에서 로드 ──────────────────
         # 하드코딩 제로: 분량·톤·키워드·교차지시를 템플릿 변수로 주입.
         # 사용자는 generate_post.txt 만 수정하면 작문 스타일 전체를 튜닝 가능.
@@ -359,6 +376,7 @@ class GhostBrain:
                 cross_instruction=cross_instruction,
                 kw_inject=kw_inject,
                 recent_posts_context=recent_posts_context,
+                situation_summary_block=situation_summary_block,
             )
         )
 
