@@ -570,6 +570,7 @@ def _init_state() -> None:
         "review_scripts":         [],      # 생성된 대본 목록 [{wave, persona_name, tone, title, content, target_comments, _failed}]
         "review_ready":           False,   # 검수 보드 표시 상태
         "_batch_gen_config":      {},      # 무한 모드 재배치용 설정 저장
+        "_show_copy_box":         False,  # 검수 보드 전체 복사 토글
         # ── INTEL ────────────────────────────────────
         "intel_running":          False,
         "intel_queue":            None,
@@ -1227,6 +1228,44 @@ def render_terminal(logs: list, height_px: int = 400) -> str:
 
 
 # ══════════════════════════════════════════════
+# 대본 Plaintext 포맷터 (검수 보드 복사용)
+# ══════════════════════════════════════════════
+def _format_scripts_for_copy(scripts: list[dict]) -> str:
+    """생성된 대본 목록을 가독성 좋은 평문(Plaintext)으로 변환.
+
+    Review Board의 '전체 대본 복사' 기능에서 st.code()에 주입된다.
+    """
+    ts    = time.strftime("%Y-%m-%d %H:%M:%S")
+    lines = [
+        "=" * 60,
+        "GHOST PROTOCOL — 대본 전체 스크립트",
+        f"생성 시각: {ts}",
+        f"총 {len(scripts)}개 WAVE",
+        "=" * 60,
+    ]
+    for s in scripts:
+        lines.append("")
+        wave    = s.get("wave", "?")
+        persona = s.get("persona_name", "")
+        tone_k  = s.get("tone", "")
+        lines.append(f"▌ WAVE {wave}  [{persona} / {tone_k}]")
+        if s.get("_failed"):
+            lines.append("  [생성 실패 — 연재 시 건너뜀]")
+        else:
+            lines.append(f"  제목: {s.get('title', '')}")
+            content_lines = s.get("content", "").splitlines()
+            for i, cl in enumerate(content_lines):
+                prefix = "  본문: " if i == 0 else "        "
+                lines.append(f"{prefix}{cl}")
+            for tc in s.get("target_comments", []):
+                lines.append(
+                    f"  댓글 → #{tc.get('post_no','?')}: {tc.get('comment', '')}"
+                )
+        lines.append("-" * 40)
+    return "\n".join(lines)
+
+
+# ══════════════════════════════════════════════
 # Plotly 차트 빌더 (캐시 로직은 호출부에서 관리)
 # ══════════════════════════════════════════════
 def _build_intel_fig(ir: dict) -> "go.Figure | None":
@@ -1789,10 +1828,21 @@ def _review_board_fragment() -> None:
     _total  = len(scripts)
     _ok     = len(valid)
 
-    st.markdown(
-        f'<div class="section-hdr">📋 대본 검수 보드 — {_ok} / {_total} WAVES 생성 완료</div>',
-        unsafe_allow_html=True,
-    )
+    # ── 헤더 + 전체 복사 버튼 ────────────────────────────────────────────
+    hdr_col, copy_col = st.columns([4, 1], gap="small")
+    with hdr_col:
+        st.markdown(
+            f'<div class="section-hdr">📋 대본 검수 보드 — {_ok} / {_total} WAVES 생성 완료</div>',
+            unsafe_allow_html=True,
+        )
+    with copy_col:
+        if st.button("📋 전체 복사", key="copy_scripts_toggle_btn",
+                     help="전체 대본을 Plaintext로 펼쳐 복사합니다", use_container_width=True):
+            ss["_show_copy_box"] = not ss.get("_show_copy_box", False)
+
+    if ss.get("_show_copy_box", False):
+        _copy_text = _format_scripts_for_copy(scripts)
+        st.code(_copy_text, language="text")
 
     # 대본 카드
     for s in scripts:

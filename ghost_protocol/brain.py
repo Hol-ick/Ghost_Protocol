@@ -319,13 +319,12 @@ class GhostBrain:
             )
 
         # ── 교차 지시 — prompts/cross_instructions.json 에서 로드 ────────────
-        # monologue × 아주 짧게 / ventilator 전용 오버라이드 지시
+        # 규칙: tone 키가 cross_instructions.json에 있으면 자동 적용.
+        # 특수 조합(monologue × 아주 짧게)은 별도 키로 오버라이드.
         _cross = pm.load_json("cross_instructions.json")
-        cross_instruction = ""
-        if tone == "ventilator":
-            cross_instruction = _cross.get("ventilator", "")
-        elif tone == "monologue" and length == "아주 짧게 (1문장)":
-            cross_instruction = _cross.get("monologue_ultrashort", "")
+        cross_instruction = _cross.get(tone, "")   # 모든 페르소나 tone 자동 적용
+        if tone == "monologue" and length == "아주 짧게 (1문장)":
+            cross_instruction = _cross.get("monologue_ultrashort", cross_instruction)
 
         # ── 댓글 타겟 컨텍스트 빌드 ─────────────────────────────────────────
         # recent_posts: fetch_post_list()가 반환한 비봇 게시글 (post_no, title).
