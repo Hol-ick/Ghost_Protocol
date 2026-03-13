@@ -2046,6 +2046,15 @@ def _intel_results_fragment() -> None:
                     for p in _raw_posts
                 ]
                 st.dataframe(pd.DataFrame(_df_data), use_container_width=True, hide_index=True)
+                # ── 봇 마킹 진단 정보 ─────────────────────────────────────────
+                _target_gid = ss.get("target_gallery_id", "(미설정)")
+                st.caption(
+                    f"🔎 진단 | "
+                    f"DB 봇 post_no 수: **{len(_ai_nos_db)}개** | "
+                    f"Intel GID: `{_intel_gid}` | "
+                    f"FIRE GID: `{_target_gid}` | "
+                    f"스캔 글 수: {len(_raw_posts)}개"
+                )
 
         # ── DB 원본 데이터 대용량 CSV 내보내기 ──────────────────────────────
         _export_gid = ss.get("intel_gallery_id", "").strip()
