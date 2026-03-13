@@ -604,6 +604,16 @@ class GhostBrain:
             )
             return {"title": "", "content": "", "target_comments": [], "_parse_error": True, "_raw_response": raw_text}
 
+        # ── score_reporter: Python 레벨 숫자 검증 ─────────────────────────────
+        # cross_instruction에서 수치 강제했음에도 LLM이 누락하는 경우 reject.
+        # re.search(r'\d', content) → 아라비아 숫자 하나라도 있으면 통과.
+        if tone == "score_reporter" and not re.search(r"\d", content):
+            _api_logger.warning(
+                "generate_post SCORE_REPORTER NO_DIGIT ▶ content에 숫자 없음 → reject\ncontent: %r",
+                content,
+            )
+            return {"title": "", "content": "", "target_comments": [], "_parse_error": True, "_raw_response": raw_text}
+
         if not title or not content:
             _api_logger.warning(
                 "generate_post EMPTY FIELD ▶ title=%r content=%r\nRAW:\n%s",
