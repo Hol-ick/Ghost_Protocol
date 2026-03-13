@@ -8,10 +8,12 @@ Pipeline: INTEL (Trend Analysis) → PAYLOAD (Topic + Config) → LAUNCH (FIRE +
 """
 
 import asyncio
+import concurrent.futures as _cf
 import html as _html
 import json
 import os
 import queue
+import math
 import random
 import subprocess
 import sys
@@ -37,6 +39,16 @@ from ghost_protocol import prompt_manager as pm
 from ghost_protocol.brain import GhostBrain, RateLimitError
 from ghost_protocol.poster import GhostPoster, load_accounts
 
+
+# ══════════════════════════════════════════════
+# 공용 타임아웃 래퍼
+# ══════════════════════════════════════════════
+def _timed(fn, *args, _timeout: float = 30.0, **kwargs):
+    """blocking 함수를 별도 스레드에서 실행, _timeout 초 내 완료 안 되면
+    concurrent.futures.TimeoutError를 raise한다. 호출자가 직접 catch 할 것."""
+    with _cf.ThreadPoolExecutor(max_workers=1) as _pool:
+        return _pool.submit(fn, *args, **kwargs).result(timeout=_timeout)
+
 # ══════════════════════════════════════════════
 # Page Config
 # ══════════════════════════════════════════════
@@ -56,12 +68,24 @@ _TYPE_MAP = {
     "미니 (mini)":       "mini",
 }
 _TONE_MAP = {
-    "🧊 냉소적 (Cynical)":    "cynical",
-    "😐 중립 (Neutral)":      "neutral",
-    "📊 분석적 (Analytical)": "analytical",
-    "🗣️ 독백 (Monologue)":   "monologue",
-    "🔥 공격적 (Aggressive)": "aggressive",
-    "💀 어그로성 (Aggro)":    "aggro",
+    "🧊 냉소적 (Cynical)":         "cynical",
+    "😐 중립 (Neutral)":           "neutral",
+    "📊 분석적 (Analytical)":      "analytical",
+    "🗣️ 독백 (Monologue)":        "monologue",
+    "🔥 공격적 (Aggressive)":      "aggressive",
+    "💀 어그로성 (Aggro)":         "aggro",
+    "😤 하소연형 (Ventilator)":    "ventilator",
+    "🔭 메타 관전자 (Meta)":       "meta_observer",
+    "☠️ 체념형 (Doomer)":         "doomer",
+    "🛡️ 소신발언 (Defender)":     "conviction_defender",
+    "🔧 훈수꾼 (Solution)":        "solution_proposer",
+    "🚀 희망회로 (Hopium)":        "hopium",
+    "❓ 질문충 (Lazy Q)":          "lazy_questioner",
+    "😏 비틱 (Humblebragger)":     "humblebragger",
+    "🕵️ 음모론자 (Paranoid)":     "paranoid",
+    "😭 자학형 (Self-deprecator)": "self_deprecator",
+    "📣 집결형 (Rally Crier)":     "rally_crier",
+    "📡 실황형 (Score Reporter)":  "score_reporter",
 }
 _LEN_OPTS = ["아주 짧게 (1문장)", "짧게 (1~2문장)", "보통 (3~4문장)"]
 _INTEL_CACHE_TTL = 900  # 15분
@@ -75,6 +99,109 @@ _PERSONA_POOL: list[dict] = pm.load_json("personas.json")
 # 입체적 '돌연변이' 캐릭터 — 매 배치에 2~3개 강제 배정하여 서사 갈등 보장
 _MUTANT_KEYS: frozenset[str] = frozenset({"conviction_defender", "solution_proposer", "hopium"})
 _MUTANT_POOL: list[dict] = [p for p in _PERSONA_POOL if p["key"] in _MUTANT_KEYS]
+
+# ── 감정 온도 티어 — 파멸 루프(연속 극단적 페르소나 누적) 방지 ─────────────────
+# HOT  : 분노·공격·체념·음모론 — 갤러리를 부정 방향으로 끌어내리는 페르소나
+# NEUTRAL: 건조·분석·관전·중계 — 감정 온도를 리셋하는 완충 페르소나
+# WARM : 나머지 (냉소·독백·질문 등) — 중간 온도
+# 배치 규칙: HOT ≤ 30%, NEUTRAL ≥ 20%, 연속 HOT 3회 이상 불가
+_PERSONA_HOT_KEYS: frozenset[str] = frozenset({
+    "aggressive", "aggro", "doomer", "paranoid",
+})
+_PERSONA_NEUTRAL_KEYS: frozenset[str] = frozenset({
+    "neutral", "analytical", "meta_observer", "score_reporter",
+})
+_HOT_POOL:     list[dict] = [p for p in _PERSONA_POOL if p["key"] in _PERSONA_HOT_KEYS]
+_NEUTRAL_POOL: list[dict] = [p for p in _PERSONA_POOL if p["key"] in _PERSONA_NEUTRAL_KEYS]
+_WARM_POOL:    list[dict] = [
+    p for p in _PERSONA_POOL
+    if p["key"] not in _PERSONA_HOT_KEYS
+    and p["key"] not in _PERSONA_NEUTRAL_KEYS
+    and p["key"] not in _MUTANT_KEYS
+]
+
+
+def _fix_consecutive_same(lineup: list[dict]) -> list[dict]:
+    """동일 페르소나가 연속 2회 이상 이어지지 않도록 swap으로 재배치."""
+    result = list(lineup)
+    for i in range(1, len(result)):
+        if result[i]["key"] == result[i - 1]["key"]:
+            swapped = False
+            for j in range(i + 1, len(result)):
+                if result[j]["key"] != result[i]["key"]:
+                    result[i], result[j] = result[j], result[i]
+                    swapped = True
+                    break
+            if not swapped:
+                for j in range(i - 2, -1, -1):
+                    if result[j]["key"] != result[i]["key"]:
+                        result[i], result[j] = result[j], result[i]
+                        break
+    return result
+
+
+def _fix_consecutive_hot(lineup: list[dict]) -> list[dict]:
+    """연속 HOT 페르소나가 3회 이상 이어지지 않도록 swap으로 재배치."""
+    result = list(lineup)
+    for i in range(2, len(result)):
+        if (result[i]["key"] in _PERSONA_HOT_KEYS
+                and result[i - 1]["key"] in _PERSONA_HOT_KEYS
+                and result[i - 2]["key"] in _PERSONA_HOT_KEYS):
+            # i 이후에서 non-HOT 찾아 swap
+            swapped = False
+            for j in range(i + 1, len(result)):
+                if result[j]["key"] not in _PERSONA_HOT_KEYS:
+                    result[i], result[j] = result[j], result[i]
+                    swapped = True
+                    break
+            if not swapped:
+                # 뒤에 non-HOT 없으면 i 이전에서 찾기
+                for j in range(i - 3, -1, -1):
+                    if result[j]["key"] not in _PERSONA_HOT_KEYS:
+                        result[i], result[j] = result[j], result[i]
+                        break
+    return result
+
+
+def _build_balanced_lineup(wave_count: int) -> list[dict]:
+    """온도 밸런싱된 Wave 라인업을 빌드한다.
+
+    보장 조건:
+    - mutant(conviction_defender / solution_proposer / hopium): 2~3개 고정
+    - HOT(aggressive / aggro / doomer / paranoid): 최대 floor(30%)개
+    - NEUTRAL(neutral / analytical / meta_observer / score_reporter): 최소 ceil(20%)개
+    - 나머지 슬롯은 WARM(cynical / monologue / ventilator 등)으로 채움
+    - 연속 HOT 3회 이상 불가 (_fix_consecutive_hot 후처리)
+    """
+    max_hot     = max(1, int(wave_count * 0.30))
+    min_neutral = max(1, math.ceil(wave_count * 0.20))
+
+    # mutant 강제 배정
+    mutant_count = random.randint(2, min(3, wave_count, len(_MUTANT_POOL)))
+    remaining    = wave_count - mutant_count
+
+    # HOT 배정 (최소 1개 보장, 예산 안에서 랜덤)
+    hot_count = (random.randint(1, min(max_hot, remaining))
+                 if remaining > 0 else 0)
+    remaining -= hot_count
+
+    # NEUTRAL 최소 보장 (남은 슬롯 초과 안 되게)
+    neutral_count = min(min_neutral + random.randint(0, 2), remaining)
+    neutral_count = max(0, neutral_count)
+    remaining -= neutral_count
+
+    # 나머지 WARM으로 채움
+    warm_count = max(0, remaining)
+
+    slots = (
+        random.sample(_MUTANT_POOL, mutant_count)
+        + [random.choice(_HOT_POOL)     for _ in range(hot_count)]
+        + [random.choice(_NEUTRAL_POOL) for _ in range(neutral_count)]
+        + [random.choice(_WARM_POOL)    for _ in range(warm_count)]
+    )
+    random.shuffle(slots)
+    slots = _fix_consecutive_same(slots)   # 동일 페르소나 연속 2회 방지
+    return _fix_consecutive_hot(slots)     # HOT 연속 3회 방지
 
 # ══════════════════════════════════════════════
 # Gallery History — 갤러리 히스토리 퀵셀렉트
@@ -964,7 +1091,8 @@ def _batch_gen_worker(
     def q_log(msg: str) -> None:
         log_q.put({"type": "log", "data": msg})
 
-    actual_count = min(wave_count, 10) if infinite else wave_count
+    # Phase 10: 무한 모드는 항상 10개 강제 (fire_clicked에서 이미 보정하지만 이중 방어)
+    actual_count = 10 if infinite else wave_count
 
     try:
         brain = GhostBrain(api_key=api_key or None)
@@ -986,15 +1114,30 @@ def _batch_gen_worker(
                 gallery_id=gallery_id, gallery_type=gallery_type, pages=1,
             )
             if _ar_raw.get("titles"):
-                _ar_result = brain.analyze_trend(_ar_raw)
-                _fresh_topic = (_ar_result.get("ai_analysis") or "").strip()
-                if _fresh_topic:
-                    topic = _fresh_topic   # 이 배치의 $topic 갱신
-                    log_q.put({"type": "context_updated",
-                               "topic": topic, "intel": _ar_result})
-                    q_log("[AUTO-REFRESH] ✅ 세계관 갱신 완료 — 최신 브리핑으로 대본 생성")
-                else:
-                    q_log("[AUTO-REFRESH] ⚠️ 분석 비어있음 — 기존 토픽 유지")
+                # ── Gemini 분석 타임아웃 래퍼 ─────────────────────────────────────
+                # brain.analyze_trend()는 google.genai SDK를 동기 호출하며,
+                # 네트워크 지연 / Rate Limit 무응답 시 무한 대기(Hang)를 유발한다.
+                # → ThreadPoolExecutor + result(timeout=25)로 25초 이내로 제한.
+                # 타임아웃 초과 시 orphan 스레드가 남지만 워커는 즉시 폴백 진행.
+                _ar_result = None
+                try:
+                    with _cf.ThreadPoolExecutor(max_workers=1) as _ar_pool:
+                        _ar_fut = _ar_pool.submit(brain.analyze_trend, _ar_raw)
+                        _ar_result = _ar_fut.result(timeout=25)
+                except _cf.TimeoutError:
+                    q_log("[AUTO-REFRESH] ⚠️ AI 분석 타임아웃 (25s) — 기존 토픽 유지")
+                except Exception as _ar_inner_e:
+                    q_log(f"[AUTO-REFRESH] ⚠️ AI 분석 실패: {str(_ar_inner_e)[:80]}")
+
+                if _ar_result:
+                    _fresh_topic = (_ar_result.get("ai_analysis") or "").strip()
+                    if _fresh_topic:
+                        topic = _fresh_topic   # 이 배치의 $topic 갱신
+                        log_q.put({"type": "context_updated",
+                                   "topic": topic, "intel": _ar_result})
+                        q_log("[AUTO-REFRESH] ✅ 세계관 갱신 완료 — 최신 브리핑으로 대본 생성")
+                    else:
+                        q_log("[AUTO-REFRESH] ⚠️ 분석 비어있음 — 기존 토픽 유지")
             else:
                 q_log("[AUTO-REFRESH] ⚠️ 수집 데이터 없음 — 기존 토픽 유지")
         except Exception as _ar_e:
@@ -1003,36 +1146,42 @@ def _batch_gen_worker(
     # ── 댓글 타겟 풀 수집 + 기존 댓글 프리패치 (배치 시작 시 1회) ────────────
     # 봇 글 제외 최대 15개 수집 → 기존 댓글 AJAX 프리패치 → enriched_pool 구성.
     # 매 Wave마다 이 풀에서 랜덤 서브셋 5개를 뽑아 군중 쏠림 현상 방지.
+    # Phase 8: 수집 전 로그 출력 + 30초 타임아웃 래퍼 → 블라인드 행 방지.
     _enriched_pool: list[dict] = []
+    q_log("[BATCH] 🔍 게시글 목록 및 댓글 맥락 수집 중... (최대 30초)")
     try:
-        from ghost_protocol.scraper import TrendScraper as _TS
-        _ts = _TS()
-        _raw_list = _ts.fetch_post_list(gallery_id, gallery_type, page=1)
-        _candidates = [p for p in _raw_list if not p.get("is_bot")][:15]
-        for _c in _candidates:
-            _cmts: list[str] = []
-            try:
-                _cmts = _ts.fetch_comments_ajax(gallery_id, _c["post_no"], gallery_type)[:5]
-            except Exception:
-                pass
-            _enriched_pool.append({
-                "post_no":           _c["post_no"],
-                "title":             _c["title"],
-                "existing_comments": _cmts,
-            })
+        def _collect_pool() -> list[dict]:
+            from ghost_protocol.scraper import TrendScraper as _TS
+            _ts = _TS()
+            _raw_list = _ts.fetch_post_list(gallery_id, gallery_type, page=1)
+            _candidates = [p for p in _raw_list if not p.get("is_bot")][:15]
+            _pool: list[dict] = []
+            for _c in _candidates:
+                _cmts: list[str] = []
+                try:
+                    _cmts = _ts.fetch_comments_ajax(
+                        gallery_id, _c["post_no"], gallery_type
+                    )[:5]
+                except Exception:
+                    pass
+                _pool.append({
+                    "post_no":           _c["post_no"],
+                    "title":             _c["title"],
+                    "existing_comments": _cmts,
+                })
+            return _pool
+
+        _enriched_pool = _timed(_collect_pool, _timeout=30.0)
         q_log(f"[BATCH] 📋 댓글 타겟 풀: {len(_enriched_pool)}개 (맥락 프리패치 완료)")
+    except _cf.TimeoutError:
+        q_log("[BATCH] ⚠️ 댓글 타겟 수집 타임아웃 (30s) — 빈 풀로 계속 진행")
     except Exception as _te:
         q_log(f"[BATCH] ⚠️ 댓글 타겟 수집 실패 (계속): {str(_te)[:80]}")
 
-    # ── 돌연변이 강제 배정 라인업 빌드 ────────────────────────────────────
-    # 총 actual_count 슬롯 중 2~3개는 conviction_defender / solution_proposer /
-    # hopium 중에서 반드시 1개씩 이상 배정. 나머지는 전체 풀에서 랜덤 채움.
-    # → 매 배치마다 서사 갈등(쉴드/훈수/희망회로)이 확정적으로 등장.
-    _mutant_count = random.randint(2, min(3, actual_count, len(_MUTANT_POOL)))
-    _guaranteed   = random.sample(_MUTANT_POOL, _mutant_count)
-    _filler       = [random.choice(_PERSONA_POOL) for _ in range(actual_count - _mutant_count)]
-    _wave_lineup  = _guaranteed + _filler
-    random.shuffle(_wave_lineup)
+    # ── 온도 밸런싱 라인업 빌드 ─────────────────────────────────────────
+    # HOT ≤ 30% / NEUTRAL ≥ 20% / mutant 2~3개 보장 / 연속 HOT 3회 이상 불가.
+    # → 무한 모드 반복 시 갤러리 감정 온도가 한쪽으로 고착되는 '파멸 루프' 방지.
+    _wave_lineup = _build_balanced_lineup(actual_count)
 
     scripts: list[dict] = []
 
@@ -1061,7 +1210,10 @@ def _batch_gen_worker(
                     random.sample(_enriched_pool, min(5, len(_enriched_pool)))
                     if _enriched_pool else None
                 )
-                result = brain.generate_post(
+                # Phase 8: generate_post()에 40초 타임아웃 적용 — 무한 대기 차단
+                result = _timed(
+                    brain.generate_post,
+                    _timeout=40.0,
                     topic=topic,
                     gallery_id=gallery_id,
                     tone=_wave_tone,
@@ -1078,6 +1230,9 @@ def _batch_gen_worker(
                 q_log(f"[BATCH] ✅ [{wave}] 생성 완료: '{gen_title[:30]}'")
                 break
 
+            except _cf.TimeoutError:
+                q_log(f"[BATCH] ⏱️ [{wave}] 생성 타임아웃 (40s) — 이 대본 건너뜀")
+                break  # 부분 실패 허용: 이 Wave만 스킵, 다음 Wave 계속
             except RateLimitError:
                 if attempt < 2:
                     backoff = 60 * (2 ** attempt)
@@ -1243,25 +1398,94 @@ def _post_exec_worker(
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# 헬퍼: 무한 모드 자동 포스팅 워커 시작 (검수 게이트 우회)
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def _auto_launch_swarm(ss: "st.session_state", scripts: list) -> None:  # type: ignore[name-defined]
+    """무한 모드 전용: 검수 게이트 없이 포스팅 워커를 즉시 시작.
+
+    _review_board_fragment의 '✅ 대본 최종 승인' 버튼 핸들러 로직을 DRY하게 추출.
+    유효 대본(not _failed)이 0개면 즉시 다음 배치 사이클로 넘어가 실패 루프를 방지.
+    """
+    valid = [s for s in scripts if not s.get("_failed")]
+    if not valid:
+        # 전량 생성 실패 → 포스팅 없이 다음 사이클 즉시 재개
+        ss.swarm_log.append("[∞] ⚠️ 유효 대본 0개 — 포스팅 건너뛰고 다음 사이클 시작")
+        _start_next_batch(ss)
+        return
+
+    _post_q:  queue.Queue     = queue.Queue()
+    _post_ev: threading.Event = threading.Event()
+
+    ss.review_ready          = False
+    ss.swarm_running         = True
+    ss.swarm_queue           = _post_q
+    ss.swarm_stop_event      = _post_ev
+    ss.swarm_preview_title   = ""
+    ss.swarm_preview_content = ""
+    ss.swarm_wave_total      = len(valid)
+    ss.swarm_wave_current    = 0
+    ss.last_fired            = True
+
+    _cfg = ss.get("_batch_gen_config", {})
+    threading.Thread(
+        target=_post_exec_worker,
+        kwargs={
+            "log_q":        _post_q,
+            "stop_ev":      _post_ev,
+            "scripts":      scripts,
+            "gallery_id":   _cfg.get("gallery_id", ""),
+            "gallery_type": _cfg.get("gallery_type", "mgallery"),
+            "headless":     _cfg.get("headless", True),
+        },
+        daemon=True,
+    ).start()
+
+
 # 헬퍼: 다음 배치 생성 시작 (무한 모드 자동 재배치용)
 # ══════════════════════════════════════════════════════════════════════════════
 
+
+# Phase 11: _batch_gen_worker가 받는 파라미터 화이트리스트.
+# _batch_gen_config는 _post_exec_worker용 'headless' 등 여분 키를 포함하므로
+# {**cfg} 언팩 방식은 새 키가 추가될 때마다 TypeError → daemon 스레드 즉사를 유발하는
+# 취약 패턴이다. 명시적 허용 키 집합으로 필터링하여 미래 config 확장에도 안전하게 보호.
+_BATCH_GEN_PARAMS: frozenset = frozenset({
+    "api_key", "topic", "wave_count", "gallery_id",
+    "gallery_type", "tone", "length", "infinite",
+})
+
+
 def _start_next_batch(ss: "st.session_state") -> None:  # type: ignore[name-defined]
-    """저장된 _batch_gen_config를 이용해 다음 배치 생성 워커를 즉시 시작."""
+    """저장된 _batch_gen_config를 이용해 다음 배치 생성 워커를 즉시 시작.
+
+    Phase 11 버그픽스:
+      _batch_gen_config의 'headless' 키가 {**cfg} 언팩으로 _batch_gen_worker에
+      그대로 전달되어 TypeError → daemon 스레드 즉사 → 무한 루프 단절 버그 수정.
+      _BATCH_GEN_PARAMS 화이트리스트로 허용 키만 필터링하여 전달.
+    """
     cfg = ss.get("_batch_gen_config", {})
     if not cfg:
         return
     _bgq  = queue.Queue()
     _bgev = threading.Event()
-    ss.batch_generating    = True
-    ss.batch_gen_queue     = _bgq
+    ss.batch_generating     = True
+    ss.batch_gen_queue      = _bgq
     ss.batch_gen_stop_event = _bgev
-    ss.swarm_log            = []
+    # Phase 8: 로그 초기화 대신 사이클 구분선 추가 — 이전 사이클 기록 보존
+    _cycle_num = getattr(ss, "_batch_cycle_count", 0) + 1
+    ss._batch_cycle_count   = _cycle_num
+    _prev_log = list(getattr(ss, "swarm_log", []))[-200:]
+    _sep = f"══════════ 🔄 CYCLE {_cycle_num} 시작 (AUTO-REFRESH) ══════════"
+    ss.swarm_log            = _prev_log + [_sep]
     ss.swarm_wave_current   = 0
     ss.swarm_wave_total     = cfg.get("wave_count", 10)
+    # Phase 11 핵심 픽스: headless 등 worker 미지원 키 차단 — 화이트리스트 필터
+    _worker_cfg = {k: v for k, v in cfg.items() if k in _BATCH_GEN_PARAMS}
     threading.Thread(
         target=_batch_gen_worker,
-        kwargs={**cfg, "log_q": _bgq, "stop_ev": _bgev, "auto_refresh": True},
+        kwargs={**_worker_cfg, "log_q": _bgq, "stop_ev": _bgev, "auto_refresh": True},
         daemon=True,
     ).start()
 
@@ -1364,6 +1588,21 @@ def _build_intel_fig(ir: dict) -> "go.Figure | None":
                         bordercolor="rgba(0,240,255,0.3)"),
     )
     return fig
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# DB CSV 내보내기 — @st.cache_data 래퍼 (module level 필수)
+# ttl=300: 5분 캐시 → 재렌더 시 재연산 없음 / 신선도 균형
+# ══════════════════════════════════════════════════════════════════════════════
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_posts_csv(gallery_id: str) -> tuple[bytes, int]:
+    return database.build_posts_csv_bytes(gallery_id)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_comments_csv(gallery_id: str) -> tuple[bytes, int]:
+    return database.build_comments_csv_bytes(gallery_id)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1618,9 +1857,57 @@ def _intel_results_fragment() -> None:
                         "작성자": str(p.get("author", "")),
                         "🤖 봇": "✅ BOT" if p.get("is_bot") else "—",
                     }
-                    for p in _raw_posts[:100]
+                    for p in _raw_posts  # st.dataframe은 가상 스크롤 지원 — [:100] 제거
                 ]
                 st.dataframe(pd.DataFrame(_df_data), use_container_width=True, hide_index=True)
+
+        # ── DB 원본 데이터 대용량 CSV 내보내기 ──────────────────────────────
+        _export_gid = ss.get("intel_gallery_id", "").strip()
+        if _export_gid:
+            _db_post_cnt = database.get_post_count(_export_gid)
+            _db_cmt_cnt  = database.get_comment_count(_export_gid)
+            with st.expander(
+                f"📥 DB 원본 데이터 내보내기 — 게시글 {_db_post_cnt:,}개 · 댓글 {_db_cmt_cnt:,}개",
+                expanded=False,
+            ):
+                _HARD_LIMIT = database._EXPORT_HARD_LIMIT
+                st.caption(
+                    f"최대 {_HARD_LIMIT:,}행 · UTF-8 BOM (Excel 한글 호환) · 캐시 5분\n\n"
+                    + (f"⚠️ DB 게시글 {_db_post_cnt:,}행 중 {_HARD_LIMIT:,}행만 추출됩니다." if _db_post_cnt > _HARD_LIMIT else "")
+                    + (f"\n⚠️ DB 댓글 {_db_cmt_cnt:,}행 중 {_HARD_LIMIT:,}행만 추출됩니다." if _db_cmt_cnt > _HARD_LIMIT else "")
+                )
+
+                _dl_c1, _dl_c2 = st.columns(2)
+
+                with _dl_c1:
+                    if _db_post_cnt > 0:
+                        with st.spinner(f"게시글 CSV 준비 중... ({min(_db_post_cnt, _HARD_LIMIT):,}행)"):
+                            _posts_csv, _posts_rows = _cached_posts_csv(_export_gid)
+                        st.download_button(
+                            f"⬇️ 게시글 CSV ({_posts_rows:,}행)",
+                            data=_posts_csv,
+                            file_name=f"{_export_gid}_posts.csv",
+                            mime="text/csv",
+                            key="dl_posts_csv",
+                            use_container_width=True,
+                        )
+                    else:
+                        st.info("게시글 없음")
+
+                with _dl_c2:
+                    if _db_cmt_cnt > 0:
+                        with st.spinner(f"댓글 CSV 준비 중... ({min(_db_cmt_cnt, _HARD_LIMIT):,}행)"):
+                            _cmts_csv, _cmts_rows = _cached_comments_csv(_export_gid)
+                        st.download_button(
+                            f"⬇️ 댓글 CSV ({_cmts_rows:,}행)",
+                            data=_cmts_csv,
+                            file_name=f"{_export_gid}_comments.csv",
+                            mime="text/csv",
+                            key="dl_comments_csv",
+                            use_container_width=True,
+                        )
+                    else:
+                        st.info("댓글 없음")
 
     elif ss.get("intel_running"):
         # 수집/분석 진행 중
@@ -1833,7 +2120,11 @@ def _batch_gen_fragment() -> None:
                 ss.review_scripts    = msg["scripts"]
                 ss.batch_generating  = False
                 ss.batch_gen_queue   = None
-                ss.review_ready      = bool(msg["scripts"])
+                if ss.get("swarm_infinite"):
+                    # 무한 모드: 검수 게이트 우회 → 포스팅 워커 자동 시작
+                    _auto_launch_swarm(ss, msg["scripts"])
+                else:
+                    ss.review_ready  = bool(msg["scripts"])
                 _done = True
 
     # 중단 버튼
@@ -2256,9 +2547,11 @@ with main_left:
     with _pay_c2:
         st.number_input(
             "💣 WAVE",
-            min_value=1, max_value=10, step=1,
+            min_value=1, max_value=50, step=1,
             key="swarm_wave_count",
-            help="연속 폭격 횟수 (각 WAVE 사이 60~180초 랜덤 대기)",
+            help="연속 폭격 횟수 (무한 모드 ON 시 자동으로 10으로 고정됨)",
+            # 무한 모드 활성화 시 wave 수 설정이 무의미 → 입력창 비활성화
+            disabled=st.session_state.get("swarm_infinite", False),
         )
 
     st.checkbox(
@@ -2321,7 +2614,11 @@ with main_left:
 
     # ── OTA Update (sidebar 대체 — sidebar는 CSS hidden) ─────────────────
     if st.button("🔄 업데이트 (Git Pull)", use_container_width=True,
-                 help="git pull 로 최신 코드를 받아 앱을 즉시 반영합니다."):
+                 help="git pull + 프롬프트 캐시 초기화. 코드·프롬프트 변경사항을 즉시 반영합니다."):
+        # 1) 프롬프트 캐시 초기화 — .txt/.json 변경사항 즉시 반영
+        pm._read_file.cache_clear()
+        pm.load_json.cache_clear()
+        # 2) git pull — 코드 변경사항 수신
         _r = subprocess.run(
             ["git", "pull"],
             capture_output=True, text=True,
@@ -2329,12 +2626,40 @@ with main_left:
         )
         _out = (_r.stdout or _r.stderr or "").strip()
         st.toast(
-            _out or "Git pull 완료",
+            f"📂 프롬프트 캐시 초기화 완료\n{_out or 'Git pull 완료'}",
             icon="✅" if _r.returncode == 0 else "❌",
         )
         st.rerun()
 
+def _do_killswitch():
+    """무한 모드 Kill Switch 콜백 — on_click에서 실행되므로 위젯 렌더 전에 호출됨."""
+    _ss = st.session_state
+    _ss.swarm_infinite = False
+    if _ss.get("batch_gen_stop_event"):
+        _ss.batch_gen_stop_event.set()
+    if _ss.get("swarm_stop_event"):
+        _ss.swarm_stop_event.set()
+
+
 with main_right:
+    # ── 무한 모드 전역 Kill Switch 배너 ──────────────────────────────────
+    # fragment 바깥에 배치 → batch_gen / swarm / 전환 공백 구간 모두 커버.
+    # swarm_infinite=True 인 한 항상 렌더된다.
+    _ss_ks = st.session_state
+    if _ss_ks.get("swarm_infinite"):
+        _ks_col_info, _ks_col_btn = st.columns([3, 1], gap="small")
+        with _ks_col_info:
+            st.markdown(
+                '<div style="font-size:0.72rem;font-weight:700;color:#FF6B35;'
+                'letter-spacing:1px;padding:6px 0">♾️ INFINITE MODE 실행 중</div>',
+                unsafe_allow_html=True,
+            )
+        with _ks_col_btn:
+            st.button("⏹ 루프 중단", key="infinite_killswitch_btn",
+                      on_click=_do_killswitch,
+                      use_container_width=True, type="primary",
+                      help="현재 Wave 완료 후 무한 루프를 즉시 중단합니다")
+
     # ── STEP 1 결과 (Situation Room — fragment) ──────────────────────────
     _intel_results_fragment()
 
@@ -2386,8 +2711,9 @@ if fire_clicked:
     elif not _topic:
         st.error("⚠️ 주제를 입력하세요.")
     else:
-        # 생성할 실제 wave 수 (infinite면 10개씩 묶음)
-        _actual_count = min(_w_count, 10) if _infinite else _w_count
+        # Phase 10: 무한 모드 변수 누수 방지 — UI 캐시값(swarm_wave_count)과 무관하게 10 강제
+        # min(_w_count, 10) 패턴은 유저가 3으로 설정한 채 infinite ON 하면 3개만 도는 버그 유발.
+        _actual_count = 10 if _infinite else _w_count
 
         # 무한 모드 재배치를 위한 설정 저장
         st.session_state["_batch_gen_config"] = {

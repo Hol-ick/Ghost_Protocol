@@ -208,10 +208,15 @@ def get_ai_post_count(gallery_id: str) -> int:
 
 
 def get_winner_posts(gallery_id: str, limit: int = 3) -> list[dict]:
-    """is_winner=True 게시글 중 랜덤 N개 반환 (Few-shot 프롬프트용)."""
+    """is_winner=True 게시글 중 랜덤 N개 반환 (Few-shot 프롬프트용).
+
+    is_ai=1(봇 생성) 글은 의도적으로 제외한다.
+    봇 글이 few-shot으로 재주입되면 극단적 패턴이 자기강화(파멸 루프)되므로
+    사람이 쓴 실제 게시글만 스타일 레퍼런스로 허용한다.
+    """
     conn = get_connection()
     rows = conn.execute(
-        "SELECT * FROM posts WHERE gallery_id = ? AND is_winner = 1 "
+        "SELECT * FROM posts WHERE gallery_id = ? AND is_winner = 1 AND is_ai = 0 "
         "ORDER BY RANDOM() LIMIT ?",
         (gallery_id, limit),
     ).fetchall()
@@ -254,6 +259,56 @@ def export_comments_csv(gallery_id: str, filepath: str) -> int:
         writer.writeheader()
         writer.writerows(comments)
     return len(comments)
+
+
+# ── 대용량 CSV 브라우저 다운로드용 빌더 ──────────────────────────────────────
+_EXPORT_HARD_LIMIT = 50_000   # OOM 방어 상한선 (행)
+_EXPORT_CHUNK_SIZE = 5_000    # SQLite cursor.fetchmany() 단위
+
+
+def _build_csv_bytes_chunked(query: str, params: tuple) -> tuple[bytes, int]:
+    """SQLite 커서를 _EXPORT_CHUNK_SIZE 단위로 순회하며 CSV bytes를 생성한다.
+
+    전체를 한 번에 fetchall()하지 않으므로 수만 행 규모에서도 OOM이 발생하지 않는다.
+    Returns:
+        (csv_bytes, row_count) — csv_bytes는 UTF-8 BOM 포함 (Excel 한글 호환).
+    """
+    import io
+    buf = io.StringIO()
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(query, params)
+
+    writer = None
+    total = 0
+    while True:
+        rows = cur.fetchmany(_EXPORT_CHUNK_SIZE)
+        if not rows:
+            break
+        if writer is None:
+            writer = csv.DictWriter(buf, fieldnames=rows[0].keys())
+            writer.writeheader()
+        writer.writerows([dict(r) for r in rows])
+        total += len(rows)
+
+    conn.close()
+    return buf.getvalue().encode("utf-8-sig"), total
+
+
+def build_posts_csv_bytes(gallery_id: str, limit: int = _EXPORT_HARD_LIMIT) -> tuple[bytes, int]:
+    """갤러리 게시글 전체를 CSV bytes로 반환. 최대 limit행 (기본 50,000)."""
+    return _build_csv_bytes_chunked(
+        "SELECT * FROM posts WHERE gallery_id = ? ORDER BY post_id DESC LIMIT ?",
+        (gallery_id, limit),
+    )
+
+
+def build_comments_csv_bytes(gallery_id: str, limit: int = _EXPORT_HARD_LIMIT) -> tuple[bytes, int]:
+    """갤러리 댓글 전체를 CSV bytes로 반환. 최대 limit행 (기본 50,000)."""
+    return _build_csv_bytes_chunked(
+        "SELECT * FROM comments WHERE gallery_id = ? ORDER BY comment_id DESC LIMIT ?",
+        (gallery_id, limit),
+    )
 
 
 # ══════════════════════════════════════════════
