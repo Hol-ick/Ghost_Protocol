@@ -1849,11 +1849,22 @@ def _intel_results_fragment() -> None:
         )
 
         # ── AI OCCUPATION RATE 대시보드 ─────────────────────────────────────
-        # 데이터: _ir["stats"]["ai_post_count"] / ["total_post_count"]
-        # → brain.analyze_trend()가 scraper.collect_trending() 결과에서 직접 주입.
-        # 백엔드 변경 불필요 — 이미 result dict에 포함되어 있음.
-        _ai_cnt    = int(_stats_d.get("ai_post_count",    0))
-        _total_cnt = int(_stats_d.get("total_post_count", 0))
+        # DB(is_ai=1) 기준으로 현재 스캔 게시글 중 봇 글 수 계산.
+        # Ledger 기반 ai_post_count는 ledger가 비어 있으면 0이 되므로,
+        # poster.py가 mark_ai_post()로 직접 기록한 DB 값을 우선 사용한다.
+        _intel_gid = ss.get("intel_gallery_id", "")
+        _raw_posts_scan = _ir.get("raw_posts", [])
+        try:
+            _ai_nos_db: set[str] = database.get_ai_post_nos(_intel_gid) if _intel_gid else set()
+        except Exception:
+            _ai_nos_db = set()
+        # 현재 스캔 목록 안에서 DB 봇 + ledger 봇 합산 (중복 제거)
+        _ai_cnt_db = sum(
+            1 for p in _raw_posts_scan
+            if p.get("is_bot") or str(p.get("post_no", "")) in _ai_nos_db
+        )
+        _ai_cnt    = max(_ai_cnt_db, int(_stats_d.get("ai_post_count", 0)))
+        _total_cnt = max(len(_raw_posts_scan), int(_stats_d.get("total_post_count", 0)))
         _human_cnt = max(0, _total_cnt - _ai_cnt)
 
         if _total_cnt > 0:
@@ -2017,18 +2028,11 @@ def _intel_results_fragment() -> None:
                                 config={"displayModeBar": False})
 
         # ── 원본 게시글 디버깅 뷰 (DB 봇 마킹 + Ledger 대조 확인용) ─────────
-        _raw_posts = _ir.get("raw_posts", [])
+        # _ai_nos_db / _raw_posts_scan 은 AI OCCUPATION RATE 섹션에서 이미 계산됨.
+        _raw_posts = _raw_posts_scan  # 재계산 없이 재사용
         if _raw_posts:
             with st.expander(f"🔍 수집 게시글 원본 ({len(_raw_posts)}개) — 봇 마킹 확인", expanded=False):
                 import pandas as pd
-                # ── 봇 판별: DB(is_ai=1) 1차 + Ledger(is_bot) 2차 ──────────────
-                # poster.py가 mark_ai_post()로 직접 DB에 is_ai=1 기록.
-                # 스크래퍼의 딥 스캔이 실행되지 않아도 포스팅 직후 즉시 반영됨.
-                _intel_gid = ss.get("intel_gallery_id", "")
-                try:
-                    _ai_nos_db: set[str] = database.get_ai_post_nos(_intel_gid) if _intel_gid else set()
-                except Exception:
-                    _ai_nos_db = set()
                 _df_data = [
                     {
                         "글번호": str(p.get("post_no", "")),
@@ -2039,7 +2043,7 @@ def _intel_results_fragment() -> None:
                             or str(p.get("post_no", "")) in _ai_nos_db
                         ) else "—",
                     }
-                    for p in _raw_posts  # st.dataframe은 가상 스크롤 지원 — [:100] 제거
+                    for p in _raw_posts
                 ]
                 st.dataframe(pd.DataFrame(_df_data), use_container_width=True, hide_index=True)
 
