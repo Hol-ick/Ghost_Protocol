@@ -16,5 +16,6 @@
   {"name": "음모론자/망상충",         "key": "paranoid"},
   {"name": "자학형 앰생",             "key": "self_deprecator"},
   {"name": "집결 선동형 드가자",       "key": "rally_crier"},
-  {"name": "실황 중계형 스코어러",     "key": "score_reporter"}
+  {"name": "실황 중계형 스코어러",     "key": "score_reporter"},
+  {"name": "화제 전환형 딴소리꾼",     "key": "topic_diverger"}
 ]

@@ -86,6 +86,7 @@ _TONE_MAP = {
     "😭 자학형 (Self-deprecator)": "self_deprecator",
     "📣 집결형 (Rally Crier)":     "rally_crier",
     "📡 실황형 (Score Reporter)":  "score_reporter",
+    "🔄 화제전환형 (Diverger)":    "topic_diverger",
 }
 _LEN_OPTS = ["아주 짧게 (1문장)", "짧게 (1~2문장)", "보통 (3~4문장)"]
 _INTEL_CACHE_TTL = 900  # 15분
@@ -1148,7 +1149,12 @@ def _batch_gen_worker(
                     q_log(f"[AUTO-REFRESH] ⚠️ AI 분석 실패: {str(_ar_inner_e)[:80]}")
 
                 if _ar_result:
-                    _fresh_topic = (_ar_result.get("ai_analysis") or "").strip()
+                    _fresh_ai      = (_ar_result.get("ai_analysis") or "").strip()
+                    _fresh_summary = (_ar_result.get("summary") or "").strip()
+                    _fresh_topic   = (
+                        _fresh_ai
+                        + ("\n씨앗 떡밥: " + _fresh_summary if _fresh_summary else "")
+                    ).strip()
                     if _fresh_topic:
                         topic = _fresh_topic   # 이 배치의 $topic 갱신
                         log_q.put({"type": "context_updated",
@@ -1840,12 +1846,17 @@ def _intel_results_fragment() -> None:
                     )
 
             # "AI 브리핑 → 주제로 사용" 버튼
-            # ai_analysis 전체 텍스트를 토픽 입력창에 주입 → $topic으로 자연 치환
+            # ai_analysis + summary(씨앗 떡밥 풀) 합산 주입 → $topic 다양성 보장
             _ai_briefing = (_ir.get("ai_analysis") or "").strip()
             if _ai_briefing:
                 st.markdown('<div class="topic-use-btn" style="margin-top:12px">', unsafe_allow_html=True)
                 if st.button("➡️  AI 브리핑 전체를 주제로 사용", key="use_as_topic_btn"):
-                    ss.swarm_topic_input = _ai_briefing
+                    _summary_for_topic = (_ir.get("summary") or "").strip()
+                    _full_topic = (
+                        _ai_briefing
+                        + ("\n씨앗 떡밥: " + _summary_for_topic if _summary_for_topic else "")
+                    )
+                    ss.swarm_topic_input = _full_topic
                     # ── UX 동기화: INTEL 패널의 갤러리 설정을 FIRE 패널에 그대로 복사 ──
                     ss.target_gallery_id = ss.get("intel_gallery_id", "")
                     ss.target_type_label = ss.get("intel_type_label", "마이너 (mgallery)")
