@@ -9,6 +9,7 @@ Pipeline: INTEL (Trend Analysis) → PAYLOAD (Topic + Config) → LAUNCH (FIRE +
 
 import asyncio
 import concurrent.futures as _cf
+import datetime
 import html as _html
 import json
 import os
@@ -34,6 +35,7 @@ if sys.platform.startswith("win"):
 import plotly.graph_objects as go
 import streamlit as st
 
+from ghost_protocol import cycle_memory as _cm
 from ghost_protocol import database
 from ghost_protocol import prompt_manager as pm
 from ghost_protocol.brain import GhostBrain, RateLimitError
@@ -180,10 +182,15 @@ def _sample_capped(pool: list[dict], n: int, max_per_key: int = 3) -> list[dict]
     return result
 
 
-def _build_balanced_lineup(wave_count: int) -> list[dict]:
+def _build_balanced_lineup(
+    wave_count: int,
+    *,
+    sentiment_score: int = 0,
+    hour: int = -1,
+) -> list[dict]:
     """온도 밸런싱된 Wave 라인업을 빌드한다.
 
-    보장 조건:
+    기본 보장 조건:
     - mutant(conviction_defender / solution_proposer / hopium): 2~3개 고정
     - HOT(aggressive / aggro / doomer / paranoid): 최대 floor(30%)개, 최소 1개
     - NEUTRAL(neutral / analytical / meta_observer / score_reporter): 최소 ceil(20%)개
@@ -191,32 +198,72 @@ def _build_balanced_lineup(wave_count: int) -> list[dict]:
     - 동일 key 페르소나 최대 3개 (_sample_capped 적용)
     - 동일 페르소나 연속 2회 불가 (_fix_consecutive_same 후처리)
     - 연속 HOT 3회 이상 불가 (_fix_consecutive_hot 후처리)
+
+    추가 보정:
+    - sentiment_score ≤ -2 (감성 drift): HOT 상한 15%로 축소, mutant 최대치 강제
+    - hour 기반 시간대 리듬:
+        심야(23~3)  → HOT cap +10%, monologue WARM 가중 2배
+        출근(7~9)   → cynical / lazy_questioner WARM 가중 2배
+        점심(12~13) → humblebragger / rally_crier WARM 가중 2배
+        저녁(20~22) → self_deprecator / topic_diverger WARM 가중 2배
     """
-    max_hot     = max(1, int(wave_count * 0.30))
+    # ── 감성 drift 보정 ─────────────────────────────────────────────────────
+    _is_drifted = sentiment_score <= _cm.DRIFT_THRESHOLD
+    _hot_ratio  = 0.15 if _is_drifted else 0.30
+
+    # ── 시간대 HOT cap 미세 조정 ────────────────────────────────────────────
+    _LATE_NIGHT: frozenset[int] = frozenset({23, 0, 1, 2, 3})
+    _RUSH_HOUR:  frozenset[int] = frozenset({7, 8, 9})
+    _LUNCH:      frozenset[int] = frozenset({12, 13})
+    _EVENING:    frozenset[int] = frozenset({20, 21, 22})
+
+    if hour in _LATE_NIGHT and not _is_drifted:
+        _hot_ratio = min(0.40, _hot_ratio + 0.10)   # 심야 HOT cap +10%
+
+    max_hot     = max(1, int(wave_count * _hot_ratio))
     min_neutral = max(1, math.ceil(wave_count * 0.20))
 
-    # mutant 강제 배정
-    mutant_count = random.randint(2, min(3, wave_count, len(_MUTANT_POOL)))
-    remaining    = wave_count - mutant_count
+    # ── mutant 강제 배정 ─────────────────────────────────────────────────────
+    # drift 시 mutant(hopium/solution_proposer) 최대치 강제 → 긍정 발화 보장
+    if _is_drifted:
+        mutant_count = min(3, wave_count, len(_MUTANT_POOL))
+    else:
+        mutant_count = random.randint(2, min(3, wave_count, len(_MUTANT_POOL)))
+    remaining = wave_count - mutant_count
 
-    # HOT 배정 (최소 1개 보장, 예산 안에서 랜덤)
+    # ── HOT 배정 (최소 1개 보장) ─────────────────────────────────────────────
     hot_count = (random.randint(1, min(max_hot, remaining))
                  if remaining > 0 else 0)
     remaining -= hot_count
 
-    # NEUTRAL 최소 보장 (남은 슬롯 초과 안 되게)
+    # ── NEUTRAL 최소 보장 ────────────────────────────────────────────────────
     neutral_count = min(min_neutral + random.randint(0, 2), remaining)
     neutral_count = max(0, neutral_count)
     remaining -= neutral_count
 
-    # 나머지 WARM으로 채움
     warm_count = max(0, remaining)
+
+    # ── 시간대 기반 WARM 가중치 조정 ────────────────────────────────────────
+    # 원본 _WARM_POOL 보존; 복사본에 중복 삽입 → _sample_capped가 확률 반영
+    _warm_weighted = list(_WARM_POOL)
+    if hour in _LATE_NIGHT:
+        # 심야: 독백(monologue) 2배 — 새벽 감성글 시뮬레이션
+        _warm_weighted += [p for p in _WARM_POOL if p["key"] == "monologue"]
+    elif hour in _RUSH_HOUR:
+        # 출근길: cynical + lazy_questioner 2배 — 짧고 빠른 반응
+        _warm_weighted += [p for p in _WARM_POOL if p["key"] in ("cynical", "lazy_questioner")]
+    elif hour in _LUNCH:
+        # 점심: humblebragger + rally_crier 2배 — 자랑·선동 분위기
+        _warm_weighted += [p for p in _WARM_POOL if p["key"] in ("humblebragger", "rally_crier")]
+    elif hour in _EVENING:
+        # 저녁: self_deprecator + topic_diverger 2배 — 퇴근 후 뒤풀이 분위기
+        _warm_weighted += [p for p in _WARM_POOL if p["key"] in ("self_deprecator", "topic_diverger")]
 
     slots = (
         random.sample(_MUTANT_POOL, mutant_count)
-        + _sample_capped(_HOT_POOL,     hot_count)
-        + _sample_capped(_NEUTRAL_POOL, neutral_count)
-        + _sample_capped(_WARM_POOL,    warm_count)
+        + _sample_capped(_HOT_POOL,        hot_count)
+        + _sample_capped(_NEUTRAL_POOL,    neutral_count)
+        + _sample_capped(_warm_weighted,   warm_count)
     )
     random.shuffle(slots)
     slots = _fix_consecutive_same(slots)   # 동일 페르소나 연속 2회 방지
@@ -1121,6 +1168,45 @@ def _batch_gen_worker(
         log_q.put({"type": "batch_done", "scripts": []})
         return
 
+    # ── 사이클 메모리 로드 ────────────────────────────────────────────────────
+    # 무한 반복 시 화제 고착화·감성 극단화·어휘 수렴을 방지하는 상태 지속 메모리.
+    # cycle_memory.json 파일로 사이클 간 영속 저장.
+    _mem              = _cm.load()
+    _mem_cycle        = _cm.increment_cycle(_mem)
+    _banned_topics    = _cm.get_banned_topics(_mem)
+    _banned_starts    = _cm.get_banned_starts(_mem)
+    _sentiment_score  = _cm.get_sentiment_score(_mem)
+    _current_hour     = datetime.datetime.now().hour
+    _batch_first_words: list[str] = []   # 어휘 엔트로피 추적용 first_word 수집
+
+    # 금지 화제 주입 — TTL 초과 키워드를 topic에 경고로 삽입
+    if _banned_topics:
+        _ban_str = " / ".join(_banned_topics)
+        topic = (
+            topic
+            + f"\n[⛔ 반복 화제 금지 — {_cm.TOPIC_TTL_BAN}사이클 이상 연속 도배 감지, 완전히 다른 소재 발굴 필수]: {_ban_str}"
+        )
+        q_log(f"[CYCLE-MEM] 🔄 사이클 {_mem_cycle} | 반복 화제 금지 {len(_banned_topics)}개: {_ban_str}")
+
+    # 어휘 자동 금지어 주입 — first_word 수렴 감지 시 차단
+    if _banned_starts:
+        _vocab_str = " / ".join(_banned_starts)
+        topic = (
+            topic
+            + f"\n[⛔ 본문 첫 어절 자동 금지 (반복 과다 탐지)]: {_vocab_str}"
+        )
+        q_log(f"[CYCLE-MEM] 📝 어휘 수렴 금지어 {len(_banned_starts)}개: {_vocab_str}")
+
+    if _sentiment_score <= _cm.DRIFT_THRESHOLD:
+        q_log(f"[CYCLE-MEM] 🌡️ 감성 drift 감지 (score={_sentiment_score}) — HOT 상한 절반, mutant 최대 적용")
+
+    _cm.save(_mem)   # cycle_count 증가 즉시 저장
+
+    # ── 봇 아이덴티티 풀 로드 ────────────────────────────────────────────────
+    # 무한 반복 시 봇 발화 성향이 사이클마다 동일해지는 문제를 방지.
+    # 25% 확률로 wave별 발화 정체성(아이덴티티)을 topic에 오버레이.
+    _bot_identities: list[dict] = pm.load_json("bot_identities.json") or []
+
     # ── 세계관 자동 갱신 (무한 모드 전용: 직전 배치 발행 직후 최신 갤러리 반영) ──
     # auto_refresh=True → 1페이지 재스캔 + analyze_trend() 실행.
     # 성공 시: topic 로컬 변수를 새 ai_analysis로 교체 → 이 배치 전체에 적용.
@@ -1129,8 +1215,12 @@ def _batch_gen_worker(
         q_log("[🔄 AUTO-REFRESH] 갤러리 재스캔 + 세계관 갱신 중...")
         try:
             from ghost_protocol.scraper import TrendScraper as _AR_TS
+            # 외부 자극 강제 주입: 3사이클마다 2페이지 스크래핑 → 더 넓은 외부 데이터 흡수
+            _scrape_pages = 2 if (_mem_cycle % 3 == 0) else 1
+            if _scrape_pages > 1:
+                q_log(f"[AUTO-REFRESH] 🌐 사이클 {_mem_cycle} — 외부 자극 강화 ({_scrape_pages}페이지 스크래핑)")
             _ar_raw = _AR_TS().collect_trending(
-                gallery_id=gallery_id, gallery_type=gallery_type, pages=1,
+                gallery_id=gallery_id, gallery_type=gallery_type, pages=_scrape_pages,
             )
             if _ar_raw.get("titles"):
                 # ── Gemini 분석 타임아웃 래퍼 ─────────────────────────────────────
@@ -1157,11 +1247,26 @@ def _batch_gen_worker(
                     ).strip()
                     if _fresh_topic:
                         topic = _fresh_topic   # 이 배치의 $topic 갱신
+                        # 금지 화제·어휘 재주입 (갱신된 topic에도 유지)
+                        if _banned_topics:
+                            topic += f"\n[⛔ 반복 화제 금지]: {' / '.join(_banned_topics)}"
+                        if _banned_starts:
+                            topic += f"\n[⛔ 본문 첫 어절 금지]: {' / '.join(_banned_starts)}"
                         log_q.put({"type": "context_updated",
                                    "topic": topic, "intel": _ar_result})
                         q_log("[AUTO-REFRESH] ✅ 세계관 갱신 완료 — 최신 브리핑으로 대본 생성")
                     else:
                         q_log("[AUTO-REFRESH] ⚠️ 분석 비어있음 — 기존 토픽 유지")
+
+                    # ── 사이클 메모리 갱신 (hot_topics TTL + sentiment 진자) ──────
+                    _cm.update_topic_ttl(_mem, _ar_result.get("hot_topics", []))
+                    _new_sentiment = _cm.update_sentiment(_mem, _ar_result.get("sentiment", ""))
+                    _new_banned    = _cm.get_banned_topics(_mem)
+                    _cm.save(_mem)
+                    q_log(
+                        f"[CYCLE-MEM] 💾 TTL 갱신 완료 | "
+                        f"금지 화제={_new_banned} | 감성점수={_new_sentiment}"
+                    )
             else:
                 q_log("[AUTO-REFRESH] ⚠️ 수집 데이터 없음 — 기존 토픽 유지")
         except Exception as _ar_e:
@@ -1204,8 +1309,13 @@ def _batch_gen_worker(
 
     # ── 온도 밸런싱 라인업 빌드 ─────────────────────────────────────────
     # HOT ≤ 30% / NEUTRAL ≥ 20% / mutant 2~3개 보장 / 연속 HOT 3회 이상 불가.
-    # → 무한 모드 반복 시 갤러리 감정 온도가 한쪽으로 고착되는 '파멸 루프' 방지.
-    _wave_lineup = _build_balanced_lineup(actual_count)
+    # sentiment_score: 감성 drift 보정 (≤-2 → HOT 상한 절반, mutant 최대)
+    # hour: 시간대 리듬 기반 WARM pool 가중치 조정
+    _wave_lineup = _build_balanced_lineup(
+        actual_count,
+        sentiment_score=_sentiment_score,
+        hour=_current_hour,
+    )
 
     scripts: list[dict] = []
 
@@ -1220,6 +1330,22 @@ def _batch_gen_worker(
         _persona   = _wave_lineup[wave - 1]
         _wave_tone = _persona["key"]
         q_log(f"[BATCH] 🎭 [{wave}] 페르소나: {_persona['name']} ({_wave_tone})")
+
+        # ── 봇 아이덴티티 오버레이 (25% 확률) ──────────────────────────────
+        # 특정 발화 정체성을 topic에 추가하여 사이클 간 언어 다양성 보장.
+        # trigger_keywords 매칭 우선, 없으면 랜덤 선택.
+        _wave_topic = topic
+        if _bot_identities and random.random() < 0.25:
+            _matched_ids = [
+                bid for bid in _bot_identities
+                if any(kw in topic for kw in bid.get("trigger_keywords", []))
+            ]
+            _chosen_id = random.choice(_matched_ids if _matched_ids else _bot_identities)
+            _wave_topic = (
+                topic
+                + f"\n[🎭 이 글의 발화 정체성: '{_chosen_id['name']}' ({_chosen_id['bias']}) — {_chosen_id['signature_style']}]"
+            )
+            q_log(f"[BATCH] 🪪 [{wave}] 봇 아이덴티티 적용: {_chosen_id['name']}")
 
         gen_title: str | None = None
         gen_content: str = ""
@@ -1238,7 +1364,7 @@ def _batch_gen_worker(
                 result = _timed(
                     brain.generate_post,
                     _timeout=40.0,
-                    topic=topic,
+                    topic=_wave_topic,
                     gallery_id=gallery_id,
                     tone=_wave_tone,
                     context_hours=None,
@@ -1252,6 +1378,10 @@ def _batch_gen_worker(
                 gen_content = result["content"]
                 _tc_list    = result.get("target_comments", [])
                 q_log(f"[BATCH] ✅ [{wave}] 생성 완료: '{gen_title[:30]}'")
+                # 어휘 엔트로피 추적: 본문 첫 어절 수집
+                _fw = gen_content.strip().split()[0] if gen_content.strip() else ""
+                if _fw:
+                    _batch_first_words.append(_fw)
                 break
 
             except _cf.TimeoutError:
@@ -1280,6 +1410,18 @@ def _batch_gen_worker(
 
     ok_count = sum(1 for s in scripts if not s.get("_failed"))
     q_log(f"[BATCH] 🎬 대본 생성 완료 — 성공 {ok_count}/{len(scripts)}개")
+
+    # ── 어휘 엔트로피 최종 저장 ─────────────────────────────────────────────
+    # 이 배치에서 수집된 first_words를 슬라이딩 윈도우에 추가.
+    # 다음 사이클에서 get_banned_starts()로 읽어 자동 금지어로 주입.
+    if _batch_first_words:
+        _new_banned_starts = _cm.update_vocab(_mem, _batch_first_words)
+        _cm.save(_mem)
+        if _new_banned_starts:
+            q_log(
+                f"[CYCLE-MEM] 📊 어휘 수렴 감지 — 다음 사이클 자동 금지어: {_new_banned_starts}"
+            )
+
     log_q.put({"type": "batch_done", "scripts": scripts})
 
 
