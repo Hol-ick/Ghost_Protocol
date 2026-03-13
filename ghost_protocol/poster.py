@@ -19,6 +19,7 @@ from playwright.async_api import async_playwright
 
 from .config import USER_AGENTS, WRITE_URL_PATTERNS, get_write_url, get_view_url
 from .ledger import ledger_add
+from .database import mark_ai_post as _mark_ai_post
 
 # ══════════════════════════════════════════════
 # 계정 관리
@@ -285,13 +286,39 @@ class GhostPoster:
         # #subject 입력창으로 글쓰기 에디터 진입 확인
         try:
             await page.locator("#subject").wait_for(state="attached", timeout=5000)
-            if log:
-                log("[POSTER] ⚡ Fast-path: 세션 유효 — 로그인 건너뜀 ✅")
-            return True
         except Exception:
             if log:
                 log("[POSTER] ⚡ Fast-path: #subject 미발견 — 세션 불확실 → Slow-path 전환")
             return False
+
+        # ── 2차 검증: 로그아웃 링크 부재 = 비회원(Guest) 상태 ──────────────
+        # DC Inside는 세션 만료 후에도 글쓰기 페이지를 Guest로 열어주는 경우가 있음.
+        # #subject가 보여도 실제 로그인 상태가 아니면 제출 시 비밀번호 팝업이 뜸.
+        # → 헤더의 로그아웃 링크 존재 여부로 실제 인증 상태를 이중 확인.
+        try:
+            _logout_count = await page.locator(
+                "a:has-text('로그아웃'), a[href*='logout']"
+            ).count()
+            if _logout_count == 0:
+                if log:
+                    log("[POSTER] ⚡ Fast-path: 로그아웃 링크 없음 — 비회원(Guest) 상태 감지 → Slow-path 전환")
+                return False
+        except Exception:
+            pass  # 셀렉터 예외 시 기존 결과를 신뢰하고 진행
+
+        if log:
+            log("[POSTER] ⚡ Fast-path: 세션 유효 — 로그인 건너뜀 ✅")
+        return True
+
+    async def _purge_session(self, sess_path: Path, log: Optional[Callable] = None) -> None:
+        """만료된 세션 파일을 삭제해 다음 실행 시 오염된 Fast-path 재사용을 방지."""
+        try:
+            sess_path.unlink(missing_ok=True)
+            if log:
+                log(f"[SESSION] 🗑️ 만료 세션 파일 삭제: {sess_path.name}")
+        except OSError as e:
+            if log:
+                log(f"[SESSION] ⚠️ 세션 파일 삭제 실패 (무시): {str(e)[:60]}")
 
     async def _save_session_atomic(
         self, sess_path: Path, log: Optional[Callable] = None
@@ -898,8 +925,10 @@ class GhostPoster:
             if _has_session:
                 _session_valid = await self._is_logged_in_fast(gallery_id, log=log)
 
-            # ── Slow-path: 세션 없거나 만료 → ID/PW 타이핑 로그인 ──────────
+            # ── Slow-path: 세션 없거나 만료 → 파일 정리 후 ID/PW 타이핑 로그인 ──
             if not _session_valid:
+                if _has_session:
+                    await self._purge_session(sess_path, log=log)
                 logged_in = await self.login(account["id"], account["pw"], log=log)
                 if not logged_in:
                     result["message"] = f"로그인 실패: {masked}"
@@ -988,8 +1017,10 @@ class GhostPoster:
             if _has_session:
                 _session_valid = await self._is_logged_in_fast(gallery_id, log=log)
 
-            # ── Slow-path: 세션 없거나 만료 → ID/PW 타이핑 로그인 ──────────
+            # ── Slow-path: 세션 없거나 만료 → 파일 정리 후 ID/PW 타이핑 로그인 ──
             if not _session_valid:
+                if _has_session:
+                    await self._purge_session(sess_path, log=log)
                 logged_in = await self.login(account["id"], account["pw"], log=log)
                 if not logged_in:
                     result["message"] = f"로그인 실패: {masked}"
@@ -1011,12 +1042,20 @@ class GhostPoster:
                 )
                 # 글 등록 성공 후 세션 갱신 (쿠키 TTL 연장)
                 await self._save_session_atomic(sess_path, log=log)
-                # ── 로컬 원장 기록: ledger에 post_no 추가 ────────────────────
-                # gallery_id 정규화: ledger.py가 정규화를 이중으로 수행하지만 방어적으로 적용
+                # ── 봇 마킹: DB 직접 스탬프 (기존 ledger 보조 유지) ─────────
+                # 1차: DB mark_ai_post() — 스크래퍼가 나중에 덮어써도 is_ai=1 보존
+                # 2차: ledger_add()     — TrendScraper 빠른 목록 스캔 보조용
                 if post_no:
+                    try:
+                        _mark_ai_post(post_no, gallery_id, title=title, content=content)
+                        if log:
+                            log(f"[BOT-MARK] ✅ 글 번호 {post_no} DB 봇 마킹 완료 ({gallery_id})")
+                    except Exception as _me:
+                        if log:
+                            log(f"[BOT-MARK] ⚠️ DB 봇 마킹 실패 (무시): {str(_me)[:80]}")
                     ledger_add(gallery_id, post_no)
                     if log:
-                        log(f"[LEDGER] ✅ 글 번호 {post_no} 장부 기록 완료 ({gallery_id})")
+                        log(f"[LEDGER] ✅ 글 번호 {post_no} 원장 기록 완료 ({gallery_id})")
                 else:
                     if log:
                         log("[LEDGER] ⚠️ post_no 없음 — 장부 기록 생략 (점유율 집계 제외)")

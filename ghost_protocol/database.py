@@ -108,19 +108,72 @@ def insert_post(
     image_url: Optional[str] = None,
     is_ai: bool = False,
 ) -> None:
+    """게시글 1건 저장. 충돌 시 UPSERT — is_ai는 절대 1→0으로 퇴행하지 않음.
+
+    스크래퍼가 is_ai=False로 덮어쓰더라도 poster가 mark_ai_post()로 먼저
+    is_ai=1을 기록한 경우 MAX(posts.is_ai, excluded.is_ai)로 보존된다.
+    """
     conn = get_connection()
     conn.execute(
-        """INSERT OR REPLACE INTO posts
-           (post_id, gallery_id, title, content, author, author_type,
-            ip_hash, views, recommends, created_at, style_tags,
-            has_image, is_winner, image_url, is_ai)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        """INSERT INTO posts
+               (post_id, gallery_id, title, content, author, author_type,
+                ip_hash, views, recommends, created_at, style_tags,
+                has_image, is_winner, image_url, is_ai)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(post_id, gallery_id) DO UPDATE SET
+               title       = excluded.title,
+               content     = excluded.content,
+               author      = excluded.author,
+               author_type = excluded.author_type,
+               ip_hash     = excluded.ip_hash,
+               views       = excluded.views,
+               recommends  = excluded.recommends,
+               created_at  = excluded.created_at,
+               style_tags  = excluded.style_tags,
+               has_image   = excluded.has_image,
+               is_winner   = excluded.is_winner,
+               image_url   = excluded.image_url,
+               is_ai       = MAX(posts.is_ai, excluded.is_ai)""",
         (post_id, gallery_id, title, content, author, author_type,
          ip_hash, views, recommends, created_at, style_tags,
          int(has_image), int(is_winner), image_url, int(is_ai)),
     )
     conn.commit()
     conn.close()
+
+
+def mark_ai_post(post_id: str, gallery_id: str, title: str = "", content: str = "") -> None:
+    """Bot이 직접 게시한 글을 즉시 is_ai=1로 DB에 스탬프.
+
+    - 신규 게시글: 최소 메타데이터(title, content)로 INSERT → is_ai=1
+    - 이미 스크래핑된 게시글: is_ai=1로 UPDATE (퇴행 없음)
+    - author_type=NULL → SQLite CHECK(NULL) 결과 NULL(≠FALSE) → 제약 통과
+    - 이후 스크래퍼가 insert_post()를 호출해도 MAX(is_ai) 로직으로 is_ai=1 유지
+    """
+    conn = get_connection()
+    now = datetime.now().isoformat()
+    conn.execute(
+        """INSERT INTO posts
+               (post_id, gallery_id, title, content, author, author_type,
+                ip_hash, views, recommends, created_at, style_tags,
+                has_image, is_winner, image_url, is_ai)
+           VALUES (?, ?, ?, ?, '', NULL, NULL, 0, 0, ?, '', 0, 0, NULL, 1)
+           ON CONFLICT(post_id, gallery_id) DO UPDATE SET is_ai = 1""",
+        (str(post_id), gallery_id, title, content, now),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_ai_post_nos(gallery_id: str) -> set[str]:
+    """is_ai=1인 게시글 번호(str) 집합 반환. Intel 패널 봇 컬럼 조회에 사용."""
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT post_id FROM posts WHERE gallery_id = ? AND is_ai = 1",
+        (gallery_id,),
+    ).fetchall()
+    conn.close()
+    return {str(r[0]) for r in rows}
 
 
 def insert_comments(comments: list[dict]) -> None:

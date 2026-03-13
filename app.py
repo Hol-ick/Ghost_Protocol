@@ -2016,17 +2016,28 @@ def _intel_results_fragment() -> None:
                 st.plotly_chart(ss["_intel_fig"], use_container_width=True,
                                 config={"displayModeBar": False})
 
-        # ── 원본 게시글 디버깅 뷰 (ledger 대조 확인용) ─────────────────────
+        # ── 원본 게시글 디버깅 뷰 (DB 봇 마킹 + Ledger 대조 확인용) ─────────
         _raw_posts = _ir.get("raw_posts", [])
         if _raw_posts:
-            with st.expander(f"🔍 수집 게시글 원본 ({len(_raw_posts)}개) — Ledger 대조 디버깅", expanded=False):
+            with st.expander(f"🔍 수집 게시글 원본 ({len(_raw_posts)}개) — 봇 마킹 확인", expanded=False):
                 import pandas as pd
+                # ── 봇 판별: DB(is_ai=1) 1차 + Ledger(is_bot) 2차 ──────────────
+                # poster.py가 mark_ai_post()로 직접 DB에 is_ai=1 기록.
+                # 스크래퍼의 딥 스캔이 실행되지 않아도 포스팅 직후 즉시 반영됨.
+                _intel_gid = ss.get("intel_gallery_id", "")
+                try:
+                    _ai_nos_db: set[str] = database.get_ai_post_nos(_intel_gid) if _intel_gid else set()
+                except Exception:
+                    _ai_nos_db = set()
                 _df_data = [
                     {
                         "글번호": str(p.get("post_no", "")),
                         "제목": str(p.get("title", ""))[:45],
                         "작성자": str(p.get("author", "")),
-                        "🤖 봇": "✅ BOT" if p.get("is_bot") else "—",
+                        "🤖 봇": "✅ BOT" if (
+                            p.get("is_bot")
+                            or str(p.get("post_no", "")) in _ai_nos_db
+                        ) else "—",
                     }
                     for p in _raw_posts  # st.dataframe은 가상 스크롤 지원 — [:100] 제거
                 ]
