@@ -163,14 +163,32 @@ def _fix_consecutive_hot(lineup: list[dict]) -> list[dict]:
     return result
 
 
+def _sample_capped(pool: list[dict], n: int, max_per_key: int = 3) -> list[dict]:
+    """pool에서 n개를 뽑되, 동일 key는 max_per_key 초과 금지.
+
+    cap을 넘는 key가 없는 후보가 있을 경우 그 안에서만 고름.
+    모든 key가 cap에 닿으면 cap 무시하고 랜덤 선택 (극단적 pool 부족 방어).
+    """
+    result: list[dict] = []
+    counts: dict[str, int] = {}
+    for _ in range(n):
+        available = [p for p in pool if counts.get(p["key"], 0) < max_per_key]
+        chosen = random.choice(available if available else pool)
+        result.append(chosen)
+        counts[chosen["key"]] = counts.get(chosen["key"], 0) + 1
+    return result
+
+
 def _build_balanced_lineup(wave_count: int) -> list[dict]:
     """온도 밸런싱된 Wave 라인업을 빌드한다.
 
     보장 조건:
     - mutant(conviction_defender / solution_proposer / hopium): 2~3개 고정
-    - HOT(aggressive / aggro / doomer / paranoid): 최대 floor(30%)개
+    - HOT(aggressive / aggro / doomer / paranoid): 최대 floor(30%)개, 최소 1개
     - NEUTRAL(neutral / analytical / meta_observer / score_reporter): 최소 ceil(20%)개
     - 나머지 슬롯은 WARM(cynical / monologue / ventilator 등)으로 채움
+    - 동일 key 페르소나 최대 3개 (_sample_capped 적용)
+    - 동일 페르소나 연속 2회 불가 (_fix_consecutive_same 후처리)
     - 연속 HOT 3회 이상 불가 (_fix_consecutive_hot 후처리)
     """
     max_hot     = max(1, int(wave_count * 0.30))
@@ -195,9 +213,9 @@ def _build_balanced_lineup(wave_count: int) -> list[dict]:
 
     slots = (
         random.sample(_MUTANT_POOL, mutant_count)
-        + [random.choice(_HOT_POOL)     for _ in range(hot_count)]
-        + [random.choice(_NEUTRAL_POOL) for _ in range(neutral_count)]
-        + [random.choice(_WARM_POOL)    for _ in range(warm_count)]
+        + _sample_capped(_HOT_POOL,     hot_count)
+        + _sample_capped(_NEUTRAL_POOL, neutral_count)
+        + _sample_capped(_WARM_POOL,    warm_count)
     )
     random.shuffle(slots)
     slots = _fix_consecutive_same(slots)   # 동일 페르소나 연속 2회 방지
