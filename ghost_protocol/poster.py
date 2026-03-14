@@ -719,21 +719,43 @@ class GhostPoster:
             except Exception:
                 pass
 
-        # ── post_no 추출 (3차 Fallback: 목록 페이지 첫 일반 글 data-no) ──────────
-        # board/view 리디렉트가 없고 URL·DOM 모두 실패 시,
-        # 갤러리 목록 첫 번째 일반 글(tr.ub-content.us-post)의 data-no를 post_no로 사용.
-        # .us-post 필터: 고정 공지글(sticky/notice)은 오래된 번호라 제외.
+        # ── post_no 추출 (3차 Fallback: 목록 페이지 제목 텍스트 매칭) ──────────
+        # board/view 리디렉트 없고 URL·DOM 모두 실패 시, 갤러리 목록으로 이동.
+        # 1차 시도: 방금 쓴 제목과 일치하는 tr의 data-no 추출 (가장 정확).
+        # 2차 시도: 첫 번째 일반 글 data-no (제목 매칭 실패 시 최후 수단).
+        # .us-post 필터: 고정 공지글(sticky) 제외.
         if not post_no:
             try:
                 _list_url = get_list_url(self._gallery_type, gallery_id)
                 if log:
-                    log(f"[POSTER] 🔍 3차 폴백: 목록 페이지에서 post_no 추출 중...")
+                    log(f"[POSTER] 🔍 3차 폴백: 목록 제목 매칭 시도...")
                 await page.goto(_list_url, wait_until="domcontentloaded", timeout=10000)
-                _first_tr = page.locator("tr.ub-content.us-post[data-no]").first
-                _no_val = await _first_tr.get_attribute("data-no", timeout=4000)
-                post_no = (_no_val or "").strip()
-                if log and post_no:
-                    log(f"[POSTER] ✅ 3차 폴백 성공: data-no={post_no}")
+                _trs = page.locator("tr.ub-content.us-post[data-no]")
+                _tr_count = await _trs.count()
+
+                # 1차: 제목 텍스트로 정확 매칭 (최근 15개 글 이내에서 탐색)
+                _title_prefix = title.strip()[:20]  # 앞 20자로 비교 (말미 말줄임 대응)
+                for _j in range(min(_tr_count, 15)):
+                    _tr = _trs.nth(_j)
+                    try:
+                        _link = _tr.locator("td.gall_tit a").first
+                        _txt = (await _link.inner_text(timeout=1500)).strip()
+                    except Exception:
+                        continue
+                    if _txt and _title_prefix in _txt:
+                        _no = await _tr.get_attribute("data-no", timeout=1500)
+                        post_no = (_no or "").strip()
+                        if log and post_no:
+                            log(f"[POSTER] ✅ 3차 폴백 성공 (제목 매칭): '{_txt[:30]}' → no={post_no}")
+                        break
+
+                # 2차: 첫 번째 일반 글로 대체 (제목 매칭 실패 시)
+                if not post_no:
+                    _no_val = await _trs.first.get_attribute("data-no", timeout=4000)
+                    post_no = (_no_val or "").strip()
+                    if log and post_no:
+                        log(f"[POSTER] ⚠️ 3차 폴백 제목 매칭 실패 → 첫 번째 글 대체: no={post_no}")
+
             except Exception as _fe:
                 if log:
                     log(f"[POSTER] ⚠️ 3차 폴백 실패: {str(_fe)[:60]}")

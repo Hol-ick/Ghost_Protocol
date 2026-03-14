@@ -1183,9 +1183,11 @@ def _batch_gen_worker(
     _mem_cycle        = _cm.increment_cycle(_mem)
     _banned_topics    = _cm.get_banned_topics(_mem)
     _banned_starts    = _cm.get_banned_starts(_mem)
+    _banned_title_kws = _cm.get_banned_title_keywords(_mem)
     _sentiment_score  = _cm.get_sentiment_score(_mem)
     _current_hour     = datetime.datetime.now().hour
     _batch_first_words: list[str] = []   # 어휘 엔트로피 추적용 first_word 수집
+    _used_titles:       list[str] = []   # 배치 내 중복 화제 방지 — 생성된 제목 누적
 
     # 금지 화제 주입 — TTL 초과 키워드를 topic에 경고로 삽입
     if _banned_topics:
@@ -1204,6 +1206,15 @@ def _batch_gen_worker(
             + f"\n[⛔ 본문 첫 어절 자동 금지 (반복 과다 탐지)]: {_vocab_str}"
         )
         q_log(f"[CYCLE-MEM] 📝 어휘 수렴 금지어 {len(_banned_starts)}개: {_vocab_str}")
+
+    # 제목 키워드 반복 금지어 주입 — 이전 배치에서 반복 감지된 제목 소재 차단
+    if _banned_title_kws:
+        _title_kw_str = " / ".join(_banned_title_kws)
+        topic = (
+            topic
+            + f"\n[⛔ 반복 제목 키워드 금지 (이전 배치에서 과다 반복 감지)]: {_title_kw_str}"
+        )
+        q_log(f"[CYCLE-MEM] 📰 제목 키워드 금지 {len(_banned_title_kws)}개: {_title_kw_str}")
 
     if _sentiment_score <= _cm.DRIFT_THRESHOLD:
         q_log(f"[CYCLE-MEM] 🌡️ 감성 drift 감지 (score={_sentiment_score}) — HOT 상한 절반, mutant 최대 적용")
@@ -1343,6 +1354,15 @@ def _batch_gen_worker(
         # 특정 발화 정체성을 topic에 추가하여 사이클 간 언어 다양성 보장.
         # trigger_keywords 매칭 우선, 없으면 랜덤 선택.
         _wave_topic = topic
+
+        # ── 배치 내 화제 중복 방지 ──────────────────────────────────────
+        # 이번 배치에서 이미 생성된 제목들을 다음 Wave topic에 주입.
+        # 같은 제목/소재가 연속으로 10개 이상 나오는 현상 방지.
+        if _used_titles:
+            _dup_ban = " / ".join(_used_titles[-6:])
+            _wave_topic += (
+                f"\n[⛔ 이번 배치 기사용 제목 목록 (동일하거나 유사한 소재·키워드 절대 금지)]: {_dup_ban}"
+            )
         if _bot_identities and random.random() < 0.25:
             _matched_ids = [
                 bid for bid in _bot_identities
@@ -1386,6 +1406,8 @@ def _batch_gen_worker(
                 gen_content = result["content"]
                 _tc_list    = result.get("target_comments", [])
                 q_log(f"[BATCH] ✅ [{wave}] 생성 완료: '{gen_title[:30]}'")
+                # 배치 내 중복 방지: 생성 성공 시 제목 누적
+                _used_titles.append(gen_title)
                 # 어휘 엔트로피 추적: 본문 첫 어절 수집
                 _fw = gen_content.strip().split()[0] if gen_content.strip() else ""
                 if _fw:
@@ -1424,11 +1446,23 @@ def _batch_gen_worker(
     # 다음 사이클에서 get_banned_starts()로 읽어 자동 금지어로 주입.
     if _batch_first_words:
         _new_banned_starts = _cm.update_vocab(_mem, _batch_first_words)
-        _cm.save(_mem)
         if _new_banned_starts:
             q_log(
                 f"[CYCLE-MEM] 📊 어휘 수렴 감지 — 다음 사이클 자동 금지어: {_new_banned_starts}"
             )
+
+    # ── 제목 키워드 엔트로피 추적 ────────────────────────────────────────────
+    # 성공한 대본의 제목 첫 토큰을 title_vocab_window에 추가.
+    # 다음 사이클에서 get_banned_title_keywords()로 읽어 반복 소재 차단.
+    _ok_titles = [s["title"] for s in scripts if not s.get("_failed") and s.get("title")]
+    if _ok_titles:
+        _new_banned_title_kws = _cm.update_title_vocab(_mem, _ok_titles)
+        if _new_banned_title_kws:
+            q_log(
+                f"[CYCLE-MEM] 📰 제목 키워드 수렴 감지 — 다음 사이클 금지어: {_new_banned_title_kws}"
+            )
+
+    _cm.save(_mem)  # 어휘·제목 윈도우 통합 1회 저장
 
     log_q.put({"type": "batch_done", "scripts": scripts})
 

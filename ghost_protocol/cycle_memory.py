@@ -28,6 +28,8 @@ MAX_HIST         = 5     # 감성 기록 보존 최대 사이클 수
 DRIFT_THRESHOLD  = -4    # sentiment 합산 이 값 이하 → 진자 보정 발동 (-2→-4: 과민 억제)
 MAX_VOCAB        = 30    # first_word 추적 슬라이딩 윈도우 크기
 VOCAB_BAN_RATIO  = 0.15  # 특정 first_word가 윈도우 내 이 비율 초과 → 자동 금지 (0.20→0.15)
+MAX_TITLE_VOCAB  = 40    # 제목 첫 토큰 슬라이딩 윈도우 크기
+TITLE_BAN_RATIO  = 0.20  # 제목 첫 토큰이 윈도우 내 이 비율 초과 → 자동 금지
 
 # ── 감성 문자열 → 수치 매핑 ──────────────────────────────────────────────────
 # 값이 높을수록 긍정, 낮을수록 부정.
@@ -51,10 +53,11 @@ _SENTIMENT_TABLE: list[tuple[str, int]] = [
 # ── 기본 구조 ─────────────────────────────────────────────────────────────────
 def _default() -> dict:
     return {
-        "topic_ttl":      {},   # {keyword: consecutive_count}
-        "sentiment_hist": [],   # [int, ...]  최근 MAX_HIST개
-        "vocab_window":   [],   # [str, ...]  최근 MAX_VOCAB개 first_words
-        "cycle_count":    0,
+        "topic_ttl":          {},   # {keyword: consecutive_count}
+        "sentiment_hist":     [],   # [int, ...]  최근 MAX_HIST개
+        "vocab_window":       [],   # [str, ...]  최근 MAX_VOCAB개 first_words (본문 첫 어절)
+        "title_vocab_window": [],   # [str, ...]  최근 MAX_TITLE_VOCAB개 (제목 첫 토큰)
+        "cycle_count":        0,
     }
 
 
@@ -167,3 +170,48 @@ def get_banned_starts(mem: dict) -> list[str]:
     counter = Counter(window)
     total = len(window)
     return [w for w, cnt in counter.items() if cnt / total >= VOCAB_BAN_RATIO]
+
+
+# ── 4. 제목 키워드 엔트로피 모니터링 ─────────────────────────────────────────
+def _extract_title_tokens(title: str) -> list[str]:
+    """제목에서 의미 있는 토큰 추출 (2자 이상, 구두점 제거).
+
+    첫 3 토큰만 수집 — 제목 앞부분이 화제를 가장 잘 대표.
+    예: '세미라미스 얘기 언제까지 하는 거냐' → ['세미라미스', '얘기', '언제까지']
+    """
+    stripped = [
+        w.strip("?!.~ㅋㅠ.,ㅡ()[]{}\"'")
+        for w in title.split()
+    ]
+    return [w for w in stripped if len(w) >= 2][:3]
+
+
+def update_title_vocab(mem: dict, titles: list[str]) -> list[str]:
+    """생성된 제목들의 앞 토큰을 title_vocab_window에 추가, 금지 키워드 반환.
+
+    여러 배치에 걸쳐 동일 소재 제목이 반복 생성되는 것을 감지.
+    Returns: TITLE_BAN_RATIO 초과 토큰 목록.
+    """
+    tokens: list[str] = []
+    for t in titles:
+        tokens.extend(_extract_title_tokens(t))
+
+    window: list = mem.get("title_vocab_window", [])
+    window.extend(tokens)
+    window = window[-MAX_TITLE_VOCAB:]
+    mem["title_vocab_window"] = window
+    if not window:
+        return []
+    counter = Counter(window)
+    total = len(window)
+    return [w for w, cnt in counter.items() if cnt / total >= TITLE_BAN_RATIO]
+
+
+def get_banned_title_keywords(mem: dict) -> list[str]:
+    """현재 title_vocab_window에서 TITLE_BAN_RATIO 초과 토큰 목록 반환."""
+    window = mem.get("title_vocab_window", [])
+    if not window:
+        return []
+    counter = Counter(window)
+    total = len(window)
+    return [w for w, cnt in counter.items() if cnt / total >= TITLE_BAN_RATIO]
