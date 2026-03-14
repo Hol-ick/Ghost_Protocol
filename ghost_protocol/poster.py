@@ -17,7 +17,7 @@ from typing import Callable, Optional
 
 from playwright.async_api import async_playwright
 
-from .config import USER_AGENTS, WRITE_URL_PATTERNS, get_write_url, get_view_url
+from .config import USER_AGENTS, WRITE_URL_PATTERNS, get_write_url, get_view_url, get_list_url
 from .ledger import ledger_add
 from .database import mark_ai_post as _mark_ai_post
 
@@ -691,7 +691,7 @@ class GhostPoster:
             # 타임아웃 또는 DC Inside가 다른 URL 패턴으로 리디렉트한 경우
             # 추가 2초 대기 후 현재 URL로 판단
             if log:
-                log("[POSTER] ⚠️ board/view 리디렉트 감지 실패 — 2초 추가 대기 후 URL 확인")
+                log(f"[POSTER] ⚠️ board/view 리디렉트 감지 실패 — 현재 URL: {page.url[:80]}")
             await page.wait_for_timeout(2000)
 
         # 글쓰기 성공 확인: write 페이지를 벗어났으면 성공
@@ -718,6 +718,24 @@ class GhostPoster:
                 post_no = (_val or "").strip()
             except Exception:
                 pass
+
+        # ── post_no 추출 (3차 Fallback: 목록 페이지 첫 글 data-no) ──────────
+        # board/view 리디렉트가 없고 URL·DOM 모두 실패 시,
+        # 갤러리 목록 첫 번째 tr.ub-content[data-no]를 post_no로 사용.
+        if not post_no:
+            try:
+                _list_url = get_list_url(self._gallery_type, gallery_id)
+                if log:
+                    log(f"[POSTER] 🔍 3차 폴백: 목록 페이지에서 post_no 추출 중...")
+                await page.goto(_list_url, wait_until="domcontentloaded", timeout=10000)
+                _first_tr = page.locator("tr.ub-content[data-no]").first
+                _no_val = await _first_tr.get_attribute("data-no", timeout=4000)
+                post_no = (_no_val or "").strip()
+                if log and post_no:
+                    log(f"[POSTER] ✅ 3차 폴백 성공: data-no={post_no}")
+            except Exception as _fe:
+                if log:
+                    log(f"[POSTER] ⚠️ 3차 폴백 실패: {str(_fe)[:60]}")
 
         if log:
             _no_label = f" (no={post_no})" if post_no else " (no 파라미터 추출 불가)"
