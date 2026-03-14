@@ -99,20 +99,21 @@ _INTEL_CACHE_TTL = 900  # 15분
 # UI의 고정 톤 설정을 SWARM 내에서 오버라이드함 — 현지인 군중 시뮬레이션.
 _PERSONA_POOL: list[dict] = pm.load_json("personas.json")
 
-# 입체적 '돌연변이' 캐릭터 — 매 배치에 2~3개 강제 배정하여 서사 갈등 보장
+# 입체적 '돌연변이' 캐릭터 — 매 배치에 1~2개 가중 배정하여 서사 갈등 보장
+# (기존 2~3개 강제 → 30% 독점 문제 수정: 1~2개로 줄여 다양성 확보)
 _MUTANT_KEYS: frozenset[str] = frozenset({"conviction_defender", "solution_proposer", "hopium"})
 _MUTANT_POOL: list[dict] = [p for p in _PERSONA_POOL if p["key"] in _MUTANT_KEYS]
 
 # ── 감정 온도 티어 — 파멸 루프(연속 극단적 페르소나 누적) 방지 ─────────────────
-# HOT  : 분노·공격·체념·음모론 — 갤러리를 부정 방향으로 끌어내리는 페르소나
-# NEUTRAL: 건조·분석·관전·중계 — 감정 온도를 리셋하는 완충 페르소나
-# WARM : 나머지 (냉소·독백·질문 등) — 중간 온도
-# 배치 규칙: HOT ≤ 30%, NEUTRAL ≥ 20%, 연속 HOT 3회 이상 불가
+# HOT     : 분노·공격·체념·음모론 — 갤러리를 부정 방향으로 끌어내리는 페르소나
+# NEUTRAL : 순수 온도 리셋 완충재 (analytical/neutral 2개만 — 편중 방지)
+# WARM    : 중간 온도 다양체 (meta_observer, score_reporter 포함하여 10개로 확장)
+# 배치 규칙: HOT ≤ 30%, NEUTRAL ≥ 10%, 연속 HOT 3회 이상 불가
 _PERSONA_HOT_KEYS: frozenset[str] = frozenset({
     "aggressive", "aggro", "doomer", "paranoid",
 })
 _PERSONA_NEUTRAL_KEYS: frozenset[str] = frozenset({
-    "neutral", "analytical", "meta_observer", "score_reporter",
+    "neutral", "analytical",   # 순수 온도 리셋 2개만 — meta_observer·score_reporter를 WARM으로 이동
 })
 _HOT_POOL:     list[dict] = [p for p in _PERSONA_POOL if p["key"] in _PERSONA_HOT_KEYS]
 _NEUTRAL_POOL: list[dict] = [p for p in _PERSONA_POOL if p["key"] in _PERSONA_NEUTRAL_KEYS]
@@ -121,6 +122,8 @@ _WARM_POOL:    list[dict] = [
     if p["key"] not in _PERSONA_HOT_KEYS
     and p["key"] not in _PERSONA_NEUTRAL_KEYS
     and p["key"] not in _MUTANT_KEYS
+    # meta_observer, score_reporter, cynical, monologue, ventilator,
+    # humblebragger, lazy_questioner, self_deprecator, rally_crier, topic_diverger = 10개
 ]
 
 
@@ -166,7 +169,7 @@ def _fix_consecutive_hot(lineup: list[dict]) -> list[dict]:
     return result
 
 
-def _sample_capped(pool: list[dict], n: int, max_per_key: int = 3) -> list[dict]:
+def _sample_capped(pool: list[dict], n: int, max_per_key: int = 2) -> list[dict]:
     """pool에서 n개를 뽑되, 동일 key는 max_per_key 초과 금지.
 
     cap을 넘는 key가 없는 후보가 있을 경우 그 안에서만 고름.
@@ -191,11 +194,11 @@ def _build_balanced_lineup(
     """온도 밸런싱된 Wave 라인업을 빌드한다.
 
     기본 보장 조건:
-    - mutant(conviction_defender / solution_proposer / hopium): 2~3개 고정
+    - mutant(conviction_defender / solution_proposer / hopium): 1~2개 고정 (drift 시 2개)
     - HOT(aggressive / aggro / doomer / paranoid): 최대 floor(30%)개, 최소 1개
-    - NEUTRAL(neutral / analytical / meta_observer / score_reporter): 최소 ceil(20%)개
-    - 나머지 슬롯은 WARM(cynical / monologue / ventilator 등)으로 채움
-    - 동일 key 페르소나 최대 3개 (_sample_capped 적용)
+    - NEUTRAL(neutral / analytical): 최소 ceil(10%)개
+    - 나머지 슬롯은 WARM(cynical / monologue / meta_observer 등)으로 채움
+    - 동일 key 페르소나 최대 2개 (_sample_capped 적용)
     - 동일 페르소나 연속 2회 불가 (_fix_consecutive_same 후처리)
     - 연속 HOT 3회 이상 불가 (_fix_consecutive_hot 후처리)
 
@@ -221,14 +224,14 @@ def _build_balanced_lineup(
         _hot_ratio = min(0.40, _hot_ratio + 0.10)   # 심야 HOT cap +10%
 
     max_hot     = max(1, int(wave_count * _hot_ratio))
-    min_neutral = max(1, math.ceil(wave_count * 0.20))
+    min_neutral = max(1, math.ceil(wave_count * 0.10))
 
     # ── mutant 강제 배정 ─────────────────────────────────────────────────────
     # drift 시 mutant(hopium/solution_proposer) 최대치 강제 → 긍정 발화 보장
     if _is_drifted:
-        mutant_count = min(3, wave_count, len(_MUTANT_POOL))
+        mutant_count = min(2, wave_count, len(_MUTANT_POOL))
     else:
-        mutant_count = random.randint(2, min(3, wave_count, len(_MUTANT_POOL)))
+        mutant_count = random.randint(1, min(2, wave_count, len(_MUTANT_POOL)))
     remaining = wave_count - mutant_count
 
     # ── HOT 배정 (최소 1개 보장) ─────────────────────────────────────────────
@@ -1313,7 +1316,7 @@ def _batch_gen_worker(
         q_log(f"[BATCH] ⚠️ 댓글 타겟 수집 실패 (계속): {str(_te)[:80]}")
 
     # ── 온도 밸런싱 라인업 빌드 ─────────────────────────────────────────
-    # HOT ≤ 30% / NEUTRAL ≥ 20% / mutant 2~3개 보장 / 연속 HOT 3회 이상 불가.
+    # HOT ≤ 30% / NEUTRAL ≥ 10% / mutant 1~2개 보장 / 연속 HOT 3회 이상 불가.
     # sentiment_score: 감성 drift 보정 (≤-2 → HOT 상한 절반, mutant 최대)
     # hour: 시간대 리듬 기반 WARM pool 가중치 조정
     _wave_lineup = _build_balanced_lineup(
