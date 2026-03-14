@@ -788,6 +788,7 @@ def _init_state() -> None:
         "swarm_wave_count":       3,
         "wave_interval_min":      1,   # WAVE 간 최소 대기 (분)
         "wave_interval_max":      3,   # WAVE 간 최대 대기 (분)
+        "wave_test_mode":         False, # 테스트 모드: 분→초로 축소
         # ── Widget 기본값 (INTEL Bento) ───────────────
         "intel_gallery_id":       "",
         "intel_type_label":       "마이너 (mgallery)",
@@ -1441,9 +1442,11 @@ def _post_exec_worker(
     headless: bool,
     wave_interval_min: int = 1,
     wave_interval_max: int = 3,
+    wave_test_mode: bool = False,
 ) -> None:
     """백그라운드 스레드: 검수 완료된 대본을 Wave 간 쿨타임에 맞춰 순차 발행.
     메시지 포맷은 기존 _swarm_worker와 동일 (log / preview / stat / done).
+    wave_test_mode=True 시 분 단위 설정값을 그대로 초로 처리 (빠른 사이클 검증용).
     """
 
     def q_log(msg: str) -> None:
@@ -1562,11 +1565,18 @@ def _post_exec_worker(
 
         # Wave 간 쿨타임 (사용자 설정 범위 내 랜덤)
         if i < len(valid_scripts) - 1 and not stop_ev.is_set():
-            _lo = max(30, wave_interval_min * 60)
-            _hi = max(_lo, wave_interval_max * 60)
-            _base_wait = random.randint(_lo, _hi)
-            wait_sec   = max(30, _base_wait - _comment_elapsed)
-            q_log(f"[EXEC] ☕ 다음 WAVE까지 {wait_sec}초 대기... ({wave_interval_min}~{wave_interval_max}분 범위)")
+            if wave_test_mode:
+                # 🧪 테스트 모드: 분 설정값을 그대로 초로 처리 (1분→1초)
+                _lo = max(1, wave_interval_min)
+                _hi = max(_lo, wave_interval_max)
+                wait_sec = random.randint(_lo, _hi)
+                q_log(f"[TEST] 🧪 다음 WAVE까지 {wait_sec}초 대기... (테스트 모드: {wave_interval_min}~{wave_interval_max}초)")
+            else:
+                _lo = max(30, wave_interval_min * 60)
+                _hi = max(_lo, wave_interval_max * 60)
+                _base_wait = random.randint(_lo, _hi)
+                wait_sec   = max(30, _base_wait - _comment_elapsed)
+                q_log(f"[EXEC] ☕ 다음 WAVE까지 {wait_sec}초 대기... ({wave_interval_min}~{wave_interval_max}분 범위)")
             _interruptible_sleep(wait_sec, stop_ev)
 
     q_log(f"═══════ EXECUTION COMPLETE — {len(valid_scripts)} WAVES FIRED ═══════")
@@ -1616,6 +1626,7 @@ def _auto_launch_swarm(ss: "st.session_state", scripts: list) -> None:  # type: 
             "headless":           _cfg.get("headless", True),
             "wave_interval_min":  _cfg.get("wave_interval_min", 1),
             "wave_interval_max":  _cfg.get("wave_interval_max", 3),
+            "wave_test_mode":     _cfg.get("wave_test_mode", False),
         },
         daemon=True,
     ).start()
@@ -2527,6 +2538,7 @@ def _review_board_fragment() -> None:
                     "headless":           _cfg.get("headless", True),
                     "wave_interval_min":  _cfg.get("wave_interval_min", 1),
                     "wave_interval_max":  _cfg.get("wave_interval_max", 3),
+                    "wave_test_mode":     _cfg.get("wave_test_mode", False),
                 },
                 daemon=True,
             ).start()
@@ -2771,20 +2783,27 @@ with main_left:
 
     # ── WAVE 간 대기 시간 설정 ──────────────────────────────
     _iv_col1, _iv_col2 = st.columns(2)
+    _is_test = st.session_state.get("wave_test_mode", False)
+    _unit_label = "초" if _is_test else "분"
     with _iv_col1:
         st.number_input(
-            "⏱️ 대기 최소 (분)",
+            f"⏱️ 대기 최소 ({_unit_label})",
             min_value=0, max_value=60, step=1,
             key="wave_interval_min",
-            help="WAVE 간 최소 대기 시간 (분). 실제 대기는 최소~최대 범위 내 랜덤.",
+            help=f"WAVE 간 최소 대기 시간. 테스트 모드 ON 시 초 단위로 동작.",
         )
     with _iv_col2:
         st.number_input(
-            "⏱️ 대기 최대 (분)",
+            f"⏱️ 대기 최대 ({_unit_label})",
             min_value=0, max_value=60, step=1,
             key="wave_interval_max",
-            help="WAVE 간 최대 대기 시간 (분). 최소값보다 크게 설정하세요.",
+            help=f"WAVE 간 최대 대기 시간. 최소값보다 크게 설정하세요.",
         )
+    st.checkbox(
+        "🧪 테스트 모드 (분→초 축소)",
+        key="wave_test_mode",
+        help="ON 시 대기 시간을 분→초로 축소. 사이클 흐름 빠르게 검증할 때 사용. 실제 포스팅은 그대로 실행됨.",
+    )
 
     # 재계산 (위젯 렌더 후 값 갱신)
     _gallery_id   = st.session_state.get("target_gallery_id", "")
@@ -2794,12 +2813,14 @@ with main_left:
     _headless     = st.session_state.get("target_headless", True)
     _iv_min       = st.session_state.get("wave_interval_min", 1)
     _iv_max       = st.session_state.get("wave_interval_max", 3)
+    _test_mode    = st.session_state.get("wave_test_mode", False)
+    _interval_str = f"{_iv_min}~{_iv_max}초 🧪" if _test_mode else f"{_iv_min}~{_iv_max}분"
     st.markdown(
         f'<div class="config-summary" style="margin-top:8px">'
         f'<div class="cs-row"><span class="cs-label">Tone</span><span class="cs-val">{_neural_tone}</span></div>'
         f'<div class="cs-row"><span class="cs-label">Length</span><span class="cs-val">{_length.split(" ")[0]}</span></div>'
         f'<div class="cs-row"><span class="cs-label">Headless</span><span class="cs-val">{"ON" if _headless else "OFF"}</span></div>'
-        f'<div class="cs-row"><span class="cs-label">Interval</span><span class="cs-val">{_iv_min}~{_iv_max}분</span></div>'
+        f'<div class="cs-row"><span class="cs-label">Interval</span><span class="cs-val">{_interval_str}</span></div>'
         f'</div>',
         unsafe_allow_html=True,
     )
@@ -2959,6 +2980,7 @@ if fire_clicked:
             "infinite":           _infinite,
             "wave_interval_min":  st.session_state.get("wave_interval_min", 1),
             "wave_interval_max":  st.session_state.get("wave_interval_max", 3),
+            "wave_test_mode":     bool(st.session_state.get("wave_test_mode", False)),
         }
 
         st.session_state.swarm_log            = []
