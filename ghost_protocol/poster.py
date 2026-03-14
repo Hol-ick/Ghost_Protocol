@@ -719,16 +719,17 @@ class GhostPoster:
             except Exception:
                 pass
 
-        # ── post_no 추출 (3차 Fallback: 목록 페이지 첫 글 data-no) ──────────
+        # ── post_no 추출 (3차 Fallback: 목록 페이지 첫 일반 글 data-no) ──────────
         # board/view 리디렉트가 없고 URL·DOM 모두 실패 시,
-        # 갤러리 목록 첫 번째 tr.ub-content[data-no]를 post_no로 사용.
+        # 갤러리 목록 첫 번째 일반 글(tr.ub-content.us-post)의 data-no를 post_no로 사용.
+        # .us-post 필터: 고정 공지글(sticky/notice)은 오래된 번호라 제외.
         if not post_no:
             try:
                 _list_url = get_list_url(self._gallery_type, gallery_id)
                 if log:
                     log(f"[POSTER] 🔍 3차 폴백: 목록 페이지에서 post_no 추출 중...")
                 await page.goto(_list_url, wait_until="domcontentloaded", timeout=10000)
-                _first_tr = page.locator("tr.ub-content[data-no]").first
+                _first_tr = page.locator("tr.ub-content.us-post[data-no]").first
                 _no_val = await _first_tr.get_attribute("data-no", timeout=4000)
                 post_no = (_no_val or "").strip()
                 if log and post_no:
