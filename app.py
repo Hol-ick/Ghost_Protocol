@@ -2905,6 +2905,8 @@ if fire_clicked:
         st.error("⚠️ GEMINI_API_KEY가 설정되지 않았습니다. 프로젝트 루트의 .env 파일을 확인하고 앱을 재시작하세요.")
     elif not _topic:
         st.error("⚠️ 주제를 입력하세요.")
+    elif not _gallery_id:
+        st.error("⚠️ Gallery ID가 비어 있습니다. STEP 2의 Gallery ID 입력란을 채워주세요.")
     else:
         # Phase 10: 무한 모드 변수 누수 방지 — UI 캐시값(swarm_wave_count)과 무관하게 10 강제
         # min(_w_count, 10) 패턴은 유저가 3으로 설정한 채 infinite ON 하면 3개만 도는 버그 유발.
