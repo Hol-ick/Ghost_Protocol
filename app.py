@@ -1593,7 +1593,16 @@ def _auto_launch_swarm(ss: "st.session_state", scripts: list) -> None:  # type: 
 
     _review_board_fragment의 '✅ 대본 최종 승인' 버튼 핸들러 로직을 DRY하게 추출.
     유효 대본(not _failed)이 0개면 즉시 다음 배치 사이클로 넘어가 실패 루프를 방지.
+    테스트 모드(wave_test_mode=True)이면 포스팅 없이 즉시 다음 배치 생성으로 넘어간다.
     """
+    _cfg = ss.get("_batch_gen_config", {})
+
+    # ── 테스트 모드: 포스팅 완전 생략 → LLM 생성 → 여론 갱신 루프만 반복 ──
+    if _cfg.get("wave_test_mode"):
+        ss.swarm_log.append("[TEST] 🧪 테스트 모드 — 포스팅 건너뜀, 다음 배치 즉시 시작")
+        _start_next_batch(ss)
+        return
+
     valid = [s for s in scripts if not s.get("_failed")]
     if not valid:
         # 전량 생성 실패 → 포스팅 없이 다음 사이클 즉시 재개
@@ -1614,7 +1623,6 @@ def _auto_launch_swarm(ss: "st.session_state", scripts: list) -> None:  # type: 
     ss.swarm_wave_current    = 0
     ss.last_fired            = True
 
-    _cfg = ss.get("_batch_gen_config", {})
     threading.Thread(
         target=_post_exec_worker,
         kwargs={
