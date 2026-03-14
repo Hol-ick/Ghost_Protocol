@@ -788,7 +788,9 @@ def _init_state() -> None:
         "swarm_wave_count":       3,
         "wave_interval_min":      1,   # WAVE 간 최소 대기 (분)
         "wave_interval_max":      3,   # WAVE 간 최대 대기 (분)
-        "wave_test_mode":         False, # 테스트 모드: 분→초로 축소
+        "wave_test_mode":         False, # 테스트 모드: 포스팅 생략, LLM+여론 루프만
+        "test_summaries":         [],    # 테스트 모드 사이클별 요약 누적
+        "_test_wave_counter":     0,     # 테스트 모드 wave 카운터
         # ── Widget 기본값 (INTEL Bento) ───────────────
         "intel_gallery_id":       "",
         "intel_type_label":       "마이너 (mgallery)",
@@ -1584,6 +1586,57 @@ def _post_exec_worker(
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# 헬퍼: 테스트 모드 사이클 요약 포맷터
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def _build_test_summary(scripts: list, intel: dict | None, wave_num: int) -> str:
+    """테스트 모드 Wave 사이클 요약 문자열 생성 (st.code 출력용)."""
+    from datetime import datetime
+    valid = [s for s in scripts if not s.get("_failed")]
+    W = 54
+    ts = datetime.now().strftime("%H:%M:%S")
+
+    lines: list[str] = []
+    lines.append("═" * W)
+    header = f" WAVE {wave_num}  ·  {ts} "
+    lines.append(header.center(W))
+    lines.append("═" * W)
+    lines.append("")
+
+    # ── 대본 목록 ──────────────────────────────────────────
+    lines.append(f"📝 생성 대본 ({len(valid)}개)")
+    for i, s in enumerate(valid, 1):
+        persona = (s.get("persona") or "")[:14].ljust(14)
+        title   = (s.get("title")   or "")[:34]
+        lines.append(f"  {i:2}. [{persona}] {title}")
+    lines.append("")
+
+    # ── 여론 현황 ──────────────────────────────────────────
+    lines.append("📊 여론 현황")
+    if intel:
+        sentiment = intel.get("sentiment", intel.get("overall_sentiment", "—"))
+        hot       = intel.get("hot_topics", [])
+        memes     = intel.get("memes", [])
+        keywords  = intel.get("top_keywords", [])
+        stats     = intel.get("stats", {})
+        lines.append(f"  감성    : {sentiment}")
+        if hot:
+            lines.append(f"  핫토픽  : {' · '.join(hot[:4])}")
+        if memes:
+            lines.append(f"  밈      : {' · '.join(memes[:3])}")
+        if keywords:
+            lines.append(f"  키워드  : {', '.join(keywords[:10])}")
+        if stats:
+            lines.append(f"  스캔    : 제목 {stats.get('titles_count',0)}개 · 댓글 {stats.get('comments_count',0)}개")
+    else:
+        lines.append("  (여론 데이터 없음 — Intel 분석 먼저 실행하세요)")
+    lines.append("")
+
+    return "\n".join(lines)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # 헬퍼: 무한 모드 자동 포스팅 워커 시작 (검수 게이트 우회)
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -1599,7 +1652,14 @@ def _auto_launch_swarm(ss: "st.session_state", scripts: list) -> None:  # type: 
 
     # ── 테스트 모드: 포스팅 완전 생략 → LLM 생성 → 여론 갱신 루프만 반복 ──
     if _cfg.get("wave_test_mode"):
-        ss.swarm_log.append("[TEST] 🧪 테스트 모드 — 포스팅 건너뜀, 다음 배치 즉시 시작")
+        _wave_n = ss.get("_test_wave_counter", 0) + 1
+        ss["_test_wave_counter"] = _wave_n
+        _intel = ss.get("intel_result")
+        _summary = _build_test_summary(scripts, _intel, _wave_n)
+        if not isinstance(ss.get("test_summaries"), list):
+            ss["test_summaries"] = []
+        ss.test_summaries.append(_summary)
+        ss.swarm_log.append(f"[TEST] 🧪 WAVE {_wave_n} 요약 생성 완료 — 다음 배치 시작")
         _start_next_batch(ss)
         return
 
@@ -2257,6 +2317,21 @@ def _monitor_fragment() -> None:
                 unsafe_allow_html=True,
             )
 
+    # ── 테스트 모드 사이클 요약 ─────────────────────────────────────────
+    _test_sums = ss.get("test_summaries", [])
+    if ss.get("wave_test_mode") and _test_sums:
+        st.markdown(
+            '<div class="section-hdr">🧪 TEST — 사이클 요약</div>',
+            unsafe_allow_html=True,
+        )
+        _full_summary = "\n".join(_test_sums)
+        st.code(_full_summary, language=None)
+        # 초기화 버튼
+        if st.button("🗑️ 요약 초기화", key="clear_test_summaries"):
+            ss["test_summaries"]      = []
+            ss["_test_wave_counter"]  = 0
+            st.rerun(scope="app")
+
     # ── Log Copy — 원클릭 복사 ───────────────────────────────────────────
     # collapsed by default → 폴링 중에도 렌더링 비용 없음.
     # 열면 st.code 우상단 📋 아이콘으로 전체 로그를 한 번에 복사 가능.
@@ -2295,6 +2370,8 @@ def _monitor_fragment() -> None:
             ss.swarm_log              = []
             ss.swarm_preview_title    = ""
             ss.swarm_preview_content  = ""
+            ss["test_summaries"]      = []
+            ss["_test_wave_counter"]  = 0
             st.rerun(scope="app")
 
     # ── 폴링 제어 ────────────────────────────────────────────────────────
