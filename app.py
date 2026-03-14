@@ -1452,6 +1452,10 @@ def _post_exec_worker(
     def q_stat(success: int = 0, fail: int = 0) -> None:
         log_q.put({"type": "stat", "success": success, "fail": fail})
 
+    # DB 초기화 안전망: _batch_gen_worker가 init_db()를 호출하지만
+    # 스레드 타이밍 문제나 재시작 직후 _post_exec_worker가 먼저 실행될 경우 방어.
+    database.init_db()
+
     try:
         _account_pool = load_accounts()
     except (FileNotFoundError, ValueError) as _ae:
