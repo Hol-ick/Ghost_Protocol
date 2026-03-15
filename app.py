@@ -1363,10 +1363,25 @@ def _batch_gen_worker(
         _wave_tone = _persona["key"]
         q_log(f"[BATCH] 🎭 [{wave}] 페르소나: {_persona['name']} ({_wave_tone})")
 
+        # ── 일상 소재 강제 슬롯 (코드 레벨) ───────────────────────────────
+        # 배치의 마지막 30% Wave는 갤러리 핫토픽 무관 일상 소재 전용.
+        # topic에 강제 지시를 넣어 LLM이 여론 핫토픽에 매몰되는 것을 차단.
+        _daily_slot_start = max(2, int(actual_count * 0.7)) + 1  # 예: 10개 중 8~10번째
+        _is_daily_slot = wave >= _daily_slot_start and _total_bans >= 2
+
         # ── 봇 아이덴티티 오버레이 (25% 확률) ──────────────────────────────
         # 특정 발화 정체성을 topic에 추가하여 사이클 간 언어 다양성 보장.
         # trigger_keywords 매칭 우선, 없으면 랜덤 선택.
         _wave_topic = topic
+
+        if _is_daily_slot:
+            _wave_topic += (
+                "\n[🆕 일상 소재 전용 슬롯 — 필수] 이 글은 반드시 갤러리 핫토픽(세미라미스, 영평이, 구포 등)과 "
+                "완전히 무관한 일상 소재만 작성하세요. 예시: 배달비, 교통, 앱 버그, 날씨, 식비, 게임, "
+                "유튜브, 직장/알바 불만, 자취 에피소드, 폰/PC 문제, 밀린 빨래 등. "
+                "핫토픽 키워드가 제목이나 본문에 하나라도 포함되면 실패 처리됩니다."
+            )
+            q_log(f"[BATCH] 🆕 [{wave}] 일상 소재 전용 슬롯")
 
         # ── 배치 내 화제 중복 방지 (첫 토큰 빈도 추적) ─────────────────
         # 이번 배치에서 이미 생성된 제목의 첫 토큰(=주제어)을 집계.
@@ -1760,18 +1775,19 @@ def _auto_launch_swarm(ss: "st.session_state", scripts: list) -> None:  # type: 
         _wave_n = ss.get("_test_wave_counter", 0) + 1
         ss["_test_wave_counter"] = _wave_n
 
-        # 세션 최초: 로그 파일 경로 생성 및 헤더 기록 (경로 미존재일 때만)
+        # 세션 최초: 로그 파일 경로 생성
         if not ss.get("_test_log_path"):
             _log_ts  = _dt.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
             _log_dir = _Path(__file__).parent / "logs"
             _log_dir.mkdir(exist_ok=True)
             ss["_test_log_path"] = str(_log_dir / f"test_{_log_ts}.txt")
-            _header = (
-                "=" * 58 + "\n"
-                f"  Echo Chamber TEST LOG  ·  시작: {_log_ts}\n"
-                "=" * 58 + "\n\n"
-            )
-            _append_test_log(_header, ss["_test_log_path"])
+
+        # 헤더 기록: 파일이 아직 없거나 비어있을 때만 (Streamlit rerun 중복 방지)
+        _log_file = _Path(ss["_test_log_path"])
+        if not _log_file.exists() or _log_file.stat().st_size == 0:
+            _log_ts_disp = _log_file.stem.replace("test_", "")
+            _hdr = f"{'=' * 58}\n  Echo Chamber TEST LOG  ·  시작: {_log_ts_disp}\n{'=' * 58}\n\n"
+            _append_test_log(_hdr, ss["_test_log_path"])
 
         _intel   = ss.get("intel_result")
         _mem_now = _cm.load()   # 최신 cycle_memory 로드 (배치가 방금 저장한 상태)

@@ -135,11 +135,14 @@ def get_banned_topics(mem: dict) -> list[str]:
 
 # ── 2. 감성 진자 (Sentiment Drift) ───────────────────────────────────────────
 def _score_sentiment(sentiment: str) -> int:
-    """sentiment 문자열을 수치로 변환 (키워드 포함 검사, 첫 매칭 우선)."""
-    for keyword, val in _SENTIMENT_TABLE:
-        if keyword in sentiment:
-            return val
-    return 0
+    """sentiment 문자열을 수치로 변환 — 복합 감성은 최소(가장 부정적) 점수 사용.
+
+    "조롱/의심/피로" 같은 복합 감성에서 "조롱"(0점)이 먼저 매칭되어
+    실제 부정 신호를 0으로 씹는 문제를 해결.
+    모든 매칭 키워드의 점수 중 최소값(가장 부정적)을 반환.
+    """
+    scores = [val for keyword, val in _SENTIMENT_TABLE if keyword in sentiment]
+    return min(scores) if scores else 0
 
 
 def update_sentiment(mem: dict, sentiment: str) -> int:
