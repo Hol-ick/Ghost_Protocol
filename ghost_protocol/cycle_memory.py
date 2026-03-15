@@ -37,14 +37,20 @@ TITLE_BAN_RATIO  = 0.20  # 제목 첫 토큰이 윈도우 내 이 비율 초과 
 # 냉소/조롱/혼란은 갤러리 기본 감성이므로 0(중립)으로 처리 — 실제 분노·패닉만 음수.
 _SENTIMENT_TABLE: list[tuple[str, int]] = [
     ("우호적",  2),
+    ("긍정",    1),
     ("중립",    0),
     ("보통",    0),
     ("냉소",    0),   # 갤러리 기본 상태 → 중립으로 처리
     ("조롱",    0),   # 갤러리 기본 상태 → 중립으로 처리
+    ("피로",   -1),   # "피로감/조롱" — Gemini 빈출 감성
+    ("회의",   -1),   # "회의적/조롱" — Gemini 빈출 감성
+    ("의아",   -1),   # "의아함" — Gemini 빈출 감성
+    ("짜증",   -1),
     ("혼란",   -1),
     ("의문",   -1),
     ("분노",   -2),
     ("적대적", -2),
+    ("의심",   -1),   # "의심/피로" — Gemini 빈출 감성
     ("패닉",   -3),
     ("공황",   -3),
 ]
@@ -95,19 +101,29 @@ def increment_cycle(mem: dict) -> int:
 
 # ── 1. 화제 반감기 (Topic TTL) ────────────────────────────────────────────────
 def update_topic_ttl(mem: dict, hot_topics: list[str]) -> list[str]:
-    """hot_topics의 연속 등장 카운트를 갱신하고 금지 키워드 목록을 반환.
+    """hot_topics의 등장 카운트를 갱신하고 금지 키워드 목록을 반환.
 
-    이번 사이클에 등장하지 않은 키워드는 카운트를 0으로 리셋(제거).
-    Returns: TOPIC_TTL_BAN 이상 연속 등장한 키워드 목록.
+    이번 사이클에 등장한 키워드: 카운트 +1.
+    미등장 키워드: 즉시 리셋 대신 카운트 -1 (서서히 쿨다운).
+      → 금지(count≥2) 상태에서 1사이클 빠져도 바로 해제되지 않음.
+      → 오래 트렌딩할수록 쿨다운도 길어지는 자연스러운 반감기 효과.
+    Returns: TOPIC_TTL_BAN 이상 카운트인 키워드 목록.
     """
     old_ttl: dict = mem.get("topic_ttl", {})
     new_ttl: dict = {}
     current: set[str] = {t.strip() for t in hot_topics if t.strip()}
 
+    # 등장 키워드: 카운트 증가
     for key in current:
         new_ttl[key] = old_ttl.get(key, 0) + 1
 
-    # 이번 사이클 미등장 키워드 → 카운트 리셋 (아예 제거)
+    # 미등장 키워드: 즉시 삭제 대신 1 감소 (쿨다운)
+    for key, count in old_ttl.items():
+        if key not in current and key not in new_ttl:
+            decayed = count - 1
+            if decayed > 0:
+                new_ttl[key] = decayed
+
     mem["topic_ttl"] = new_ttl
     return [k for k, v in new_ttl.items() if v >= TOPIC_TTL_BAN]
 

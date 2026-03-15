@@ -1219,6 +1219,19 @@ def _batch_gen_worker(
     if _sentiment_score <= _cm.DRIFT_THRESHOLD:
         q_log(f"[CYCLE-MEM] 🌡️ 감성 drift 감지 (score={_sentiment_score}) — HOT 상한 절반, mutant 최대 적용")
 
+    # ── 자기강화 피드백 루프 차단 — 신규 소재 강제 비율 ──────────────────
+    # 금지 목록이 2개 이상이면: 봇이 쓴 글이 여론에 되먹임되는 상황.
+    # LLM에 일상 소재 최소 비율을 강제 주입하여 화제 다양성 확보.
+    _total_bans = len(_banned_topics) + len(_banned_starts) + len(_banned_title_kws)
+    if _total_bans >= 2:
+        topic += (
+            "\n[🔄 다양성 의무] 이번 배치 대본의 최소 40%는 위 핫토픽·금지어와 "
+            "전혀 무관한 완전히 새로운 일상 소재(배달비, 교통, 앱 버그, 날씨, 식비, "
+            "게임, 유튜브, 직장, 알바, 학교 등 갤러리 고유 화제가 아닌 것)를 다뤄야 합니다. "
+            "갤러리 핫토픽에만 매몰되지 마세요."
+        )
+        q_log(f"[CYCLE-MEM] 🔄 다양성 의무 주입 (금지 항목 {_total_bans}개 → 40% 일상 소재 강제)")
+
     _cm.save(_mem)   # cycle_count 증가 즉시 저장
 
     # ── 봇 아이덴티티 풀 로드 ────────────────────────────────────────────────
@@ -1355,14 +1368,25 @@ def _batch_gen_worker(
         # trigger_keywords 매칭 우선, 없으면 랜덤 선택.
         _wave_topic = topic
 
-        # ── 배치 내 화제 중복 방지 ──────────────────────────────────────
-        # 이번 배치에서 이미 생성된 제목들을 다음 Wave topic에 주입.
-        # 같은 제목/소재가 연속으로 10개 이상 나오는 현상 방지.
+        # ── 배치 내 화제 중복 방지 (첫 토큰 빈도 추적) ─────────────────
+        # 이번 배치에서 이미 생성된 제목의 첫 토큰(=주제어)을 집계.
+        # 같은 주제어가 3회 이상 나오면 해당 키워드를 명시적으로 금지.
         if _used_titles:
+            from collections import Counter as _Ctr
+            _first_toks = [t.strip().split()[0] for t in _used_titles
+                           if t.strip() and len(t.strip().split()[0]) >= 2]
+            _tok_freq   = _Ctr(_first_toks)
+            _hot_toks   = [tok for tok, cnt in _tok_freq.items() if cnt >= 2]
+
             _dup_ban = " / ".join(_used_titles[-6:])
             _wave_topic += (
-                f"\n[⛔ 이번 배치 기사용 제목 목록 (동일하거나 유사한 소재·키워드 절대 금지)]: {_dup_ban}"
+                f"\n[⛔ 이번 배치 기사용 제목 목록 (동일·유사 소재 절대 금지)]: {_dup_ban}"
             )
+            if _hot_toks:
+                _wave_topic += (
+                    f"\n[⛔⛔ 절대 사용 금지 키워드 (이 단어로 시작하는 제목 생성 불가)]: "
+                    f"{', '.join(_hot_toks)}"
+                )
         if _bot_identities and random.random() < 0.25:
             _matched_ids = [
                 bid for bid in _bot_identities
@@ -1651,7 +1675,7 @@ def _build_test_summary(
     fail_tag = f"  (실패 {failed}개)" if failed else ""
     lines.append(f"[대본]  생성 {len(valid)}개{fail_tag}")
     for i, s in enumerate(valid, 1):
-        persona    = (s.get("persona_key") or s.get("persona") or "")[:14].ljust(14)
+        persona    = (s.get("tone") or s.get("persona_key") or s.get("persona") or "")[:14].ljust(14)
         title      = (s.get("title") or "")[:36]
         bot_id_tag = f" *{s['bot_identity'][:6]}" if s.get("bot_identity") else ""
         lines.append(f"  {i:2}. [{persona}]{bot_id_tag}  {title}")
@@ -1736,8 +1760,8 @@ def _auto_launch_swarm(ss: "st.session_state", scripts: list) -> None:  # type: 
         _wave_n = ss.get("_test_wave_counter", 0) + 1
         ss["_test_wave_counter"] = _wave_n
 
-        # 세션 최초 Wave 1: 로그 파일 경로 생성 및 헤더 기록
-        if _wave_n == 1:
+        # 세션 최초: 로그 파일 경로 생성 및 헤더 기록 (경로 미존재일 때만)
+        if not ss.get("_test_log_path"):
             _log_ts  = _dt.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
             _log_dir = _Path(__file__).parent / "logs"
             _log_dir.mkdir(exist_ok=True)
