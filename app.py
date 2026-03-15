@@ -1627,11 +1627,17 @@ def _post_exec_worker(
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-def _build_test_summary(scripts: list, intel: dict | None, wave_num: int) -> str:
-    """테스트 모드 Wave 사이클 요약 문자열 생성 (st.code 출력용)."""
+def _build_test_summary(
+    scripts: list,
+    intel: dict | None,
+    wave_num: int,
+    mem: dict | None = None,
+) -> str:
+    """테스트 모드 Wave 사이클 요약 문자열 생성 (st.code 출력 + 로그 파일 공용)."""
     from datetime import datetime
-    valid = [s for s in scripts if not s.get("_failed")]
-    W = 54
+    valid  = [s for s in scripts if not s.get("_failed")]
+    failed = len(scripts) - len(valid)
+    W  = 58
     ts = datetime.now().strftime("%H:%M:%S")
 
     lines: list[str] = []
@@ -1642,15 +1648,17 @@ def _build_test_summary(scripts: list, intel: dict | None, wave_num: int) -> str
     lines.append("")
 
     # ── 대본 목록 ──────────────────────────────────────────
-    lines.append(f"📝 생성 대본 ({len(valid)}개)")
+    fail_tag = f"  (실패 {failed}개)" if failed else ""
+    lines.append(f"[대본]  생성 {len(valid)}개{fail_tag}")
     for i, s in enumerate(valid, 1):
-        persona = (s.get("persona") or "")[:14].ljust(14)
-        title   = (s.get("title")   or "")[:34]
-        lines.append(f"  {i:2}. [{persona}] {title}")
+        persona    = (s.get("persona_key") or s.get("persona") or "")[:14].ljust(14)
+        title      = (s.get("title") or "")[:36]
+        bot_id_tag = f" *{s['bot_identity'][:6]}" if s.get("bot_identity") else ""
+        lines.append(f"  {i:2}. [{persona}]{bot_id_tag}  {title}")
     lines.append("")
 
     # ── 여론 현황 ──────────────────────────────────────────
-    lines.append("📊 여론 현황")
+    lines.append("[여론]")
     if intel:
         sentiment = intel.get("sentiment", intel.get("overall_sentiment", "—"))
         hot       = intel.get("hot_topics", [])
@@ -1659,18 +1667,51 @@ def _build_test_summary(scripts: list, intel: dict | None, wave_num: int) -> str
         stats     = intel.get("stats", {})
         lines.append(f"  감성    : {sentiment}")
         if hot:
-            lines.append(f"  핫토픽  : {' · '.join(hot[:4])}")
+            lines.append(f"  핫토픽  : {' · '.join(str(h) for h in hot[:5])}")
         if memes:
-            lines.append(f"  밈      : {' · '.join(memes[:3])}")
+            lines.append(f"  밈      : {' · '.join(str(m) for m in memes[:4])}")
         if keywords:
-            lines.append(f"  키워드  : {', '.join(keywords[:10])}")
+            lines.append(f"  키워드  : {', '.join(str(k) for k in keywords[:12])}")
         if stats:
             lines.append(f"  스캔    : 제목 {stats.get('titles_count',0)}개 · 댓글 {stats.get('comments_count',0)}개")
     else:
-        lines.append("  (여론 데이터 없음 — Intel 분석 먼저 실행하세요)")
+        lines.append("  (여론 데이터 없음)")
     lines.append("")
 
+    # ── cycle_memory 상태 ──────────────────────────────────
+    if mem is not None:
+        lines.append("[사이클 메모리]")
+        drift_score   = _cm.get_sentiment_score(mem)
+        drift_active  = _cm.is_drift_active(mem)
+        hist          = mem.get("sentiment_hist", [])
+        banned_topics = _cm.get_banned_topics(mem)
+        banned_starts = _cm.get_banned_starts(mem)
+        banned_titles = _cm.get_banned_title_keywords(mem)
+        cycle_n       = mem.get("cycle_count", 0)
+        drift_marker  = " ⚠️ DRIFT" if drift_active else ""
+        lines.append(f"  사이클  : {cycle_n}")
+        lines.append(f"  감성합  : {drift_score}{drift_marker}  (hist={hist})")
+        if banned_topics:
+            lines.append(f"  금지화제: {' / '.join(banned_topics)}")
+        if banned_starts:
+            lines.append(f"  금지어휘: {' / '.join(banned_starts)}")
+        if banned_titles:
+            lines.append(f"  금지제목: {' / '.join(banned_titles)}")
+        lines.append("")
+
     return "\n".join(lines)
+
+
+def _append_test_log(summary: str, log_path: "Path") -> None:  # type: ignore[name-defined]
+    """테스트 요약을 log_path에 append. 실패 시 무시."""
+    try:
+        from pathlib import Path as _Path
+        _p = _Path(log_path)
+        _p.parent.mkdir(parents=True, exist_ok=True)
+        with _p.open("a", encoding="utf-8") as _f:
+            _f.write(summary + "\n")
+    except Exception:
+        pass
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1689,14 +1730,41 @@ def _auto_launch_swarm(ss: "st.session_state", scripts: list) -> None:  # type: 
 
     # ── 테스트 모드: 포스팅 완전 생략 → LLM 생성 → 여론 갱신 루프만 반복 ──
     if _cfg.get("wave_test_mode"):
+        import datetime as _dt
+        from pathlib import Path as _Path
+
         _wave_n = ss.get("_test_wave_counter", 0) + 1
         ss["_test_wave_counter"] = _wave_n
-        _intel = ss.get("intel_result")
-        _summary = _build_test_summary(scripts, _intel, _wave_n)
+
+        # 세션 최초 Wave 1: 로그 파일 경로 생성 및 헤더 기록
+        if _wave_n == 1:
+            _log_ts  = _dt.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+            _log_dir = _Path(__file__).parent / "logs"
+            _log_dir.mkdir(exist_ok=True)
+            ss["_test_log_path"] = str(_log_dir / f"test_{_log_ts}.txt")
+            _header = (
+                "=" * 58 + "\n"
+                f"  Echo Chamber TEST LOG  ·  시작: {_log_ts}\n"
+                "=" * 58 + "\n\n"
+            )
+            _append_test_log(_header, ss["_test_log_path"])
+
+        _intel   = ss.get("intel_result")
+        _mem_now = _cm.load()   # 최신 cycle_memory 로드 (배치가 방금 저장한 상태)
+        _summary = _build_test_summary(scripts, _intel, _wave_n, mem=_mem_now)
+
         if not isinstance(ss.get("test_summaries"), list):
             ss["test_summaries"] = []
         ss.test_summaries.append(_summary)
-        ss.swarm_log.append(f"[TEST] 🧪 WAVE {_wave_n} 요약 생성 완료 — 다음 배치 시작")
+
+        # 로그 파일 append
+        _log_path = ss.get("_test_log_path")
+        if _log_path:
+            _append_test_log(_summary, _log_path)
+
+        ss.swarm_log.append(
+            f"[TEST] 🧪 WAVE {_wave_n} 요약 → {_Path(_log_path).name if _log_path else '?'}"
+        )
         _start_next_batch(ss)
         return
 
@@ -2361,12 +2429,18 @@ def _monitor_fragment() -> None:
             '<div class="section-hdr">🧪 TEST — 사이클 요약</div>',
             unsafe_allow_html=True,
         )
+        # 로그 파일 경로 표시
+        _log_p = ss.get("_test_log_path")
+        if _log_p:
+            from pathlib import Path as _PPath
+            st.caption(f"📁 로그 파일: `logs/{_PPath(_log_p).name}`  ({len(_test_sums)} wave)")
         _full_summary = "\n".join(_test_sums)
         st.code(_full_summary, language=None)
-        # 초기화 버튼
+        # 초기화 버튼 (로그 파일 경로도 리셋 → 다음 실행 시 새 파일 생성)
         if st.button("🗑️ 요약 초기화", key="clear_test_summaries"):
             ss["test_summaries"]      = []
             ss["_test_wave_counter"]  = 0
+            ss["_test_log_path"]      = None
             st.rerun(scope="app")
 
     # ── Log Copy — 원클릭 복사 ───────────────────────────────────────────
