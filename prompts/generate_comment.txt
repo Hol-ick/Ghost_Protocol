@@ -9,6 +9,7 @@ $posts_context
 
 [댓글 길이 룰]
 $length_rule
+$comment_enrichment_block
 
 [작업]
 타겟 게시글에 붙일 검토용 댓글 초안을 만든다.

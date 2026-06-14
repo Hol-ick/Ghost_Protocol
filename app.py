@@ -54,6 +54,7 @@ from ghost_protocol.domain import gallery_purpose
 from ghost_protocol.domain import gallery_style
 from ghost_protocol.domain import board_rhythm
 from ghost_protocol.domain import naturalness
+from ghost_protocol.domain import writing_enrichment
 from ghost_protocol.domain import lineup as lineup_policy
 from ghost_protocol.domain.validators import validate_slot_diversity
 from ghost_protocol.poster import GhostPoster, load_accounts
@@ -1063,6 +1064,7 @@ def _batch_gen_worker(
     infinite: bool = False,
     auto_refresh: bool = False,
     style_profile: dict | None = None,
+    composition_profile: dict | None = None,
     purpose_slot_enabled: bool = True,
     purpose_only: bool = False,
     is_refill: bool = False,
@@ -1144,6 +1146,10 @@ def _batch_gen_worker(
     if _style_block and "갤러리별 문체 프로필" not in topic:
         topic = f"{topic}\n\n{_style_block}"
         q_log("[BATCH] 🧬 갤러리별 문체 프로필 적용")
+    _composition_block = writing_enrichment.prompt_block(composition_profile)
+    if _composition_block and "[Composition Profile]" not in topic:
+        topic = f"{topic}\n\n{_composition_block}"
+        q_log("[BATCH] composition profile applied")
 
     def _title_key(value: object) -> str:
         return re.sub(r"\s+", " ", str(value or "").strip()).casefold()
@@ -1303,6 +1309,13 @@ def _batch_gen_worker(
                     _fresh_ai      = (_ar_result.get("ai_analysis") or "").strip()
                     _fresh_summary = (_ar_result.get("summary") or "").strip()
                     _fresh_guidance = (_ar_result.get("generation_guidance") or "").strip()
+                    _fresh_composition_block = writing_enrichment.prompt_block(
+                        _ar_result.get("composition_profile")
+                    )
+                    if _fresh_composition_block:
+                        _fresh_guidance = "\n\n".join(
+                            part for part in (_fresh_guidance, _fresh_composition_block) if part
+                        )
                     _slot_guidance = ""
                     # ── 슬롯 의미 중복 검사 ─────────────────────────────
                     if _fresh_summary:
@@ -5947,6 +5960,7 @@ if fire_clicked:
     _infinite = bool(st.session_state.get("swarm_infinite", False))
     _rehearsal = bool(st.session_state.get("wave_test_mode", False))
     _style_profile = (st.session_state.get("intel_result") or {}).get("style_profile")
+    _composition_profile = (st.session_state.get("intel_result") or {}).get("composition_profile")
 
     if not has_any_key:
         st.error("⚠️ GEMINI_API_KEY가 설정되지 않았습니다. 프로젝트 루트의 .env 파일을 확인하고 앱을 재시작하세요.")
@@ -5987,6 +6001,7 @@ if fire_clicked:
                 "topic_preview": observability.compact_text(_topic, 180),
                 "guidance_preview": observability.compact_text(_guidance, 180),
                 "style_profile": bool(_style_profile),
+                "composition_profile": bool(_composition_profile),
             }
         ]
         st.session_state["_batch_cycle_count"] = 1
@@ -6014,6 +6029,7 @@ if fire_clicked:
             "headless":           _headless,
             "infinite":           _infinite,
             "style_profile":      _style_profile,
+            "composition_profile": _composition_profile,
             "wave_interval_min":  st.session_state.get("wave_interval_min", 1),
             "wave_interval_max":  st.session_state.get("wave_interval_max", 3),
             "publish_interval_minutes": st.session_state.get("publish_interval_minutes", 3),
@@ -6085,6 +6101,7 @@ if fire_clicked:
                 "length":       _length,
                 "infinite":     _infinite,
                 "style_profile": _style_profile,
+                "composition_profile": _composition_profile,
                 "rehearsal":    _rehearsal,
                 "rehearsal_cycle": 1,
                 "rehearsal_cycle_limit": _rehearsal_cycle_limit,

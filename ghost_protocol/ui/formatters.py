@@ -12,6 +12,7 @@ import plotly.graph_objects as go
 from ghost_protocol import cycle_memory
 from ghost_protocol.domain import board_rhythm
 from ghost_protocol.domain import gallery_style
+from ghost_protocol.domain import writing_enrichment
 from ghost_protocol.ui.intel_view_model import AiOccupationView
 
 
@@ -662,6 +663,9 @@ def build_generation_guidance(ir: dict, *, slot_warning: str | None = None) -> s
     style_block = gallery_style.prompt_block(ir.get("style_profile"))
     if style_block:
         parts.append(style_block)
+    composition_block = writing_enrichment.prompt_block(ir.get("composition_profile"))
+    if composition_block:
+        parts.append(composition_block)
     if slot_warning:
         parts.append(
             "[슬롯 다양성 보정]\n"

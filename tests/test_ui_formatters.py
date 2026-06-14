@@ -381,5 +381,28 @@ class UiFormattersTest(unittest.TestCase):
         self.assertNotIn('onclick="bad', html)
 
 
+    def test_build_generation_guidance_appends_composition_profile(self):
+        text = build_generation_guidance(
+            {
+                "generation_guidance": "guide",
+                "composition_profile": {
+                    "sample_size": 3,
+                    "shape": "title_driven",
+                    "depth": "shallow",
+                    "avg_title_len": 18.0,
+                    "avg_body_len": 12.0,
+                    "title_only_ratio": 0.67,
+                    "body_present_ratio": 0.33,
+                    "comment_presence_ratio": 0.0,
+                    "rules": ["keep the body as one small aftertaste"],
+                },
+            }
+        )
+
+        self.assertIn("guide", text)
+        self.assertIn("[Composition Profile]", text)
+        self.assertIn("keep the body as one small aftertaste", text)
+
+
 if __name__ == "__main__":
     unittest.main()

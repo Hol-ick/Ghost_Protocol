@@ -36,7 +36,7 @@ from .content_filter import (
     sensitive_generation_violations,
 )
 from .application import gemini_throttle
-from .domain import gallery_purpose, gallery_style, naturalness
+from .domain import gallery_purpose, gallery_style, naturalness, writing_enrichment
 
 # .env 에서 GEMINI_API_KEY 로딩
 load_dotenv()
@@ -544,6 +544,21 @@ class GhostBrain:
         # {"post_no": str, "title": str, "content": str, "existing_comments": list[str]}
         # existing_comments: 호출자(app.py)가 AJAX로 프리패치한 기존 댓글 (최대 5개, 없으면 [])
         # post_no 검증은 파서 단계에서 수행 (hallucination 방어).
+        composition_profile = writing_enrichment.build_composition_profile(
+            {"raw_posts": recent_posts or []},
+            recent_posts=recent_posts,
+        )
+        composition_profile_block = (
+            ""
+            if "[Composition Profile]" in str(topic or "")
+            else writing_enrichment.prompt_block(composition_profile)
+        )
+        comment_enrichment_block = (
+            ""
+            if "[Comment Composition Profile]" in str(topic or "")
+            else writing_enrichment.comment_prompt_block(composition_profile)
+        )
+
         if recent_posts:
             # Phase 9: 댓글 길이 룰 랜덤 선택 — 봇마다 대사 길이 변주
             _comment_length_rule = random.choice(_COMMENT_LENGTH_RULES)
@@ -562,6 +577,7 @@ class GhostBrain:
                 "generate_comment.txt",
                 posts_context="\n".join(_posts_formatted),
                 length_rule=_comment_length_rule,
+                comment_enrichment_block=comment_enrichment_block,
             )
         else:
             recent_posts_context = ""
@@ -589,6 +605,8 @@ class GhostBrain:
                 cross_instruction=cross_instruction,
                 kw_inject=kw_inject,
                 recent_posts_context=recent_posts_context,
+                composition_profile_block=composition_profile_block,
+                comment_enrichment_block=comment_enrichment_block,
             )
         )
 
@@ -858,6 +876,10 @@ class GhostBrain:
             titles=titles,
             comments=comments,
         )
+        composition_profile = writing_enrichment.build_composition_profile(
+            raw_data,
+            style_profile=style_profile,
+        )
         upstream_noise_stats = raw_data.get("noise_filter", {}) or {}
 
         # ── 봇 점유율 계산 ──────────────────────────────────────────────────
@@ -1103,6 +1125,7 @@ class GhostBrain:
         result["author_stats"] = author_stats   # author dominance 요약 문자열
         result["ai_share"]     = ai_share       # ledger 기반 봇 점유율 문자열
         result["style_profile"] = style_profile
+        result["composition_profile"] = composition_profile
         result["stats"] = {
             "titles_count":    len(titles),
             "comments_count":  len(comments),

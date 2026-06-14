@@ -22,6 +22,7 @@ BATCH_GEN_PARAMS: frozenset[str] = frozenset(
         "length",
         "infinite",
         "style_profile",
+        "composition_profile",
         "purpose_slot_enabled",
         "purpose_only",
         "is_refill",

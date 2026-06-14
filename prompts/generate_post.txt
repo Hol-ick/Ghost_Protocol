@@ -7,6 +7,8 @@ $tone_instruction
 - 분량: $length_instruction
 $kw_inject
 $recent_posts_context
+$composition_profile_block
+$comment_enrichment_block
 
 [작업]
 브리핑에서 실제로 언급된 구체 대상 하나를 골라 게시글 초안 1개를 만든다.
