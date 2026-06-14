@@ -19,6 +19,11 @@ from ghost_protocol import prompt_manager as pm
 _SHORTENER_RE = re.compile(r"(?:ㄹㅇ|ㅇㅇ|ㄷㄷ|ㅅㅂ|ㅈㄴ|ㅁㅊ|ㅈㄹ|ㅂㅅ|ㅁㅌㅊ|ㅇㅈ)")
 _LAUGH_RE = re.compile(r"[ㅋㅎ]{2,}")
 _CASUAL_ENDINGS = ("냐", "노", "네", "듯", "임", "함", "나", "냐고", "아님", "맞냐", "같음")
+_QUESTION_ENDING_RE = re.compile(
+    r"(?:\?|냐|었나|았나|했나|됐나|되나|있나|없나|바뀌나|나오나|보나|"
+    r"가나|오나|일까|할까|볼까|갈까|올까|걸까|아님|아닌가|맞나|맞냐|"
+    r"건가|거냐|될까|않나|않았나|인가|인지|뭐임)$"
+)
 _ARROW_MARKERS = ("<<", "<-", "->")
 
 
@@ -92,7 +97,12 @@ def build_style_profile(
     long_laugh_count = sum(1 for text in texts if re.search(r"[ㅋㅎ]{5,}", text))
     shortener_count = sum(1 for text in texts if _SHORTENER_RE.search(text))
     arrow_count = sum(1 for text in texts if any(marker in text for marker in _ARROW_MARKERS))
-    question_count = sum(1 for text in texts if "?" in text or text.rstrip().endswith(("냐", "나", "임", "함")))
+    question_count = sum(
+        1
+        for text in texts
+        if _QUESTION_ENDING_RE.search(text.rstrip(" ?!.…~ㅋㅋㅎㅎ"))
+        or text.rstrip().endswith("?")
+    )
     avg_title_len = round(sum(len(text) for text in source_titles) / len(source_titles), 1) if source_titles else 0.0
     ending_counts = Counter(_ending(text) for text in source_titles)
     ending_counts.pop("", None)
@@ -148,6 +158,7 @@ def style_rules_from_profile(profile: dict) -> list[str]:
 
     if avg_title_len and avg_title_len <= 24:
         rules.append("제목은 짧게 둔다. 긴 문장형 설명 제목보다 한 줄 반응에 가깝게 쓴다.")
+        rules.append("제목이 이미 반응을 담으면 본문은 비우거나 35자 안팎의 한 줄만 보탠다.")
     elif avg_title_len >= 36:
         rules.append("제목이 다소 길어도 되지만, 본문까지 설명문처럼 늘리지 않는다.")
 
