@@ -1,0 +1,23 @@
+# Auto-normalize line endings
+* text=auto
+
+# Python
+*.py text eol=lf
+
+# Config & markdown
+*.toml text eol=lf
+*.md   text eol=lf
+*.json text eol=lf
+*.txt  text eol=lf
+*.yaml text eol=lf
+*.yml  text eol=lf
+
+# Windows bat
+*.bat  text eol=crlf
+
+# Binary
+*.png binary
+*.jpg binary
+*.db  binary
+*.sqlite3 binary
+*.exe binary

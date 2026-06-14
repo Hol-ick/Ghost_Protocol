@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-label="Ghost Protocol">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f8fbff"/>
+      <stop offset="0.55" stop-color="#eaf2ff"/>
+      <stop offset="1" stop-color="#f1eaff"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#315dea"/>
+      <stop offset="1" stop-color="#6d3ff2"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="28" stdDeviation="32" flood-color="#315dea" flood-opacity="0.18"/>
+    </filter>
+  </defs>
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <circle cx="170" cy="100" r="230" fill="#6d3ff2" opacity="0.13"/>
+  <circle cx="1000" cy="90" r="260" fill="#315dea" opacity="0.12"/>
+  <rect x="92" y="78" width="1016" height="474" rx="42" fill="#ffffff" opacity="0.72" filter="url(#shadow)"/>
+  <circle cx="155" cy="145" r="13" fill="url(#accent)"/>
+  <text x="188" y="154" font-family="Segoe UI, Arial, sans-serif" font-size="20" font-weight="800" letter-spacing="6" fill="#111827">GHOST PROTOCOL</text>
+  <text x="145" y="285" font-family="Segoe UI, Arial, sans-serif" font-size="88" font-weight="900" letter-spacing="-7" fill="#111827">AI Operations</text>
+  <text x="145" y="382" font-family="Segoe UI, Arial, sans-serif" font-size="88" font-weight="900" letter-spacing="-7" fill="#315dea">Cockpit</text>
+  <text x="150" y="458" font-family="Segoe UI, Arial, sans-serif" font-size="28" font-weight="700" fill="#5f6f89">Board intelligence · Rehearsal · Stability · Reports</text>
+  <rect x="790" y="184" width="210" height="76" rx="22" fill="#f8fbff" stroke="#d8e2f3"/>
+  <text x="830" y="232" font-family="Segoe UI, Arial, sans-serif" font-size="28" font-weight="900" fill="#315dea">204 tests</text>
+  <rect x="790" y="286" width="210" height="76" rx="22" fill="#f8fbff" stroke="#d8e2f3"/>
+  <text x="830" y="334" font-family="Segoe UI, Arial, sans-serif" font-size="28" font-weight="900" fill="#6d3ff2">safe stops</text>
+</svg>
+
