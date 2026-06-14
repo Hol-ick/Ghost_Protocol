@@ -14,6 +14,7 @@ from collections import Counter
 from typing import Iterable
 
 from ghost_protocol import prompt_manager as pm
+from ghost_protocol.domain import gallery_purpose
 
 
 _SHORTENER_RE = re.compile(r"(?:ㄹㅇ|ㅇㅇ|ㄷㄷ|ㅅㅂ|ㅈㄴ|ㅁㅊ|ㅈㄹ|ㅂㅅ|ㅁㅌㅊ|ㅇㅈ)")
@@ -51,21 +52,42 @@ def _ending(text: str) -> str:
 
 
 def static_context_for(gallery_id: str) -> dict:
-    """Return the matching static gallery context from prompts/gallery_contexts.json."""
+    """Return legacy style context or an inferred display identity.
+
+    New boards should not be added here as exact hardcoded prompt contexts.
+    Exact contexts are kept only for older installations, while newly inferred
+    boards get their display name from gallery_purposes.json token matching.
+    """
 
     ctx_db = pm.load_json("gallery_contexts.json")
     if not isinstance(ctx_db, dict):
         return {}
 
     gallery_id = str(gallery_id or "").strip()
+    if not gallery_id:
+        ctx = ctx_db.get("default", {})
+        return ctx if isinstance(ctx, dict) else {}
+
     ctx = ctx_db.get(gallery_id)
     if ctx is None:
         for key, value in ctx_db.items():
-            if str(key).startswith("_"):
+            key_text = str(key)
+            if key_text.startswith("_") or key_text == "default":
                 continue
-            if key and (str(key) in gallery_id or gallery_id in str(key)):
+            if key_text and (key_text in gallery_id or gallery_id in key_text):
                 ctx = value
                 break
+    if ctx is None:
+        identity = gallery_purpose.identity_metadata(gallery_id)
+        if identity:
+            return {
+                "gallery_name": identity.get("gallery_name")
+                or identity.get("topic_label")
+                or gallery_id,
+                "typical_nickname": "ㅇㅇ",
+                "grammar_rules": [],
+                "fewshot": [],
+            }
     if ctx is None:
         ctx = ctx_db.get("default", {})
     return ctx if isinstance(ctx, dict) else {}

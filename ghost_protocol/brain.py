@@ -187,28 +187,36 @@ class GhostBrain:
     # ══════════════════════════════════════════════
 
     def _get_gallery_context(self, gallery_id: str) -> str:
-        """갤러리 ID → 고유 문법 룰 + 퓨샷 예시 프롬프트 블록 반환.
+        """갤러리 ID → legacy 고유 문법 룰 + 퓨샷 예시 프롬프트 블록 반환.
 
         라우팅 우선순위:
           1. gallery_contexts.json에서 gallery_id 정확 매치
           2. 포함 관계 매치 (key in gallery_id OR gallery_id in key)
           3. "default" 폴백
 
+        새 갤러리는 여기에 ID별 하드코딩을 추가하지 않는다. 지속 분야는
+        gallery_purposes.json의 ID/name 토큰 추론과 현재 원본 문체 프로필로
+        처리한다.
+
         토큰 최적화:
           - 문법 룰 최대 3개, 퓨샷 최대 2개, 본문 80자 제한
           - 빈 컨텍스트(default fewshot=[])는 룰만 반환 → ~150 토큰 이하
         """
         ctx_db: dict = pm.load_json("gallery_contexts.json")
+        if not isinstance(ctx_db, dict):
+            return ""
+        gallery_id = str(gallery_id or "").strip()
 
         # 1차: 정확 매치
-        ctx = ctx_db.get(gallery_id)
+        ctx = ctx_db.get(gallery_id) if gallery_id else None
 
         # 2차: 부분 포함 매치 (_로 시작하는 메타 키 제외)
         if ctx is None:
             for key, val in ctx_db.items():
-                if key.startswith("_"):
+                key_text = str(key)
+                if key_text.startswith("_") or key_text == "default" or not gallery_id:
                     continue
-                if key in gallery_id or gallery_id in key:
+                if key_text in gallery_id or gallery_id in key_text:
                     ctx = val
                     break
 

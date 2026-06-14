@@ -1,3 +1,4 @@
+from ghost_protocol import prompt_manager as pm
 from ghost_protocol.domain import gallery_style
 
 
@@ -60,7 +61,14 @@ def test_universe_profile_keeps_title_list_rhythm_without_overcounting_questions
         }
     )
 
-    assert profile["gallery_name"] == "우주 갤러리"
+    assert profile["gallery_name"] == "우주·천문 계열"
     assert profile["avg_title_len"] <= 24
     assert profile["question_ratio"] < 0.4
     assert any("본문은 비우거나" in rule for rule in profile["rules"])
+
+
+def test_universe_style_identity_is_not_exact_gallery_context():
+    contexts = pm.load_json("gallery_contexts.json")
+
+    assert "universe" not in contexts
+    assert gallery_style.static_context_for("universe")["gallery_name"] == "우주·천문 계열"
