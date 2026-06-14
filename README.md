@@ -91,9 +91,8 @@ Current local verification: `204 passed`.
 
 ## GitHub Pages
 
-The landing page lives in `docs/`. Enable GitHub Pages with the included workflow, or serve it locally by opening:
+The landing page lives in `docs/`. Enable GitHub Pages with the included workflow when the repository visibility and GitHub plan support Pages, or serve it locally by opening:
 
 ```text
 docs/index.html
 ```
-
