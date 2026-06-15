@@ -113,6 +113,25 @@ section[data-testid="stSidebar"] {
     font-family: var(--gp-font) !important;
 }
 
+.stApp [class*="material-icons"],
+.stApp [class*="material-symbols"],
+.stApp span[data-testid="stIconMaterial"],
+.stApp span[aria-hidden="true"][class*="icon"] {
+    font-family: "Material Symbols Rounded", "Material Symbols Outlined", "Material Icons", sans-serif !important;
+    font-weight: normal !important;
+    font-style: normal !important;
+    font-size: 1.2rem !important;
+    line-height: 1 !important;
+    letter-spacing: normal !important;
+    text-transform: none !important;
+    white-space: nowrap !important;
+    word-wrap: normal !important;
+    direction: ltr !important;
+    -webkit-font-feature-settings: "liga" !important;
+    -webkit-font-smoothing: antialiased !important;
+    font-feature-settings: "liga" !important;
+}
+
 .stApp pre,
 .stApp code,
 .stApp kbd,
@@ -1444,8 +1463,31 @@ div[role="option"][aria-selected="true"],
 }
 
 [data-testid="stExpander"] summary {
+    min-height: 42px !important;
+    display: flex !important;
+    align-items: center !important;
+    gap: 8px !important;
+    border-radius: 16px !important;
+    background: #FFFFFF !important;
     color: var(--gp-ink) !important;
     font: 800 0.86rem/1 var(--gp-font) !important;
+    overflow: hidden !important;
+}
+
+[data-testid="stExpander"] summary:hover,
+[data-testid="stExpander"] summary:focus,
+[data-testid="stExpander"] summary:focus-visible,
+[data-testid="stExpander"] details:hover summary {
+    background: #F8FAFC !important;
+    color: var(--gp-ink) !important;
+    outline: 0 !important;
+    box-shadow: inset 0 0 0 1px rgba(226, 232, 240, 0.9) !important;
+}
+
+[data-testid="stExpander"] summary *,
+[data-testid="stExpander"] summary:hover * {
+    color: var(--gp-ink) !important;
+    text-shadow: none !important;
 }
 
 [data-testid="stExpander"] [data-testid="stExpanderDetails"] {
