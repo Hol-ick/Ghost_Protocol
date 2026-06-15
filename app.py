@@ -49,11 +49,13 @@ from ghost_protocol.application import worker_contracts
 from ghost_protocol.application.timeouts import run_with_timeout
 from ghost_protocol.brain import GhostBrain, RateLimitError
 from ghost_protocol.domain import batch_refill
+from ghost_protocol.domain import draft_diversity
 from ghost_protocol.domain import draft_guidance
 from ghost_protocol.domain import gallery_purpose
 from ghost_protocol.domain import gallery_style
 from ghost_protocol.domain import board_rhythm
 from ghost_protocol.domain import naturalness
+from ghost_protocol.domain import comment_alignment
 from ghost_protocol.domain import comment_targets
 from ghost_protocol.domain import conversation_planner
 from ghost_protocol.domain import rehearsal_policy
@@ -1060,21 +1062,32 @@ def _filter_target_comments_for_topic(
 
     post_lookup = {str(post.get("post_no", "")).strip(): post for post in target_posts}
     filtered: list[dict] = []
+    seen_comment_keys: set[tuple[str, str]] = set()
     for item in target_comments:
         post_no = str(item.get("post_no", "")).strip()
         target_post = post_lookup.get(post_no)
         if not target_post:
             continue
-        post_text = " ".join(
-            [
-                str(target_post.get("title", "")),
-                str(target_post.get("content", "")),
-                " ".join(str(c) for c in target_post.get("existing_comments", [])[:3]),
-                str(item.get("comment", "")),
-            ]
-        )
-        if generated_tokens & _topic_tokens_for_match(post_text):
-            filtered.append(item)
+        target_title = str(target_post.get("title", ""))
+        target_content = str(target_post.get("content", ""))
+        target_tokens = _topic_tokens_for_match(f"{target_title} {target_content}")
+        comment_text = str(item.get("comment", ""))
+        comment_tokens = _topic_tokens_for_match(comment_text)
+        if not (generated_tokens & target_tokens or generated_tokens & comment_tokens):
+            continue
+        if not comment_alignment.comment_fits_draft(
+            comment_text,
+            title=title,
+            content=content,
+            target_title=target_title,
+            target_content=target_content,
+        ):
+            continue
+        key = (post_no, re.sub(r"\s+", " ", comment_text.strip()))
+        if key in seen_comment_keys:
+            continue
+        seen_comment_keys.add(key)
+        filtered.append(item)
 
     return filtered[:2]
 
@@ -1178,6 +1191,7 @@ def _batch_gen_worker(
     _slot_success_counts: dict[str, int] = {} # A/B/C/R/G 쿼터 충족 추적
     _question_skeleton_counts: dict[str, int] = {} # 같은 질문형 골격 반복 방지
     _reaction_skeleton_counts: dict[str, int] = {} # 같은 반응 골격 반복 방지
+    _safe_ending_counts: dict[str, int] = {} # 안전 감상어 끝맺음 수렴 방지
     _successful_topic_families: list[frozenset[str]] = [] # 슬롯을 가로지르는 소재군 추적
     _persona_occurrence_counts: dict[str, int] = {} # 같은 페르소나도 발화 각도 순환
     _direct_question_count = 0  # 질문형은 배치의 양념이지 기본 문형이 아니다.
@@ -2209,6 +2223,30 @@ def _batch_gen_worker(
                                 _should_skip_wave = True
 
                 if not _should_retry and not _should_skip_wave:
+                    _safe_ending_sig = draft_diversity.safe_ending_signature(
+                        gen_title,
+                        gen_content,
+                    )
+                    if _safe_ending_sig:
+                        _safe_ending_cap = draft_diversity.safe_ending_cap(actual_count)
+                        _safe_ending_seen = _safe_ending_counts.get(_safe_ending_sig, 0)
+                        if _safe_ending_seen >= _safe_ending_cap:
+                            if attempt < 2:
+                                q_log(
+                                    f"[BATCH] 🧵 [{wave}] 안전 끝맺음 반복 감지 "
+                                    f"({_safe_ending_sig} {_safe_ending_seen + 1}회) — "
+                                    f"재시도 ({attempt+1}/3)"
+                                )
+                                _should_retry = True
+                            else:
+                                q_log(
+                                    f"[BATCH] 🧵 [{wave}] 안전 끝맺음 반복: "
+                                    f"{_safe_ending_sig} — 이 Wave 스킵"
+                                )
+                                _failure_reason = f"문체 안전어 반복: {_safe_ending_sig}"
+                                _should_skip_wave = True
+
+                if not _should_retry and not _should_skip_wave:
                     _candidate_family = draft_guidance.topic_family_tokens(
                         " ".join(
                             [
@@ -2620,6 +2658,14 @@ def _batch_gen_worker(
                 if _reaction_sig:
                     _reaction_skeleton_counts[_reaction_sig] = (
                         _reaction_skeleton_counts.get(_reaction_sig, 0) + 1
+                    )
+                _safe_ending_sig = draft_diversity.safe_ending_signature(
+                    gen_title,
+                    gen_content,
+                )
+                if _safe_ending_sig:
+                    _safe_ending_counts[_safe_ending_sig] = (
+                        _safe_ending_counts.get(_safe_ending_sig, 0) + 1
                     )
                 _successful_family = draft_guidance.topic_family_tokens(
                     " ".join(

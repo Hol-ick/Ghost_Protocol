@@ -44,9 +44,11 @@ def test_strong_safety_reason_is_separate_from_quality_failure():
     assert not rehearsal_policy.is_strong_safety_reason("자연스러움 정책 위반")
 
 
-def test_recoverable_quality_reason_excludes_external_and_safety_failures():
-    assert rehearsal_policy.is_recoverable_quality_reason("기존 원고와 제목 구조가 너무 유사합니다.")
-    assert rehearsal_policy.is_recoverable_quality_reason("배치 내 의미 중복: 핵심어 겹침")
+def test_recoverable_quality_reason_excludes_external_safety_and_duplicates():
+    assert not rehearsal_policy.is_recoverable_quality_reason("기존 원고와 제목 구조가 너무 유사합니다.")
+    assert not rehearsal_policy.is_recoverable_quality_reason("배치 내 의미 중복: 핵심어 겹침")
+    assert not rehearsal_policy.is_recoverable_quality_reason("같은 소재군이 배치 상한을 초과했습니다.")
+    assert rehearsal_policy.is_recoverable_quality_reason("순수 메타 평론이다.")
     assert not rehearsal_policy.is_recoverable_quality_reason("브리핑 또는 갤러리 본래 주제와 맞지 않습니다.")
     assert not rehearsal_policy.is_recoverable_quality_reason("브리핑에 없는 외부 사이트 소재를 끌고 왔는가?")
     assert not rehearsal_policy.is_recoverable_quality_reason("안전 필터: protected_group_direct")

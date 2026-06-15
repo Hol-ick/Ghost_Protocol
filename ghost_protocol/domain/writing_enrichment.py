@@ -326,6 +326,9 @@ def comment_prompt_block(profile: dict | None) -> str:
     lines.extend(
         f"- {rule}" for rule in profile.get("comment_rules", []) if str(rule).strip()
     )
+    lines.append(
+        "- Attach comments to a concrete word or detail from the generated draft. Do not import an unrelated side topic just because it came from the same source thread."
+    )
     return "\n".join(lines)
 
 
@@ -457,6 +460,24 @@ _VOICE_LANE_RULES: dict[str, str] = {
     ),
 }
 
+_VOICE_LANE_RULES.update(
+    {
+        "plain": (
+            "Voice lane PLAIN: avoid ending every sentence with board-fragment endings "
+            "like 함/임/듯/아님. Use ordinary casual endings such as 아닌가, 같긴 함, "
+            "모르겠네, 봐야 될 듯 when they fit."
+        ),
+        "mixed": (
+            "Voice lane MIXED: one fragment ending is fine, but pair it with a normal "
+            "casual sentence so the draft does not become all 음슴체."
+        ),
+        "laugh": (
+            "Voice lane LAUGH: a short ㅋㅋ/ㅎㅎ tail is allowed once if the source rhythm "
+            "supports it. Do not attach laughter to every sentence."
+        ),
+    }
+)
+
 
 def generation_variation_block(
     profile: dict | None,
@@ -476,6 +497,9 @@ def generation_variation_block(
         f"- {_VOICE_LANE_RULES.get(voice_lane, _VOICE_LANE_RULES['mixed'])}",
         "- The variation lane overrides only this one draft. Keep the source topic and persona intact.",
     ]
+    lines.append(
+        "- Avoid the safe default endings piling up across the batch: 신기함, 애매함, 궁금함, 좋겠다, 같음, 듯. If the same topic appears again, switch to a concrete scene, number, comparison, or tiny joke."
+    )
     if (
         str(profile.get("dominant_ending_family") or "") == "fragment"
         and float(profile.get("dominant_ending_ratio", 0.0) or 0.0) >= 0.42
