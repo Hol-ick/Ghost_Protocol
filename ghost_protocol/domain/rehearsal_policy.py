@@ -141,6 +141,11 @@ def analysis_rotation_notes(
             + " / ".join(failures)
             + " — 실패 후보의 표현을 살리지 말고 원본 앵커의 다른 소재로 우회한다."
         )
+        if "style_sameness" in failures:
+            lines.append(
+                "문체 수렴이 보이면 '같음/신기함/애매함/듯'으로 끝내지 말고 "
+                "시간·비용·숫자·사진 한 장·댓글 반응 같은 다른 끝맺음으로 분산한다."
+            )
     if low_success:
         lines.append(
             f"직전 성공률이 낮다({valid}/{total}). 성공 원고보다 원본 앵커와 안전한 상시 분야를 더 신뢰한다."
@@ -164,6 +169,8 @@ def is_recoverable_quality_reason(reason: object) -> bool:
     text = str(reason or "")
     if not text or is_strong_safety_reason(text):
         return False
+    if "문체 안전어" in text:
+        return True
     if any(marker in text for marker in ("브리핑", "외부", "무관", "본래 주제")):
         return False
     if any(
@@ -192,6 +199,48 @@ def is_recoverable_quality_reason(reason: object) -> bool:
     )
 
 
+def is_rehearsal_recoverable_reason(reason: object) -> bool:
+    """Return whether rehearsal may keep a failed candidate for diagnosis.
+
+    Live generation should stay strict. Rehearsal has a different purpose: if a
+    candidate is non-toxic but failed because the validator confused current
+    board drift with durable gallery identity, keeping it gives the next cycle a
+    useful signal instead of an empty wave.
+    """
+
+    text = str(reason or "")
+    if not text or is_strong_safety_reason(text):
+        return False
+    if any(
+        marker in text
+        for marker in (
+            "동일 제목",
+            "같은 제목",
+            "기존 원고",
+            "제목 구조",
+            "의미 중복",
+            "핵심어 겹침",
+            "같은 소재군",
+            "소재군",
+        )
+    ):
+        return False
+    if is_recoverable_quality_reason(text):
+        return True
+    return any(
+        marker in text
+        for marker in (
+            "브리핑 또는 갤러리 본래 주제와 맞지",
+            "브리핑 또는 갤러리 본래 주제",
+            "브리핑에 없는 외부",
+            "갤러리 본래 주제와 맞지",
+            "본래 주제와 맞지",
+            "무관",
+            "외부",
+        )
+    )
+
+
 def allow_rehearsal_slot_drift(
     *,
     expected_slot: str,
@@ -215,6 +264,8 @@ def failure_pattern_label(reason: object) -> str:
     """Classify a failure reason without preserving toxic candidate wording."""
 
     text = str(reason or "")
+    if "문체 안전어" in text or "끝맺음" in text:
+        return "style_sameness"
     if "지정 슬롯" in text or "slot" in text.lower() or "슬롯" in text:
         return "slot_drift"
     if is_strong_safety_reason(text) or "안전" in text or "safety" in text.lower():

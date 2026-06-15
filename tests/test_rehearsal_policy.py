@@ -49,15 +49,39 @@ def test_recoverable_quality_reason_excludes_external_safety_and_duplicates():
     assert not rehearsal_policy.is_recoverable_quality_reason("배치 내 의미 중복: 핵심어 겹침")
     assert not rehearsal_policy.is_recoverable_quality_reason("같은 소재군이 배치 상한을 초과했습니다.")
     assert rehearsal_policy.is_recoverable_quality_reason("순수 메타 평론이다.")
+    assert rehearsal_policy.is_recoverable_quality_reason("문체 안전어 반복: wonder")
     assert not rehearsal_policy.is_recoverable_quality_reason("브리핑 또는 갤러리 본래 주제와 맞지 않습니다.")
     assert not rehearsal_policy.is_recoverable_quality_reason("브리핑에 없는 외부 사이트 소재를 끌고 왔는가?")
     assert not rehearsal_policy.is_recoverable_quality_reason("안전 필터: protected_group_direct")
 
 
+def test_rehearsal_recoverable_reason_keeps_topic_drift_diagnostics_only():
+    assert rehearsal_policy.is_rehearsal_recoverable_reason(
+        "브리핑 또는 갤러리 본래 주제와 맞지 않습니다."
+    )
+    assert rehearsal_policy.is_rehearsal_recoverable_reason(
+        "브리핑에 없는 외부 사이트 소재를 끌고 왔는가?"
+    )
+    assert rehearsal_policy.is_rehearsal_recoverable_reason(
+        "문체 안전어 반복: seems"
+    )
+    assert not rehearsal_policy.is_rehearsal_recoverable_reason(
+        "기존 원고와 제목 구조가 너무 유사합니다."
+    )
+    assert not rehearsal_policy.is_rehearsal_recoverable_reason(
+        "안전 필터: protected_group_direct"
+    )
+
+
+def test_failure_pattern_label_separates_style_sameness():
+    assert rehearsal_policy.failure_pattern_label("문체 안전어 반복: wonder") == "style_sameness"
+    assert rehearsal_policy.failure_pattern_label("안전 끝맺음 반복: seems") == "style_sameness"
+
+
 def test_analysis_rotation_notes_warns_against_rehearsal_amplification():
     notes = rehearsal_policy.analysis_rotation_notes(
         repeated_terms=["목성", "행성"],
-        failure_patterns=["duplicate_loop", "topic_drift"],
+        failure_patterns=["duplicate_loop", "topic_drift", "style_sameness"],
         valid_count=3,
         total_count=10,
     )
@@ -66,6 +90,7 @@ def test_analysis_rotation_notes_warns_against_rehearsal_amplification():
     assert "직전 AI 원고의 반복 명사" in notes
     assert "목성 / 행성" in notes
     assert "최대 1개 축" in notes
+    assert "문체 수렴" in notes
     assert "3/10" in notes
 
 

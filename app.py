@@ -2524,7 +2524,7 @@ def _batch_gen_worker(
 
                 # ── 통합 재시도 판정 ─────────────────────────────────────
                 if _should_skip_wave:
-                    if rehearsal and gen_title and gen_content and rehearsal_policy.is_recoverable_quality_reason(
+                    if rehearsal and gen_title and gen_content and rehearsal_policy.is_rehearsal_recoverable_reason(
                         _failure_reason
                     ):
                         q_log(
@@ -2581,7 +2581,9 @@ def _batch_gen_worker(
                                 )
                                 continue
                             else:
-                                if rehearsal and not _safety_judge_hit:
+                                if rehearsal and rehearsal_policy.is_rehearsal_recoverable_reason(
+                                    _judge_reason
+                                ):
                                     q_log(
                                         f"[REHEARSAL] 🧠 [{wave}] Judge 품질 거부 관찰: "
                                         f"{_judge_reason[:60]} — 후보 유지"
