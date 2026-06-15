@@ -178,12 +178,25 @@ def summarize_drafts(
 
     question_titles = sum(1 for title in normalized_titles if title.rstrip().endswith("?"))
     comment_count = 0
+    simulation_only_comment_count = 0
     for item in valid:
+        comment_candidates: list[Any] = []
+        target_comments = item.get("target_comments")
         comments = item.get("comments")
-        if isinstance(comments, list):
-            comment_count += len(comments)
+        if isinstance(target_comments, list):
+            comment_candidates.extend(target_comments)
+        elif isinstance(comments, list):
+            comment_candidates.extend(comments)
         elif item.get("comment") or item.get("target_comment"):
-            comment_count += 1
+            comment_candidates.append(item)
+        comment_count += len(comment_candidates)
+        simulation_only_comment_count += sum(
+            1
+            for comment in comment_candidates
+            if isinstance(comment, dict)
+            and (comment.get("simulation_only") or comment.get("is_ai_post"))
+        )
+    public_comment_count = max(0, comment_count - simulation_only_comment_count)
 
     purpose_count = 0
     if gallery_id:
@@ -222,6 +235,8 @@ def summarize_drafts(
         "question_titles": question_titles,
         "question_ratio": (question_titles / len(valid)) if valid else 0.0,
         "comment_count": comment_count,
+        "public_comment_count": public_comment_count,
+        "simulation_only_comment_count": simulation_only_comment_count,
         "purpose_count": purpose_count,
         "purpose_ratio": (purpose_count / len(valid)) if valid else 0.0,
     }
@@ -429,6 +444,13 @@ def format_ops_markdown(
         "",
         "## Diagnostics",
     ]
+    if draft["comment_count"]:
+        lines.insert(
+            7,
+            "- Comment candidates: "
+            f"{draft['public_comment_count']} public · "
+            f"{draft['simulation_only_comment_count']} rehearsal-only",
+        )
     if diagnostics:
         for item in diagnostics:
             lines.append(f"- [{item['severity']}] {item['title']} — {item['action']}")

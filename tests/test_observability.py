@@ -53,6 +53,25 @@ class ObservabilityTest(unittest.TestCase):
         self.assertIn("목성 중력으로 먼지 모이는 거", summary["duplicate_titles"])
         self.assertEqual(summary["failure_reasons"][0][0], "near-duplicate")
 
+    def test_summarizes_comment_candidate_visibility(self):
+        scripts = [
+            {
+                "title": "T1",
+                "content": "C1",
+                "target_comments": [
+                    {"post_no": "1", "comment": "public"},
+                    {"post_no": "2", "comment": "rehearsal", "simulation_only": True},
+                    {"post_no": "3", "comment": "ai", "is_ai_post": True},
+                ],
+            }
+        ]
+
+        summary = observability.summarize_drafts(scripts, target_count=1)
+
+        self.assertEqual(summary["comment_count"], 3)
+        self.assertEqual(summary["public_comment_count"], 1)
+        self.assertEqual(summary["simulation_only_comment_count"], 2)
+
     def test_source_snapshot_health_detects_usable_snapshot(self):
         intel_result = {
             "pages": 1,
@@ -134,6 +153,34 @@ class ObservabilityTest(unittest.TestCase):
 
         self.assertIn("# Ghost Protocol 운영 리포트", text)
         self.assertIn("## Stability", text)
+
+    def test_ops_markdown_reports_comment_candidate_split(self):
+        state = {}
+        observability.start_run(
+            state,
+            mode="infinite",
+            gallery_id="universe",
+            target_count=1,
+            reset=True,
+        )
+
+        text = observability.format_ops_markdown(
+            state=state,
+            scripts=[
+                {
+                    "title": "T",
+                    "content": "C",
+                    "target_comments": [
+                        {"post_no": "1", "comment": "public"},
+                        {"post_no": "2", "comment": "rehearsal", "simulation_only": True},
+                    ],
+                }
+            ],
+            logs=[],
+            intel_result={},
+        )
+
+        self.assertIn("- Comment candidates: 1 public · 1 rehearsal-only", text)
 
 
 if __name__ == "__main__":
