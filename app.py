@@ -3736,14 +3736,16 @@ def _render_clipboard_button(label: str, text: str, *, key: str) -> None:
     """Render a compact clipboard button without expanding the Streamlit layout."""
 
     safe_id = re.sub(r"[^a-zA-Z0-9_-]", "_", key)
-    payload = _html.escape(text or "")
+    payload_js = json.dumps(text or "")
     components.html(
         f"""
         <style>
+            html,
             body {{
                 margin: 0;
                 font-family: "Pretendard Variable", "SUIT Variable", "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
                 background: transparent;
+                overflow: hidden;
             }}
             #{safe_id}_btn {{
                 width: 100%;
@@ -3771,40 +3773,49 @@ def _render_clipboard_button(label: str, text: str, *, key: str) -> None:
                 font-size: 12px;
                 line-height: 1;
             }}
-            #{safe_id}_payload {{
-                position: fixed;
-                left: -9999px;
-                top: -9999px;
-                width: 1px;
-                height: 1px;
-                opacity: 0;
-            }}
         </style>
-        <textarea id="{safe_id}_payload" readonly>{payload}</textarea>
         <button id="{safe_id}_btn" type="button">{_html.escape(label)}</button>
         <script>
             const btn = document.getElementById("{safe_id}_btn");
-            const payload = document.getElementById("{safe_id}_payload");
+            const payload = {payload_js};
+            function fallbackCopy(text) {{
+                const area = document.createElement("textarea");
+                area.value = text;
+                area.setAttribute("readonly", "");
+                area.setAttribute("aria-hidden", "true");
+                area.tabIndex = -1;
+                area.style.position = "fixed";
+                area.style.left = "-9999px";
+                area.style.top = "-9999px";
+                area.style.width = "1px";
+                area.style.height = "1px";
+                area.style.opacity = "0";
+                area.style.pointerEvents = "none";
+                area.style.border = "0";
+                area.style.padding = "0";
+                document.body.appendChild(area);
+                area.focus();
+                area.select();
+                const copied = document.execCommand("copy");
+                area.remove();
+                return copied;
+            }}
             btn.addEventListener("click", async () => {{
                 const original = btn.textContent;
                 try {{
-                    await navigator.clipboard.writeText(payload.value);
+                    if (navigator.clipboard && window.isSecureContext) {{
+                        await navigator.clipboard.writeText(payload);
+                    }} else if (!fallbackCopy(payload)) {{
+                        throw new Error("fallback copy failed");
+                    }}
                     btn.textContent = "복사됨";
                 }} catch (err) {{
-                    payload.style.left = "0";
-                    payload.style.top = "0";
-                    payload.style.width = "100%";
-                    payload.style.height = "44px";
-                    payload.style.opacity = "1";
-                    payload.focus();
-                    payload.select();
-                    document.execCommand("copy");
-                    payload.style.left = "-9999px";
-                    payload.style.top = "-9999px";
-                    payload.style.width = "1px";
-                    payload.style.height = "1px";
-                    payload.style.opacity = "0";
-                    btn.textContent = "복사됨";
+                    try {{
+                        fallbackCopy(payload);
+                        btn.textContent = "복사됨";
+                    }} catch (fallbackErr) {{
+                        btn.textContent = "복사 실패";
+                    }}
                 }}
                 setTimeout(() => {{ btn.textContent = original; }}, 1100);
             }});
