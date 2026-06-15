@@ -2486,12 +2486,22 @@ def _batch_gen_worker(
 
                 # ── 통합 재시도 판정 ─────────────────────────────────────
                 if _should_skip_wave:
-                    q_log(f"[BATCH] ⛔ [{wave}] 금지 위반 스킵 — 대본 생성 중단")
-                    if not _failure_reason or _failure_reason == "생성 결과가 검증을 통과하지 못했습니다.":
-                        _failure_reason = "검증 규칙을 반복해서 통과하지 못했습니다."
-                    gen_title = None
-                    gen_content = ""
-                    break
+                    if rehearsal and gen_title and gen_content and rehearsal_policy.is_recoverable_quality_reason(
+                        _failure_reason
+                    ):
+                        q_log(
+                            f"[REHEARSAL] 🧪 [{wave}] 품질 실패 후보 유지: "
+                            f"{_failure_reason[:70]}"
+                        )
+                        _should_skip_wave = False
+                        _should_retry = False
+                    else:
+                        q_log(f"[BATCH] ⛔ [{wave}] 금지 위반 스킵 — 대본 생성 중단")
+                        if not _failure_reason or _failure_reason == "생성 결과가 검증을 통과하지 못했습니다.":
+                            _failure_reason = "검증 규칙을 반복해서 통과하지 못했습니다."
+                        gen_title = None
+                        gen_content = ""
+                        break
                 if _should_retry and attempt < 2:
                     continue
 

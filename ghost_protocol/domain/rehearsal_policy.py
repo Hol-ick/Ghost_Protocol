@@ -96,6 +96,39 @@ def is_strong_safety_reason(reason: object) -> bool:
     return any(marker in text for marker in _STRONG_SAFETY_MARKERS)
 
 
+def is_recoverable_quality_reason(reason: object) -> bool:
+    """Return whether rehearsal may keep a candidate as a diagnostic draft.
+
+    We only recover narrow quality failures. Topic drift, external-material
+    leakage, and safety reasons should still fail so the next cycle does not
+    amplify unrelated or risky material.
+    """
+
+    text = str(reason or "")
+    if not text or is_strong_safety_reason(text):
+        return False
+    if any(marker in text for marker in ("브리핑", "외부", "무관", "본래 주제")):
+        return False
+    return any(
+        marker in text
+        for marker in (
+            "중복",
+            "반복",
+            "유사",
+            "동일",
+            "같은 제목",
+            "같은 소재군",
+            "제목 구조",
+            "핵심어 겹침",
+            "메타",
+            "빈도",
+            "화제전환",
+            "자연스러움",
+            "화살표",
+        )
+    )
+
+
 def allow_rehearsal_slot_drift(
     *,
     expected_slot: str,

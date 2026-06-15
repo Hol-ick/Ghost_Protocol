@@ -103,3 +103,32 @@ def test_rehearsal_plan_widens_source_and_gallery_roles():
     assert counts["main_thread"] <= 3
     assert counts["side_thread"] >= 3
     assert counts["gallery_axis"] >= 2
+
+
+def test_rehearsal_plan_omits_comment_hooks_to_reduce_drift():
+    topic = "[A: 외행성 사진] / [B: 아침 점심]"
+    posts = [
+        {
+            "title": "외행성 사진 해상도 좋네",
+            "content": "사진이 선명함",
+            "existing_comments": ["교황 얘기는 여기랑 상관없지 않나"],
+        }
+    ]
+
+    live_plan = conversation_planner.build_conversation_plan(
+        3,
+        topic,
+        gallery_id="universe",
+        source_posts=posts,
+        rehearsal_mode=False,
+    )
+    rehearsal_plan = conversation_planner.build_conversation_plan(
+        3,
+        topic,
+        gallery_id="universe",
+        source_posts=posts,
+        rehearsal_mode=True,
+    )
+
+    assert any(a.get("source_comment") for a in live_plan["assignments"])
+    assert not any(a.get("source_comment") for a in rehearsal_plan["assignments"])

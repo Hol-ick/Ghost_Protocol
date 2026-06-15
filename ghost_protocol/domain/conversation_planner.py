@@ -142,7 +142,12 @@ def _unique_topic_items(items: Iterable[dict]) -> list[dict]:
     return unique
 
 
-def _source_items(source_posts: Iterable[dict], *, limit: int = 8) -> list[dict]:
+def _source_items(
+    source_posts: Iterable[dict],
+    *,
+    limit: int = 8,
+    include_comment_hooks: bool = True,
+) -> list[dict]:
     items: list[dict] = []
     for post in source_posts or []:
         if not isinstance(post, dict):
@@ -151,12 +156,13 @@ def _source_items(source_posts: Iterable[dict], *, limit: int = 8) -> list[dict]
         body = _body_of(post)
         if not title:
             continue
-        comments = post.get("comments")
-        if comments is None:
-            comments = post.get("existing_comments")
         comment_text = ""
-        if isinstance(comments, list) and comments:
-            comment_text = _clean(comments[0], limit=120)
+        if include_comment_hooks:
+            comments = post.get("comments")
+            if comments is None:
+                comments = post.get("existing_comments")
+            if isinstance(comments, list) and comments:
+                comment_text = _clean(comments[0], limit=120)
         label = title if len(title) <= 60 else title[:57] + "..."
         items.append(
             {
@@ -325,7 +331,10 @@ def build_conversation_plan(
     total = max(1, int(total_count or 1))
     source_posts = list(source_posts or [])
     seed_items = _seed_items(topic)
-    source_items = _source_items(source_posts)
+    source_items = _source_items(
+        source_posts,
+        include_comment_hooks=not rehearsal_mode,
+    )
     gallery_items = _gallery_items(
         gallery_id,
         source_posts,
