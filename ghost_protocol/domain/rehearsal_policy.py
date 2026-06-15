@@ -93,6 +93,61 @@ def style_variety_prompt_block() -> str:
     )
 
 
+def analysis_rotation_notes(
+    *,
+    repeated_terms: Iterable[object] = (),
+    failure_patterns: Iterable[object] = (),
+    valid_count: int = 0,
+    total_count: int = 10,
+) -> str:
+    """Return notes for the trend-analysis step of a rehearsal cycle.
+
+    Rehearsal feeds generated drafts back into trend analysis. Without a
+    counterweight, a few successful drafts can be mistaken for the whole board
+    mood and then amplified again. Keep this block rehearsal-only and explicit.
+    """
+
+    repeated = _clean_terms(repeated_terms, limit=8)
+    failures = _clean_terms(failure_patterns, limit=5)
+    try:
+        valid = max(0, int(valid_count))
+    except (TypeError, ValueError):
+        valid = 0
+    try:
+        total = max(1, int(total_count))
+    except (TypeError, ValueError):
+        total = 10
+    low_success = valid < max(5, total // 2)
+    if not (repeated or failures or low_success):
+        return ""
+
+    lines = [
+        "[리허설 분석 보정]",
+        "현재 입력에는 직전 AI 원고와 원본 앵커가 섞여 있다.",
+        "직전 AI 원고의 반복 명사를 실제 게시판 전체 유행으로 과대평가하지 않는다.",
+        "다음 사이클 분석은 한 소재를 키우는 것이 아니라 3~4개의 독립 소재군을 남기는 것이 목적이다.",
+        "hot_topics는 같은 명사군을 여러 표현으로 나누지 말고 서로 다른 대상, 장면, 숫자, 댓글 반응으로 분산한다.",
+        "generation_guidance에는 핵심 2개 + 옆 소재 2개 + 상시 분야 1개 배합을 우선 적는다.",
+    ]
+    if repeated:
+        lines.append(
+            "직전 과점 명사: "
+            + " / ".join(repeated)
+            + " — 다음 hot_topics에서는 이 명사군을 최대 1개 축으로만 둔다."
+        )
+    if failures:
+        lines.append(
+            "직전 실패 패턴: "
+            + " / ".join(failures)
+            + " — 실패 후보의 표현을 살리지 말고 원본 앵커의 다른 소재로 우회한다."
+        )
+    if low_success:
+        lines.append(
+            f"직전 성공률이 낮다({valid}/{total}). 성공 원고보다 원본 앵커와 안전한 상시 분야를 더 신뢰한다."
+        )
+    return "\n".join(lines)
+
+
 def is_strong_safety_reason(reason: object) -> bool:
     text = str(reason or "")
     return any(marker in text for marker in _STRONG_SAFETY_MARKERS)

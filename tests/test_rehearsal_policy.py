@@ -52,3 +52,27 @@ def test_recoverable_quality_reason_excludes_external_safety_and_duplicates():
     assert not rehearsal_policy.is_recoverable_quality_reason("브리핑 또는 갤러리 본래 주제와 맞지 않습니다.")
     assert not rehearsal_policy.is_recoverable_quality_reason("브리핑에 없는 외부 사이트 소재를 끌고 왔는가?")
     assert not rehearsal_policy.is_recoverable_quality_reason("안전 필터: protected_group_direct")
+
+
+def test_analysis_rotation_notes_warns_against_rehearsal_amplification():
+    notes = rehearsal_policy.analysis_rotation_notes(
+        repeated_terms=["목성", "행성"],
+        failure_patterns=["duplicate_loop", "topic_drift"],
+        valid_count=3,
+        total_count=10,
+    )
+
+    assert "[리허설 분석 보정]" in notes
+    assert "직전 AI 원고의 반복 명사" in notes
+    assert "목성 / 행성" in notes
+    assert "최대 1개 축" in notes
+    assert "3/10" in notes
+
+
+def test_analysis_rotation_notes_is_empty_for_healthy_cycle():
+    assert rehearsal_policy.analysis_rotation_notes(
+        repeated_terms=[],
+        failure_patterns=[],
+        valid_count=9,
+        total_count=10,
+    ) == ""

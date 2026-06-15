@@ -6,6 +6,8 @@
 
 $gallery_identity_context
 
+$rehearsal_analysis_notes
+
 [Identity Separation]
 - 갤러리 ID에서 추론한 기본 분야와 현재 수집분의 유행은 서로 다른 정보다.
 - $gallery_identity_context는 내부 기준이다. ai_analysis에는 갤러리 ID, 갤러리 이름, "기본 분야", "기본축" 설명을 반복하지 않는다.

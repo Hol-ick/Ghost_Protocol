@@ -162,6 +162,17 @@ def build_analysis_payload(
             }
         )
 
+    failure_patterns = [
+        rehearsal_policy.failure_pattern_label(item.get("_failure_reason"))
+        for item in failed
+    ]
+    analysis_notes = rehearsal_policy.analysis_rotation_notes(
+        repeated_terms=_repeated_terms(scripts),
+        failure_patterns=failure_patterns,
+        valid_count=len(valid),
+        total_count=max(10, len(scripts)),
+    )
+
     return {
         "gallery_id": gallery_id,
         "titles": titles,
@@ -173,10 +184,8 @@ def build_analysis_payload(
         "rehearsal_valid_count": len(valid),
         "rehearsal_anchor_count": len(anchor_slice),
         "rehearsal_anchor_topic": str(anchor_topic or "").strip(),
-        "rehearsal_failure_patterns": [
-            rehearsal_policy.failure_pattern_label(item.get("_failure_reason"))
-            for item in failed
-        ],
+        "rehearsal_failure_patterns": failure_patterns,
+        "rehearsal_analysis_notes": analysis_notes,
     }
 
 
@@ -252,6 +261,12 @@ def build_next_topic(
     failure_patterns = _failure_patterns(scripts)
     sample_titles = _successful_titles(scripts)
     valid_count, total_count, success_ratio = _success_stats(scripts)
+    analysis_notes = rehearsal_policy.analysis_rotation_notes(
+        repeated_terms=repeated,
+        failure_patterns=failure_patterns,
+        valid_count=valid_count,
+        total_count=total_count,
+    )
     anchors = _clean_anchor_posts(anchor_posts, limit=12)
     parts: list[str] = []
     if gallery_purpose.get_profile(gallery_id):
@@ -275,6 +290,8 @@ def build_next_topic(
             ]
         )
     parts.extend(["[리허설 직전 사이클 분석]", analysis])
+    if analysis_notes:
+        parts.extend(["", analysis_notes])
     if hot_topics:
         parts.extend(["", "[주요 소재]", " / ".join(hot_topics[:4])])
     if seed_summary:

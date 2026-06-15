@@ -963,6 +963,7 @@ class GhostBrain:
             "trend_analysis.txt",
             gallery_id=gallery_id,
             gallery_identity_context=gallery_purpose.analysis_context(gallery_id),
+            rehearsal_analysis_notes=str(raw_data.get("rehearsal_analysis_notes") or ""),
             top_k_count=min(len(top_keywords), 20),
             kw_text=kw_text,
             titles_text=titles_text,

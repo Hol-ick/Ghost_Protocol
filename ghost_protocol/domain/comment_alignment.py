@@ -65,6 +65,16 @@ _GENERIC_REACTION_TOKENS = {
     "그럴듯",
 }
 
+_DOMAIN_ANCHOR_GROUPS = (
+    frozenset({"교황", "천주교", "성당", "예수", "사탄", "종교", "신앙", "천국", "지옥"}),
+    frozenset({"선관위", "투표", "선거", "정당", "후보", "정치", "시위", "기자회견"}),
+    frozenset({"코스피", "주식", "환율", "빚투", "관세", "경제", "증시", "매수", "매도"}),
+    frozenset({"야구", "축구", "공놀이", "월드컵", "연차", "경기", "응원"}),
+    frozenset({"김밥", "햄버거", "국밥", "브런치", "아점", "점심", "공짜밥", "식사"}),
+    frozenset({"여행", "해외여행", "나홀로", "일본", "숙소", "관광"}),
+    frozenset({"우주", "목성", "행성", "중력", "빅뱅", "망원경", "천문", "외계인", "태양계"}),
+)
+
 
 def topic_tokens(text: object) -> set[str]:
     """Return concrete-ish tokens suitable for coarse topic overlap checks."""
@@ -94,6 +104,22 @@ def is_generic_reaction(text: object) -> bool:
     return False
 
 
+def _domain_groups(tokens: set[str]) -> set[int]:
+    groups: set[int] = set()
+    for index, anchors in enumerate(_DOMAIN_ANCHOR_GROUPS):
+        if tokens & anchors:
+            groups.add(index)
+    return groups
+
+
+def _has_unmatched_domain_anchor(comment_tokens: set[str], draft_tokens: set[str]) -> bool:
+    comment_groups = _domain_groups(comment_tokens)
+    if not comment_groups:
+        return False
+    draft_groups = _domain_groups(draft_tokens)
+    return bool(comment_groups - draft_groups)
+
+
 def comment_fits_draft(
     comment: object,
     *,
@@ -114,6 +140,8 @@ def comment_fits_draft(
         return is_generic_reaction(comment)
 
     comment_tokens = topic_tokens(comment)
+    if _has_unmatched_domain_anchor(comment_tokens, draft_tokens):
+        return False
     if comment_tokens & draft_tokens:
         return True
 
