@@ -113,6 +113,8 @@ LENGTH_OPTIONS: list[str] = [
     "아주 짧게 (1문장)",
     "짧게 (1~2문장)",
     DEFAULT_LENGTH_LABEL,
+    "혼합 (원본 비율)",
+    "길게 (상세 4~6문장)",
 ]
 
 

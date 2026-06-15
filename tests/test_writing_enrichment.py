@@ -1,3 +1,5 @@
+import random
+
 from ghost_protocol.domain import writing_enrichment
 
 
@@ -39,6 +41,7 @@ def test_body_supporting_profile_allows_two_short_lines():
     assert profile["shape"] == "body_supporting"
     assert profile["depth"] in {"compact", "expanded"}
     assert any("two short body lines" in rule for rule in profile["rules"])
+    assert profile["long_body_ratio"] > 0
 
 
 def test_sparse_comment_profile_allows_empty_comments():
@@ -70,3 +73,78 @@ def test_dense_comment_profile_attaches_to_detail():
 
     assert profile["comment_presence_ratio"] == 1
     assert "concrete detail" in block
+
+
+def test_generation_variation_can_select_fuller_lane_from_long_sources():
+    raw = {
+        "raw_posts": [
+            {
+                "title": "외행성 사진 해상도 좋아지는 거",
+                "content": "망원경 보정까지 들어가면 생각보다 많은 정보가 남는 듯. 대기 흔들림만 줄어도 차이가 크고, 같은 사진이라도 노출을 여러 장 쌓으면 행성 주변 먼지대까지 어느 정도 구분된다던데 실제 결과가 궁금함. 관측 장비가 바뀌면 비교할 기준도 같이 바뀌어서 예전 자료랑 나란히 봐야 할 것 같음.",
+                "comments": ["그 정도면 관측값도 꽤 쓸만하지 않나"],
+            },
+            {
+                "title": "목성 주변 먼지대 이야기",
+                "content": "행성 형성 시뮬레이션 보면 작은 먼지가 계속 충돌하면서 커지는 과정이 핵심이라던데 실제 관측이 궁금함. 목성 중력권에서 작은 입자가 어떤 식으로 정렬되는지까지 보면 행성 공장 같은 표현이 왜 나왔는지도 조금 이해될 듯.",
+                "comments": ["직접 보긴 어렵겠지"],
+            },
+        ]
+    }
+
+    profile = writing_enrichment.build_composition_profile(raw)
+    block = writing_enrichment.generation_variation_block(
+        profile,
+        requested_length="길게 (상세 4~6문장)",
+        rng=random.Random(4),
+    )
+
+    assert profile["long_body_ratio"] >= 0.5
+    assert "[This Draft Variation]" in block
+    assert "FULLER" in block or "MEDIUM" in block
+
+
+def test_voice_variation_pushes_back_when_fragment_endings_dominate():
+    raw = {
+        "raw_posts": [
+            {"title": "로또 1만개 다 망함", "content": "생각보다 오래 걸림", "comments": []},
+            {"title": "점심 간식 이거 괜찮음", "content": "한번씩 먹을만함", "comments": []},
+            {"title": "사진 화질 이제 좋아짐", "content": "다시 봐야함", "comments": []},
+        ]
+    }
+
+    profile = writing_enrichment.build_composition_profile(raw)
+    block = writing_enrichment.generation_variation_block(
+        profile,
+        requested_length="보통 (3~4문장)",
+        rng=random.Random(1),
+    )
+
+    assert profile["dominant_ending_family"] == "fragment"
+    assert "함/임/듯/아님" in block or "음슴체" in block
+
+
+def test_comment_length_rule_allows_longer_comments_only_when_supported():
+    raw = {
+        "raw_posts": [
+            {
+                "title": "외행성 사진 다시 보니까",
+                "content": "본문",
+                "comments": [
+                    "사진 한 장만 보면 티가 안 나는데 같은 노출을 여러 번 쌓으면 주변 먼지대가 조금씩 살아나는 게 보이더라"
+                ],
+            },
+            {
+                "title": "망원경 보정 이야기",
+                "content": "본문",
+                "comments": [
+                    "대기 보정 들어간 자료랑 원본 자료 같이 보면 차이가 꽤 커서 장비빨도 무시 못함"
+                ],
+            },
+        ]
+    }
+
+    profile = writing_enrichment.build_composition_profile(raw)
+    rule = writing_enrichment.comment_length_rule(profile, rng=random.Random(2))
+
+    assert profile["long_comment_ratio"] == 1
+    assert "3~5줄" in rule or "2줄" in rule or "1줄" in rule

@@ -578,6 +578,10 @@ def _swarm_worker(
 
     _global_wave = 0
     _cycle       = 0
+    _swarm_composition_profile = writing_enrichment.build_composition_profile(
+        {"raw_posts": _enriched_pool},
+        recent_posts=_enriched_pool,
+    )
 
     while True:
         _cycle += 1
@@ -623,6 +627,7 @@ def _swarm_worker(
                         context_hours=None,
                         length=length,
                         recent_posts=_wave_targets,
+                        composition_profile=_swarm_composition_profile,
                     )
                     # ── Fail-Safe: 파싱 실패 시 WAVE 즉시 Abort ──────────────
                     # "_parse_error" 플래그 또는 빈 title/content → raw 텍스트 포스팅 원천 차단
@@ -1746,6 +1751,7 @@ def _batch_gen_worker(
                     context_hours=None,
                     length=length,
                     recent_posts=_wave_targets,
+                    composition_profile=composition_profile,
                 )
                 if result.get("_parse_error") or not result.get("title") or not result.get("content"):
                     reason = "안전 필터" if result.get("_safety_error") else "파싱/빈 응답"

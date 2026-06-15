@@ -9,6 +9,8 @@ analytical than the board rhythm allows.
 
 from __future__ import annotations
 
+import random as _random
+from collections import Counter
 from statistics import median
 from typing import Iterable
 
@@ -60,6 +62,59 @@ def _avg(values: list[int]) -> float:
     return round(sum(values) / len(values), 1) if values else 0.0
 
 
+def _ending_family(value: str) -> str:
+    text = _clean(value, limit=260).rstrip()
+    if not text:
+        return ""
+    if text.endswith("?"):
+        return "question"
+    if text[-1] in {"ㅋ", "ㅎ"}:
+        return "laugh"
+    fragment_suffixes = (
+        "아님",
+        "아닌듯",
+        "같음",
+        "있음",
+        "없음",
+        "해야함",
+        "되는듯",
+        "보임",
+        "느낌",
+        "임",
+        "함",
+        "됨",
+        "듯",
+        "봄",
+        "씀",
+        "중",
+        "각",
+    )
+    if text.endswith(fragment_suffixes):
+        return "fragment"
+    if text.endswith(("다", "네", "지", "야", "겠네", "같다", "보인다")):
+        return "plain"
+    return "open"
+
+
+def _weighted_pick(
+    weighted_items: list[tuple[str, float]],
+    *,
+    rng: _random.Random | object | None = None,
+) -> str:
+    choices = [(item, max(0.0, float(weight))) for item, weight in weighted_items]
+    total = sum(weight for _, weight in choices)
+    if total <= 0:
+        return choices[0][0] if choices else ""
+    random_source = rng or _random
+    threshold = float(random_source.random()) * total
+    running = 0.0
+    for item, weight in choices:
+        running += weight
+        if threshold <= running:
+            return item
+    return choices[-1][0]
+
+
 def build_composition_profile(
     raw_data: dict | None = None,
     *,
@@ -79,7 +134,11 @@ def build_composition_profile(
     comment_lengths = [len(text) for text in comments]
     title_only = sum(1 for post in posts if post["title"] and len(post["content"]) < 12)
     short_body = sum(1 for text in bodies if len(text) <= 70)
+    medium_body = sum(1 for text in bodies if 55 <= len(text) < 110)
+    long_body = sum(1 for text in bodies if len(text) >= 110)
+    expanded_body = sum(1 for text in bodies if len(text) >= 180)
     comment_posts = sum(1 for post in posts if post["comments"])
+    long_comments = sum(1 for text in comments if len(text) >= 45)
 
     avg_title_len = _avg(title_lengths)
     avg_body_len = _avg(body_lengths)
@@ -87,8 +146,23 @@ def build_composition_profile(
     title_only_ratio = _ratio(title_only, total)
     body_present_ratio = _ratio(len(bodies), total)
     short_body_ratio = _ratio(short_body, len(bodies))
+    medium_body_ratio = _ratio(medium_body, len(bodies))
+    long_body_ratio = _ratio(long_body, len(bodies))
+    expanded_body_ratio = _ratio(expanded_body, len(bodies))
     comment_presence_ratio = _ratio(comment_posts, total)
     avg_comment_len = _avg(comment_lengths)
+    long_comment_ratio = _ratio(long_comments, len(comments))
+    ending_counts = Counter(
+        family
+        for family in (_ending_family(text) for text in [*titles, *bodies])
+        if family
+    )
+    ending_total = sum(ending_counts.values())
+    dominant_ending_family = ""
+    dominant_ending_ratio = 0.0
+    if ending_counts and ending_total:
+        dominant_ending_family, dominant_count = ending_counts.most_common(1)[0]
+        dominant_ending_ratio = round(dominant_count / ending_total, 3)
 
     if total == 0:
         shape = "unknown"
@@ -116,8 +190,14 @@ def build_composition_profile(
         "title_only_ratio": title_only_ratio,
         "body_present_ratio": body_present_ratio,
         "short_body_ratio": short_body_ratio,
+        "medium_body_ratio": medium_body_ratio,
+        "long_body_ratio": long_body_ratio,
+        "expanded_body_ratio": expanded_body_ratio,
         "comment_presence_ratio": comment_presence_ratio,
         "avg_comment_len": avg_comment_len,
+        "long_comment_ratio": long_comment_ratio,
+        "dominant_ending_family": dominant_ending_family,
+        "dominant_ending_ratio": dominant_ending_ratio,
         "style_profile_sample_size": int((style_profile or {}).get("sample_size", 0) or 0),
     }
     profile["rules"] = composition_rules_from_profile(profile)
@@ -162,6 +242,15 @@ def composition_rules_from_profile(profile: dict) -> list[str]:
     else:
         rules.append("Prefer low-attention drafts: short title, short body, no grand conclusion.")
 
+    if float(profile.get("long_body_ratio", 0.0) or 0.0) >= 0.08:
+        rules.append(
+            "The source set includes real long bodies. Keep them as a minority lane: a fuller draft may use 3-5 short lines with one concrete detail, one contrast, and one low-key closing beat."
+        )
+    elif float(profile.get("medium_body_ratio", 0.0) or 0.0) >= 0.18:
+        rules.append(
+            "A medium draft is acceptable sometimes: two body lines that add detail instead of repeating the title."
+        )
+
     if float(profile.get("title_only_ratio", 0.0) or 0.0) >= 0.45:
         rules.append("A body that feels like a caption is better than a complete essay.")
     if float(profile.get("body_present_ratio", 0.0) or 0.0) <= 0.35:
@@ -189,10 +278,14 @@ def comment_rules_from_profile(profile: dict) -> list[str]:
             "Comments are part of the rhythm. Attach to one concrete detail from the target post, not to the whole board mood."
         )
 
-    if avg_comment_len and avg_comment_len <= 35:
+    if float(profile.get("long_comment_ratio", 0.0) or 0.0) >= 0.12:
+        rules.append(
+            "Some source comments are longer. A minority comment may use 3-4 short lines when it follows a concrete detail from the target post."
+        )
+    elif avg_comment_len and avg_comment_len <= 35:
         rules.append("Keep comments very short: one beat, one reaction, no full paragraph.")
     elif avg_comment_len >= 80:
-        rules.append("A two-line comment is acceptable when it adds a small reason or contrast.")
+        rules.append("A two- to four-line comment is acceptable when it adds a small reason or contrast.")
     else:
         rules.append("Use one compact sentence unless the target post already has a two-line comment rhythm.")
 
@@ -233,4 +326,223 @@ def comment_prompt_block(profile: dict | None) -> str:
     lines.extend(
         f"- {rule}" for rule in profile.get("comment_rules", []) if str(rule).strip()
     )
+    return "\n".join(lines)
+
+
+def choose_length_lane(
+    profile: dict | None,
+    *,
+    requested_length: str = "",
+    rng: _random.Random | object | None = None,
+) -> str:
+    """Choose a per-draft length lane from the current source structure."""
+
+    profile = profile or {}
+    requested = str(requested_length or "")
+    avg_body_len = float(profile.get("avg_body_len", 0.0) or 0.0)
+    medium_ratio = float(profile.get("medium_body_ratio", 0.0) or 0.0)
+    long_ratio = float(profile.get("long_body_ratio", 0.0) or 0.0)
+    expanded_ratio = float(profile.get("expanded_body_ratio", 0.0) or 0.0)
+    comment_presence = float(profile.get("comment_presence_ratio", 0.0) or 0.0)
+
+    long_supported = long_ratio >= 0.08 or expanded_ratio >= 0.04 or avg_body_len >= 100
+    medium_supported = medium_ratio >= 0.15 or avg_body_len >= 85 or comment_presence >= 0.32
+
+    if "아주 짧게" in requested:
+        return "short"
+    if "짧게" in requested and "아주" not in requested:
+        return _weighted_pick([("short", 0.72), ("compact", 0.28)], rng=rng)
+    if any(token in requested for token in ("길게", "장문", "상세")):
+        if long_supported:
+            return _weighted_pick(
+                [("medium", 0.36), ("long", 0.54), ("compact", 0.10)],
+                rng=rng,
+            )
+        return _weighted_pick([("medium", 0.68), ("compact", 0.32)], rng=rng)
+
+    medium_weight = 0.20 if medium_supported else 0.08
+    long_weight = 0.10 if long_supported else 0.0
+    compact_weight = 0.34 if medium_supported else 0.40
+    short_weight = max(0.30, 1.0 - medium_weight - long_weight - compact_weight)
+    return _weighted_pick(
+        [
+            ("short", short_weight),
+            ("compact", compact_weight),
+            ("medium", medium_weight),
+            ("long", long_weight),
+        ],
+        rng=rng,
+    )
+
+
+def choose_voice_lane(
+    profile: dict | None,
+    *,
+    rng: _random.Random | object | None = None,
+) -> str:
+    """Choose a per-draft ending/voice lane to avoid one-note endings."""
+
+    profile = profile or {}
+    dominant = str(profile.get("dominant_ending_family") or "")
+    ratio = float(profile.get("dominant_ending_ratio", 0.0) or 0.0)
+    if dominant == "fragment" and ratio >= 0.42:
+        return _weighted_pick(
+            [
+                ("plain", 0.38),
+                ("mixed", 0.30),
+                ("fragment", 0.16),
+                ("question", 0.10),
+                ("laugh", 0.06),
+            ],
+            rng=rng,
+        )
+    if dominant == "question" and ratio >= 0.35:
+        return _weighted_pick(
+            [("plain", 0.42), ("mixed", 0.28), ("question", 0.18), ("fragment", 0.12)],
+            rng=rng,
+        )
+    return _weighted_pick(
+        [
+            ("plain", 0.30),
+            ("mixed", 0.28),
+            ("fragment", 0.22),
+            ("question", 0.12),
+            ("laugh", 0.08),
+        ],
+        rng=rng,
+    )
+
+
+_LENGTH_LANE_RULES: dict[str, str] = {
+    "short": (
+        "Length lane SHORT: title carries most of the post. Body is empty-feeling "
+        "or one low-key line under 80 Korean characters."
+    ),
+    "compact": (
+        "Length lane COMPACT: title plus 1-2 short body sentences. Body adds one "
+        "reason, number, comparison, or aftertaste."
+    ),
+    "medium": (
+        "Length lane MEDIUM: use 2-3 short body lines. Line 1 reacts, line 2 adds "
+        "a concrete detail or contrast, optional line 3 closes lightly."
+    ),
+    "long": (
+        "Length lane FULLER: allow 3-5 short lines, roughly 220-520 Korean "
+        "characters. Keep it conversational: one scene/detail, one reason or "
+        "contrast, one low-key closing beat. Do not turn it into a briefing."
+    ),
+}
+
+_VOICE_LANE_RULES: dict[str, str] = {
+    "plain": (
+        "Voice lane PLAIN: avoid ending every sentence with board-fragment endings "
+        "like 함/임/듯/아님. Use ordinary casual endings such as 같다, 보인다, 했네, "
+        "아니다 when they fit."
+    ),
+    "mixed": (
+        "Voice lane MIXED: one fragment ending is fine, but pair it with a normal "
+        "casual sentence so the draft does not become all 음슴체."
+    ),
+    "fragment": (
+        "Voice lane FRAGMENT: use the board-fragment rhythm only once or twice. "
+        "Do not make both title and every body line end with the same suffix."
+    ),
+    "question": (
+        "Voice lane QUESTION: use at most one real question across title/body, and "
+        "end it with ?. The other line should be a small statement."
+    ),
+    "laugh": (
+        "Voice lane LAUGH: a short ㅋㅋ/ㄷㄷ tail is allowed once if the source rhythm "
+        "supports it. Do not attach laughter to every sentence."
+    ),
+}
+
+
+def generation_variation_block(
+    profile: dict | None,
+    *,
+    requested_length: str = "",
+    rng: _random.Random | object | None = None,
+) -> str:
+    """Render one per-call variation lane for post generation."""
+
+    if not isinstance(profile, dict) or int(profile.get("sample_size", 0) or 0) <= 0:
+        return ""
+    length_lane = choose_length_lane(profile, requested_length=requested_length, rng=rng)
+    voice_lane = choose_voice_lane(profile, rng=rng)
+    lines = [
+        "[This Draft Variation]",
+        f"- {_LENGTH_LANE_RULES.get(length_lane, _LENGTH_LANE_RULES['compact'])}",
+        f"- {_VOICE_LANE_RULES.get(voice_lane, _VOICE_LANE_RULES['mixed'])}",
+        "- The variation lane overrides only this one draft. Keep the source topic and persona intact.",
+    ]
+    if (
+        str(profile.get("dominant_ending_family") or "") == "fragment"
+        and float(profile.get("dominant_ending_ratio", 0.0) or 0.0) >= 0.42
+    ):
+        lines.append(
+            "- Source endings lean toward board fragments. Borrow the rhythm lightly, but do not force every line into 함/임/듯/아님."
+        )
+    return "\n".join(lines)
+
+
+def comment_length_rule(
+    profile: dict | None,
+    *,
+    rng: _random.Random | object | None = None,
+) -> str:
+    """Choose a comment length rule from source comment density and length."""
+
+    profile = profile or {}
+    avg_comment_len = float(profile.get("avg_comment_len", 0.0) or 0.0)
+    long_ratio = float(profile.get("long_comment_ratio", 0.0) or 0.0)
+    comment_presence = float(profile.get("comment_presence_ratio", 0.0) or 0.0)
+
+    if comment_presence <= 0.08:
+        return "댓글이 거의 없는 리듬이다. 타겟 글에 붙일 구체 꼬투리가 없으면 빈 배열로 둔다."
+    if long_ratio >= 0.12 or avg_comment_len >= 70:
+        return _weighted_pick(
+            [
+                ("1줄. 낮은 반응 하나만 둔다.", 0.40),
+                ("2줄. 첫 줄 반응, 둘째 줄 구체 이유나 딴지 한 마디.", 0.35),
+                (
+                    "3~5줄. 타겟 글의 본문·기존 댓글 디테일이 충분할 때만 작은 근거와 반박을 이어 쓴다. 각 줄은 짧게.",
+                    0.25,
+                ),
+            ],
+            rng=rng,
+        )
+    if avg_comment_len >= 55:
+        return _weighted_pick(
+            [
+                ("1줄. 낮은 반응 하나만 둔다.", 0.48),
+                ("2줄. 첫 줄 반응, 둘째 줄 구체 이유나 딴지 한 마디.", 0.42),
+                ("3줄 이내. 타겟 글에 이미 긴 댓글 흐름이 있을 때만 허용한다.", 0.10),
+            ],
+            rng=rng,
+        )
+    return _weighted_pick(
+        [
+            ("1줄. 짧게 반응만 둔다.", 0.62),
+            ("2줄. 첫 줄 반응, 둘째 줄 아주 짧은 이유.", 0.38),
+        ],
+        rng=rng,
+    )
+
+
+def comment_variation_block(
+    profile: dict | None,
+    *,
+    rng: _random.Random | object | None = None,
+) -> str:
+    """Render per-call comment variation guidance."""
+
+    if not isinstance(profile, dict) or int(profile.get("sample_size", 0) or 0) <= 0:
+        return ""
+    voice_lane = choose_voice_lane(profile, rng=rng)
+    lines = [
+        "[This Comment Variation]",
+        f"- {_VOICE_LANE_RULES.get(voice_lane, _VOICE_LANE_RULES['mixed'])}",
+        "- A longer comment is allowed only when it follows a concrete target-post detail; otherwise keep it short or return an empty array.",
+    ]
     return "\n".join(lines)

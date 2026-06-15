@@ -16,6 +16,8 @@ $comment_enrichment_block
 
 [Source Rhythm]
 - Match the collected board rhythm before adding new structure. If the source posts are mostly short title-only reactions, make the title carry the post and keep the body one short sentence or empty-feeling.
+- If [This Draft Variation] says MEDIUM or FULLER, that lane may override the default one-line body. The draft can be longer, but it must still sound like a board post rather than a briefing.
+- Do not collapse every draft into the same body length. Follow the per-draft length lane first, then keep the source rhythm inside that lane.
 - For live drama/broadcast reactions, write a scene/camera/line/character reaction, not a social-analysis paragraph.
 - If a name belongs to a drama, broadcast, character, clip, or scene context, do not convert it into "specific user" discourse.
 - Avoid outside-critic posture. Prefer "one more small reaction" over "this topic is problematic / why does this keep coming up".

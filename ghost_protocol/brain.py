@@ -144,14 +144,12 @@ SAFETY_SETTINGS = [
 MAX_CONTENT_LENGTH = 300
 
 # ── 댓글 길이 룰 — Phase 9: 동적 랜덤 할당 ────────────────────────────────
-# generate_post() 호출마다 랜덤 선택 → $length_rule 로 generate_comment.txt 에 주입.
-# 비율: 1줄(40%) / 2줄(35%) / 2~3줄(25%) — 1줄이 커뮤니티 현실에 가장 많으므로 가중치 유지.
+# Legacy fallback only.  The active path now uses writing_enrichment.comment_length_rule()
+# so long comments appear only when the collected source rhythm supports them.
 _COMMENT_LENGTH_RULES: list[str] = [
-    "딱 1줄. 짧고 강렬하게. 설명 없이 반응만 툭 던져라.",
-    "딱 1줄. 짧고 강렬하게. 설명 없이 반응만 툭 던져라.",
-    "2줄. 첫 줄 리액션, 둘째 줄 구체적 이유·딴지 한 마디. (줄바꿈 1회)",
-    "2줄. 첫 줄 리액션, 둘째 줄 구체적 이유·딴지 한 마디. (줄바꿈 1회)",
-    "2~3줄. 본문이나 기존 댓글의 디테일을 꼬투리 잡아 풀어써라. 단, 각 줄은 짧게.",
+    "1줄. 짧게 반응만 둔다.",
+    "2줄. 첫 줄 반응, 둘째 줄 아주 짧은 이유.",
+    "3줄 이내. 타겟 글에 이미 긴 댓글 흐름이 있을 때만 허용한다.",
 ]
 
 
@@ -448,6 +446,7 @@ class GhostBrain:
         length: str = "보통 (3~4문장)",
         keywords: Optional[list[str]] = None,
         recent_posts: Optional[list[dict]] = None,
+        composition_profile: Optional[dict] = None,
     ) -> dict:
         """DC Inside 스타일 게시글 생성 + 소셜 인터랙션 댓글 콤보.
 
@@ -544,24 +543,50 @@ class GhostBrain:
         # {"post_no": str, "title": str, "content": str, "existing_comments": list[str]}
         # existing_comments: 호출자(app.py)가 AJAX로 프리패치한 기존 댓글 (최대 5개, 없으면 [])
         # post_no 검증은 파서 단계에서 수행 (hallucination 방어).
-        composition_profile = writing_enrichment.build_composition_profile(
-            {"raw_posts": recent_posts or []},
-            recent_posts=recent_posts,
+        source_composition_profile = (
+            composition_profile
+            if isinstance(composition_profile, dict)
+            else writing_enrichment.build_composition_profile(
+                {"raw_posts": recent_posts or []},
+                recent_posts=recent_posts,
+            )
         )
-        composition_profile_block = (
+        base_composition_profile_block = (
             ""
             if "[Composition Profile]" in str(topic or "")
-            else writing_enrichment.prompt_block(composition_profile)
+            else writing_enrichment.prompt_block(source_composition_profile)
         )
-        comment_enrichment_block = (
+        generation_variation_block = writing_enrichment.generation_variation_block(
+            source_composition_profile,
+            requested_length=length,
+            rng=random,
+        )
+        composition_profile_block = "\n\n".join(
+            block
+            for block in (base_composition_profile_block, generation_variation_block)
+            if block
+        )
+        base_comment_enrichment_block = (
             ""
             if "[Comment Composition Profile]" in str(topic or "")
-            else writing_enrichment.comment_prompt_block(composition_profile)
+            else writing_enrichment.comment_prompt_block(source_composition_profile)
+        )
+        comment_variation_block = writing_enrichment.comment_variation_block(
+            source_composition_profile,
+            rng=random,
+        )
+        comment_enrichment_block = "\n\n".join(
+            block
+            for block in (base_comment_enrichment_block, comment_variation_block)
+            if block
         )
 
         if recent_posts:
             # Phase 9: 댓글 길이 룰 랜덤 선택 — 봇마다 대사 길이 변주
-            _comment_length_rule = random.choice(_COMMENT_LENGTH_RULES)
+            _comment_length_rule = writing_enrichment.comment_length_rule(
+                source_composition_profile,
+                rng=random,
+            )
             _posts_formatted: list[str] = []
             for p in recent_posts:
                 _line = f"#{p.get('post_no', '?')} | {p.get('title', '')}"
@@ -649,7 +674,7 @@ class GhostBrain:
                 },
                 "content": {
                     "type": "string",
-                    "description": "갤러리 게시글 본문. 기본 1줄, 필요한 경우만 2줄. 제목을 다시 말하지 말고 구체 장면·근거·반응 중 하나를 더한다. 마침표는 붙이지 않는다.", # <-- 여기 변경
+                    "description": "갤러리 게시글 본문. This Draft Variation의 길이 레인을 따른다. 짧은 레인은 0~1줄, medium/fuller 레인은 2~5줄까지 가능하다. 제목을 다시 말하지 말고 구체 장면·근거·반응 중 하나를 더한다. 마침표는 붙이지 않는다.",
                 },
                 "target_comments": {
                     "type": "array",
@@ -698,7 +723,7 @@ class GhostBrain:
             safety_settings=SAFETY_SETTINGS,
             response_mime_type="application/json",
             response_schema=_POST_SCHEMA,
-            max_output_tokens=2048,
+            max_output_tokens=3072,
             temperature=0.78,
             thinking_config=types.ThinkingConfig(thinking_budget=0),
         )
