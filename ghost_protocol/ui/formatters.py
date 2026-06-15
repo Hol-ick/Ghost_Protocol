@@ -16,6 +16,16 @@ from ghost_protocol.domain import writing_enrichment
 from ghost_protocol.ui.intel_view_model import AiOccupationView
 
 
+def _comment_target_label(target: dict) -> str:
+    """Format a comment target for review/copy output."""
+
+    post_no = target.get("post_no", "?")
+    label = f"#{post_no}"
+    if target.get("simulation_only") or target.get("is_ai_post"):
+        label += " (리허설)"
+    return label
+
+
 def _friendly_log_line(line: object) -> str:
     """Convert worker-oriented log tokens into operator-facing wording."""
     text = str(line)
@@ -164,7 +174,7 @@ def format_scripts_for_copy(scripts: list[dict]) -> str:
         for target in item.get("target_comments", []):
             lines.append(
                 "  댓글 "
-                f"#{target.get('post_no', '?')}: {target.get('comment', '')}"
+                f"{_comment_target_label(target)}: {target.get('comment', '')}"
             )
         lines.append("-" * 40)
     return "\n".join(lines)
@@ -204,7 +214,7 @@ def format_scripts_markdown(scripts: list[dict]) -> str:
             lines.extend(["", "### 댓글 초안"])
             for target in comments:
                 lines.append(
-                    f"- #{target.get('post_no', '?')}: {target.get('comment', '')}"
+                    f"- {_comment_target_label(target)}: {target.get('comment', '')}"
                 )
 
     if failed_scripts:
@@ -245,7 +255,7 @@ def format_scripts_markdown(scripts: list[dict]) -> str:
                 lines.extend(["", "### 댓글 후보"])
                 for target in rejected_comments:
                     lines.append(
-                        f"- #{target.get('post_no', '?')}: {target.get('comment', '')}"
+                        f"- {_comment_target_label(target)}: {target.get('comment', '')}"
                     )
             lines.extend(["", f"- 실패 사유: {reason}"])
             if stage:

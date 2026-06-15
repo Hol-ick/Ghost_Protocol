@@ -54,6 +54,7 @@ from ghost_protocol.domain import gallery_purpose
 from ghost_protocol.domain import gallery_style
 from ghost_protocol.domain import board_rhythm
 from ghost_protocol.domain import naturalness
+from ghost_protocol.domain import comment_targets
 from ghost_protocol.domain import writing_enrichment
 from ghost_protocol.domain import lineup as lineup_policy
 from ghost_protocol.domain.validators import validate_slot_diversity
@@ -532,11 +533,13 @@ def _swarm_worker(
             _known_ai_posts = database.get_ai_post_nos(gallery_id)
         except Exception:
             _known_ai_posts = set()
-        _candidates = [
-            row for row in _raw_list
-            if not row.get("is_bot")
-            and str(row.get("post_no", "")) not in _known_ai_posts
-        ][:15]
+        _candidates = comment_targets.select_comment_target_rows(
+            _raw_list,
+            known_ai_posts=_known_ai_posts,
+            limit=15,
+            ai_limit=3,
+            include_ai=True,
+        )
         for _c in _candidates:
             _snapshot: dict = {}
             _cmts: list[str] = []
@@ -561,10 +564,17 @@ def _swarm_worker(
                 "title":             _snapshot.get("source_title") or _c["title"],
                 "content":           _snapshot.get("content") or "",
                 "existing_comments": _merged_cmts[:5],
+                "is_ai_post":        bool(_c.get("is_ai_post")),
+                "simulation_only":   bool(_c.get("comment_simulation_only")),
             })
         q_log(f"[SWARM] 📋 댓글 타겟 풀: {len(_enriched_pool)}개 (사람 글 맥락 프리패치 완료)")
     except Exception as _te:
         q_log(f"[SWARM] ⚠️ 댓글 타겟 수집 실패 (SWARM 계속): {str(_te)[:80]}")
+
+    try:
+        _known_ai_posts_for_comments = database.get_ai_post_nos(gallery_id)
+    except Exception:
+        _known_ai_posts_for_comments = set()
 
     _global_wave = 0
     _cycle       = 0
@@ -626,7 +636,10 @@ def _swarm_worker(
                     q_log(f"[W{wave}] ✅ 생성 완료: '{gen_title[:30]}'")
 
                     # ── 댓글 타겟 로그 ───────────────────────────────────────
-                    _tc_list = result.get("target_comments", [])
+                    _tc_list = comment_targets.mark_target_comments(
+                        result.get("target_comments", []),
+                        target_posts=_enriched_pool,
+                    )
                     if _tc_list:
                         for _tc in _tc_list:
                             q_log(
@@ -699,6 +712,15 @@ def _swarm_worker(
                     _post_no = _tc.get("post_no", "")
                     _comment = _tc.get("comment", "")
                     if not _post_no or not _comment:
+                        continue
+                    if comment_targets.should_skip_public_comment(
+                        _tc,
+                        known_ai_posts=_known_ai_posts_for_comments,
+                    ):
+                        q_log(
+                            f"[W{wave}] [SAFE] #{_post_no} AI 작성글 댓글 후보 — "
+                            "시너지 리허설 전용으로 실제 발행 생략"
+                        )
                         continue
 
                     q_log(f"[W{wave}] 💬 [{_idx}/{len(_tc_list)}] #{_post_no} 댓글 시도 중...")
@@ -1414,11 +1436,13 @@ def _batch_gen_worker(
                 _known_ai_posts = database.get_ai_post_nos(gallery_id)
             except Exception:
                 _known_ai_posts = set()
-            _candidates = [
-                row for row in _raw_list
-                if not row.get("is_bot")
-                and str(row.get("post_no", "")) not in _known_ai_posts
-            ][:15]
+            _candidates = comment_targets.select_comment_target_rows(
+                _raw_list,
+                known_ai_posts=_known_ai_posts,
+                limit=15,
+                ai_limit=3,
+                include_ai=True,
+            )
             _pool: list[dict] = []
             for _c in _candidates:
                 _snapshot: dict = {}
@@ -1444,6 +1468,8 @@ def _batch_gen_worker(
                     "title":             _snapshot.get("source_title") or _c["title"],
                     "content":           _snapshot.get("content") or "",
                     "existing_comments": _merged_cmts[:5],
+                    "is_ai_post":        bool(_c.get("is_ai_post")),
+                    "simulation_only":   bool(_c.get("comment_simulation_only")),
                 })
             return _pool
 
@@ -1819,6 +1845,10 @@ def _batch_gen_worker(
                     _tc_list,
                     title=gen_title,
                     content=gen_content,
+                    target_posts=_wave_targets,
+                )
+                _tc_list = comment_targets.mark_target_comments(
+                    _tc_list,
                     target_posts=_wave_targets,
                 )
                 if _tc_before and len(_tc_list) < _tc_before:
@@ -2818,6 +2848,10 @@ def _post_exec_worker(
             ai_comment_watch_limit
         ),
     )
+    try:
+        _known_ai_posts_for_comments = database.get_ai_post_nos(gallery_id)
+    except Exception:
+        _known_ai_posts_for_comments = set()
 
     try:
         _account_pool = load_accounts()
@@ -2898,6 +2932,15 @@ def _post_exec_worker(
                 _post_no = _tc.get("post_no", "")
                 _comment = _tc.get("comment", "")
                 if not _post_no or not _comment:
+                    continue
+                if comment_targets.should_skip_public_comment(
+                    _tc,
+                    known_ai_posts=_known_ai_posts_for_comments,
+                ):
+                    q_log(
+                        f"[W{wave}] [SAFE] #{_post_no} AI 작성글 댓글 후보 — "
+                        "시너지 리허설 전용으로 실제 발행 생략"
+                    )
                     continue
 
                 q_log(f"[W{wave}] 💬 [{_idx}/{len(_tc_list)}] #{_post_no} 댓글 시도 중...")
@@ -4161,9 +4204,14 @@ def _render_draft_comment_list(target_comments: list[dict] | tuple) -> str:
             continue
         post_no = str(item.get("post_no") or "").strip()
         target = f"#{post_no}" if post_no else "대상 글"
+        rehearsal_badge = (
+            '<em class="comment-rehearsal-badge">리허설</em>'
+            if item.get("simulation_only") or item.get("is_ai_post")
+            else ""
+        )
         comments.append(
             '<li>'
-            f'<b>{_html.escape(target)}</b>'
+            f'<div class="draft-comment-target"><b>{_html.escape(target)}</b>{rehearsal_badge}</div>'
             f'<span>{_html.escape(comment)}</span>'
             '</li>'
         )

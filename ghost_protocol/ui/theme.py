@@ -1658,6 +1658,14 @@ div[role="option"][aria-selected="true"],
     background: #FFFFFF !important;
 }
 
+.draft-comment-target {
+    display: inline-flex !important;
+    align-items: center !important;
+    gap: 5px !important;
+    min-width: 0 !important;
+    white-space: nowrap !important;
+}
+
 .draft-comment-empty {
     margin: 0 !important;
     color: var(--gp-muted) !important;
@@ -1667,6 +1675,18 @@ div[role="option"][aria-selected="true"],
 .draft-comment-list li b {
     color: var(--gp-blue) !important;
     font: 850 0.72rem/1.45 var(--gp-font) !important;
+}
+
+.comment-rehearsal-badge {
+    display: inline-flex !important;
+    align-items: center !important;
+    height: 18px !important;
+    padding: 0 6px !important;
+    border-radius: 999px !important;
+    background: #F0FDFA !important;
+    color: #0F766E !important;
+    font: 850 0.65rem/1 var(--gp-font) !important;
+    font-style: normal !important;
 }
 
 .draft-comment-list li span {
