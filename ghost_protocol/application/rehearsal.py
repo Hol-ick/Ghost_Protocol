@@ -227,11 +227,134 @@ def _clean_rehearsal_text(text: Any, *, gallery_id: str = "") -> str:
     return cleaned
 
 
+def _is_empty_intel_text(text: Any) -> bool:
+    compact = re.sub(r"\s+", "", str(text or "")).strip()
+    if not compact:
+        return True
+    empty_markers = {
+        "분석없음",
+        "작문지시없음",
+        "다음사이클작문지시없음",
+        "정보없음",
+        "데이터없음",
+        "해당없음",
+    }
+    return compact in empty_markers
+
+
 def _success_stats(scripts: list[dict]) -> tuple[int, int, float]:
     total = max(10, len(scripts))
     valid = sum(1 for item in scripts if not item.get("_failed"))
     ratio = valid / total if total else 0.0
     return valid, total, ratio
+
+
+def _fallback_topic_line(
+    *,
+    sample_titles: list[str],
+    anchors: list[dict],
+    anchor_topic: str,
+    repeated: list[str],
+) -> str:
+    anchor_titles = [post["title"] for post in anchors[:5] if post.get("title")]
+    if anchor_titles:
+        return "원본 앵커에서 다시 잡을 장면: " + " / ".join(anchor_titles)
+    if anchor_topic:
+        return "최초 브리핑 앵커를 기준으로 안전한 장면·숫자·사물 축을 다시 나눈다."
+    if sample_titles:
+        return "직전 성공 원고에서 과점된 소재를 낮추고 남은 장면을 분산한다: " + " / ".join(
+            sample_titles[:4]
+        )
+    if repeated:
+        return "반복 명사를 유행으로 확정하지 말고 다른 원본 장면으로 복구한다: " + " / ".join(
+            repeated[:4]
+        )
+    return "분석 입력이 부족하므로 원본 게시글 앵커와 갤러리 상시 분야의 안전한 구체 장면을 우선한다."
+
+
+def _fallback_guidance_line(
+    *,
+    anchors: list[dict],
+    sample_titles: list[str],
+    failure_patterns: list[str],
+) -> str:
+    if anchors:
+        return (
+            "다음 사이클은 원본 앵커의 제목·본문·댓글 중 안전한 사물, 숫자, 시간, 화면 장면을 우선 사용한다. "
+            "직전 성공 제목을 말바꾸기하지 말고 핵심 소재 2개, 옆 소재 2개, 상시 분야 1개로 분산한다."
+        )
+    if sample_titles:
+        return (
+            "직전 성공 원고만으로 주제를 확정하지 말고, 반복된 명사는 0~1회로 줄인다. "
+            "질문·불평보다 장면 추가, 작은 농담, 숫자 반응, 결과 예상을 섞는다."
+        )
+    if failure_patterns:
+        return (
+            "실패 후보의 문구를 살리지 말고 실패 구조만 피한다. "
+            "중복·메타·스타일 수렴이 보이면 다른 슬롯의 구체 장면으로 이동한다."
+        )
+    return "원본 앵커 기반으로 짧은 평서형 반응을 만들고, 질문형과 불평형은 배치에서 최소화한다."
+
+
+def normalize_cycle_intel(
+    intel: dict,
+    scripts: list[dict],
+    *,
+    gallery_id: str = "",
+    anchor_posts: Any = (),
+    anchor_topic: str = "",
+) -> dict:
+    """Fill empty rehearsal analysis/guidance with deterministic fallbacks."""
+
+    normalized = dict(intel or {})
+    repeated = _repeated_terms(scripts)
+    sample_titles = _successful_titles(scripts)
+    failure_patterns = _failure_patterns(scripts)
+    anchors = _clean_anchor_posts(anchor_posts, limit=12)
+    fallback_used: list[str] = []
+
+    analysis = _clean_rehearsal_text(normalized.get("ai_analysis"), gallery_id=gallery_id)
+    if _is_empty_intel_text(analysis):
+        normalized["ai_analysis"] = _fallback_topic_line(
+            sample_titles=sample_titles,
+            anchors=anchors,
+            anchor_topic=str(anchor_topic or ""),
+            repeated=repeated,
+        )
+        fallback_used.append("analysis")
+    else:
+        normalized["ai_analysis"] = analysis
+
+    guidance = _clean_rehearsal_text(
+        normalized.get("generation_guidance"),
+        gallery_id=gallery_id,
+    )
+    if _is_empty_intel_text(guidance):
+        normalized["generation_guidance"] = _fallback_guidance_line(
+            anchors=anchors,
+            sample_titles=sample_titles,
+            failure_patterns=failure_patterns,
+        )
+        fallback_used.append("guidance")
+    else:
+        normalized["generation_guidance"] = guidance
+
+    hot_topics = [
+        str(item).strip()
+        for item in (normalized.get("hot_topics") or [])
+        if str(item).strip()
+    ]
+    if not hot_topics:
+        hot_topics = [post["title"] for post in anchors[:4] if post.get("title")]
+        if not hot_topics:
+            hot_topics = sample_titles[:4]
+        if hot_topics:
+            normalized["hot_topics"] = hot_topics
+            fallback_used.append("hot_topics")
+
+    if fallback_used:
+        normalized["rehearsal_fallback_used"] = fallback_used
+    return normalized
 
 
 def build_next_topic(
@@ -244,6 +367,13 @@ def build_next_topic(
 ) -> str:
     """Turn rehearsal analysis into the next cycle's complete writing context."""
 
+    intel = normalize_cycle_intel(
+        intel,
+        scripts,
+        gallery_id=gallery_id,
+        anchor_posts=anchor_posts,
+        anchor_topic=anchor_topic,
+    )
     analysis = _clean_rehearsal_text(intel.get("ai_analysis"), gallery_id=gallery_id)
     guidance = _clean_rehearsal_text(intel.get("generation_guidance"), gallery_id=gallery_id)
     seed_summary = str(intel.get("summary") or "").strip()
@@ -252,10 +382,6 @@ def build_next_topic(
         for item in (intel.get("hot_topics") or [])
         if str(item).strip()
     ]
-
-    if not analysis:
-        titles = _successful_titles(scripts, limit=5)
-        analysis = "직전 리허설 원고에서 이어갈 소재: " + " / ".join(titles[:5])
 
     repeated = _repeated_terms(scripts)
     failure_patterns = _failure_patterns(scripts)
@@ -279,6 +405,15 @@ def build_next_topic(
                 "",
             ]
         )
+    if intel.get("rehearsal_fallback_used"):
+        parts.extend(
+            [
+                "[리허설 분석 폴백]",
+                "분석 모델이 빈 주제/빈 지시를 돌려 리허설이 멈추지 않도록 원본 앵커와 직전 실패 패턴으로 다음 사이클을 복구했다.",
+                "폴백 상태에서는 직전 성공 원고를 유행으로 확정하지 않고 원본 스냅샷의 다른 장면을 우선한다.",
+                "",
+            ]
+        )
     if anchors:
         anchor_titles = " / ".join(post["title"] for post in anchors[:10])
         parts.extend(
@@ -292,6 +427,9 @@ def build_next_topic(
     parts.extend(["[리허설 직전 사이클 분석]", analysis])
     if analysis_notes:
         parts.extend(["", analysis_notes])
+    surface_notes = rehearsal_policy.surface_safety_prompt_block()
+    if surface_notes:
+        parts.extend(["", surface_notes])
     if hot_topics:
         parts.extend(["", "[주요 소재]", " / ".join(hot_topics[:4])])
     if seed_summary:

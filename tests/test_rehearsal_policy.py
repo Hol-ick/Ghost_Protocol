@@ -78,6 +78,25 @@ def test_failure_pattern_label_separates_style_sameness():
     assert rehearsal_policy.failure_pattern_label("안전 끝맺음 반복: seems") == "style_sameness"
 
 
+def test_failure_pattern_label_separates_runtime_and_empty_analysis():
+    assert (
+        rehearsal_policy.failure_pattern_label("Gemini API Rate Limit 초과 (429)")
+        == "api_limit"
+    )
+    assert rehearsal_policy.failure_pattern_label("생성 시간이 제한을 초과했습니다") == "timeout"
+    assert rehearsal_policy.failure_pattern_label("분석 없음") == "analysis_gap"
+    assert rehearsal_policy.failure_pattern_label("외모 평가가 직접적입니다") == "appearance_surface"
+
+
+def test_surface_safety_prompt_downshifts_raw_source_surface():
+    block = rehearsal_policy.surface_safety_prompt_block()
+
+    assert "[원문 표면 복제 방지]" in block
+    assert "욕설·비하어·슬러" in block
+    assert "외모·몸매·의상" in block
+    assert "도덕 평론" in block
+
+
 def test_analysis_rotation_notes_warns_against_rehearsal_amplification():
     notes = rehearsal_policy.analysis_rotation_notes(
         repeated_terms=["목성", "행성"],

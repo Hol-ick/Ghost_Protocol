@@ -85,6 +85,49 @@ class RehearsalFlowTest(unittest.TestCase):
         self.assertIn("우주·천문", topic)
         self.assertIn("[다음 사이클 소재 배합]", topic)
         self.assertIn("새 구체 소재를 조용히 시작", topic)
+        self.assertIn("[원문 표면 복제 방지]", topic)
+
+    def test_empty_intel_uses_anchor_fallback_instead_of_empty_analysis(self):
+        intel = rehearsal.normalize_cycle_intel(
+            {"ai_analysis": "분석 없음", "generation_guidance": "작문 지시 없음"},
+            [
+                {"title": "목성 먼지대 사진 화질 좋아짐", "content": "캡처 잘 보임"},
+                {
+                    "_failed": True,
+                    "_failure_reason": "Gemini API Rate Limit 초과 (429)",
+                },
+            ],
+            gallery_id="universe",
+            anchor_posts=[
+                {
+                    "title": "로또 1만개 다 꽝이면 다음 회차도 두렵지",
+                    "content": "금액 남음",
+                }
+            ],
+            anchor_topic="원본 브리핑",
+        )
+
+        self.assertNotEqual(intel["ai_analysis"], "분석 없음")
+        self.assertNotEqual(intel["generation_guidance"], "작문 지시 없음")
+        self.assertIn("로또 1만개", intel["ai_analysis"])
+        self.assertIn("rehearsal_fallback_used", intel)
+
+        topic = rehearsal.build_next_topic(
+            intel,
+            [{"title": "목성 먼지대 사진 화질 좋아짐", "content": "캡처 잘 보임"}],
+            gallery_id="universe",
+            anchor_posts=[
+                {
+                    "title": "로또 1만개 다 꽝이면 다음 회차도 두렵지",
+                    "content": "금액 남음",
+                }
+            ],
+            anchor_topic="원본 브리핑",
+        )
+
+        self.assertIn("[리허설 분석 폴백]", topic)
+        self.assertNotIn("분석 없음", topic)
+        self.assertIn("원본 앵커", topic)
 
     def test_next_topic_overrides_meaning_question_guidance(self):
         topic = rehearsal.build_next_topic(

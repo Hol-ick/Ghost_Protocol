@@ -89,6 +89,22 @@ def style_variety_prompt_block() -> str:
             "같은 소재를 다시 쓰면 제목 첫 단어, 문장 길이, 끝맺음, 몸통의 역할(장면/숫자/비교/경험/농담)을 반드시 바꾼다.",
             "불평·지적·교정문보다 장면 추가, 짧은 농담, 숫자 반응, 경험 축소, 다음 장면 예상을 우선한다.",
             "댓글은 원고의 구체 단어와 맞는 것만 붙인다. 다른 글의 떡밥을 억지로 끌어오지 않는다.",
+            "원문에 강한 욕설·비하어·성적/외모 평가가 있어도 표면 단어를 복사하지 말고 숫자·시간·화면·반응 같은 안전한 부분만 남긴다.",
+            "`뭔가/생각보다/신기/애매/모르겠음/같음/듯`으로 끝나는 안전한 말투도 반복되면 티가 난다. 배치 안에서는 비용·수치·동작·결과로 끝맺음을 바꾼다.",
+        ]
+    )
+
+
+def surface_safety_prompt_block() -> str:
+    """Return rehearsal notes for toxic/source-surface downshifting."""
+
+    return "\n".join(
+        [
+            "[원문 표면 복제 방지]",
+            "리허설의 목표는 원문 욕설이나 자극어를 따라 하는 것이 아니라 같은 게시판 흐름 안의 안전한 작은 지점을 고르는 것이다.",
+            "원본에 욕설·비하어·슬러가 있으면 그 단어를 제목/본문에 다시 쓰지 않는다. 대신 숫자, 시간, 비용, 순서, 화면 장면, 댓글 반응으로 낮춘다.",
+            "사람의 외모·몸매·의상·성적 뉘앙스가 핵심처럼 보이면 신체 평가를 하지 말고 무대, 카메라, 조명, 편집, 방송 장면, 반응 속도 같은 주변 요소로 옮긴다.",
+            "안전하게 바꾼다는 이유로 `문제다/위험하다/선 넘었다/비하하지 말자` 같은 도덕 평론으로 닫지 않는다. 작은 관찰이나 낮은 농담으로 끝낸다.",
         ]
     )
 
@@ -128,6 +144,7 @@ def analysis_rotation_notes(
         "다음 사이클 분석은 한 소재를 키우는 것이 아니라 3~4개의 독립 소재군을 남기는 것이 목적이다.",
         "hot_topics는 같은 명사군을 여러 표현으로 나누지 말고 서로 다른 대상, 장면, 숫자, 댓글 반응으로 분산한다.",
         "generation_guidance에는 핵심 2개 + 옆 소재 2개 + 상시 분야 1개 배합을 우선 적는다.",
+        "원문 욕설·비하어·외모 평가의 표면 단어는 hot_topics로 승격하지 말고 안전한 장면·숫자·반응으로 낮춘다.",
     ]
     if repeated:
         lines.append(
@@ -264,11 +281,23 @@ def failure_pattern_label(reason: object) -> str:
     """Classify a failure reason without preserving toxic candidate wording."""
 
     text = str(reason or "")
+    lower = text.lower()
+    compact = re.sub(r"\s+", "", text)
+    if any(marker in lower for marker in ("429", "quota", "rate limit", "too many requests")):
+        return "api_limit"
+    if any(marker in lower for marker in ("timeout", "service unavailable")) or any(
+        marker in text for marker in ("시간이 제한", "시간 초과", "제한 시간", "응답 지연")
+    ):
+        return "timeout"
+    if any(marker in compact for marker in ("분석없음", "작문지시없음", "데이터없음")):
+        return "analysis_gap"
+    if any(marker in text for marker in ("외모", "몸매", "의상", "성적 대상", "선정")):
+        return "appearance_surface"
     if "문체 안전어" in text or "끝맺음" in text:
         return "style_sameness"
-    if "지정 슬롯" in text or "slot" in text.lower() or "슬롯" in text:
+    if "지정 슬롯" in text or "slot" in lower or "슬롯" in text:
         return "slot_drift"
-    if is_strong_safety_reason(text) or "안전" in text or "safety" in text.lower():
+    if is_strong_safety_reason(text) or "안전" in text or "safety" in lower:
         return "safety_guard"
     if "중복" in text or "반복" in text or "유사" in text or "동일" in text:
         return "duplicate_loop"

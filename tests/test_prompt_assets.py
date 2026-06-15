@@ -48,6 +48,9 @@ class PromptAssetTest(unittest.TestCase):
         self.assertIn("사용 맥락", prompt)
         self.assertIn("조건절이나 미완성 연결", prompt)
         self.assertIn("입력에 없는 1인칭 경험", prompt)
+        self.assertIn("욕설·비하어·성적 농담·외모 품평", prompt)
+        self.assertIn("무대, 카메라, 조명, 편집", prompt)
+        self.assertIn("같은 안전어로 끝나는 글", prompt)
 
     def test_generation_prompt_requires_concrete_complete_judgment(self):
         prompt = (PROMPTS / "generate_post.txt").read_text(encoding="utf-8")

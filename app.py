@@ -2873,6 +2873,13 @@ def _batch_gen_worker(
                     anchor_topic=rehearsal_anchor_topic,
                 )
             )
+            rehearsal_intel = rehearsal_flow.normalize_cycle_intel(
+                rehearsal_intel,
+                scripts,
+                gallery_id=gallery_id,
+                anchor_posts=rehearsal_anchor_posts or (),
+                anchor_topic=rehearsal_anchor_topic,
+            )
             rehearsal_next_topic = rehearsal_flow.build_next_topic(
                 rehearsal_intel,
                 scripts,
@@ -2890,6 +2897,12 @@ def _batch_gen_worker(
             q_log(
                 f"[REHEARSAL] 사이클 {rehearsal_cycle}/{cycle_limit} 분석 완료"
             )
+            _fallback_used = rehearsal_intel.get("rehearsal_fallback_used") or []
+            if _fallback_used:
+                q_log(
+                    f"[REHEARSAL] 사이클 {rehearsal_cycle}/{cycle_limit} 분석 폴백 적용: "
+                    f"{', '.join(str(item) for item in _fallback_used)}"
+                )
             if _hot_topic_text:
                 q_log(
                     f"[REHEARSAL] 사이클 {rehearsal_cycle}/{cycle_limit} 다음 주제: "
@@ -2901,10 +2914,19 @@ def _batch_gen_worker(
                     f"{_guidance_preview}"
                 )
         except Exception as exc:
-            rehearsal_next_topic = rehearsal_flow.build_next_topic(
+            rehearsal_intel = rehearsal_flow.normalize_cycle_intel(
                 {},
                 scripts,
                 gallery_id=gallery_id,
+                anchor_posts=rehearsal_anchor_posts or (),
+                anchor_topic=rehearsal_anchor_topic,
+            )
+            rehearsal_next_topic = rehearsal_flow.build_next_topic(
+                rehearsal_intel,
+                scripts,
+                gallery_id=gallery_id,
+                anchor_posts=rehearsal_anchor_posts or (),
+                anchor_topic=rehearsal_anchor_topic,
             )
             q_log(
                 f"[REHEARSAL] 분석 실패 — 원고 제목 기반 안전 폴백 사용: "
