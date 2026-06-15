@@ -55,6 +55,7 @@ from ghost_protocol.domain import gallery_style
 from ghost_protocol.domain import board_rhythm
 from ghost_protocol.domain import naturalness
 from ghost_protocol.domain import comment_targets
+from ghost_protocol.domain import conversation_planner
 from ghost_protocol.domain import writing_enrichment
 from ghost_protocol.domain import lineup as lineup_policy
 from ghost_protocol.domain.validators import validate_slot_diversity
@@ -1489,6 +1490,30 @@ def _batch_gen_worker(
     # HOT ≤ 30% / NEUTRAL ≥ 10% / mutant 1~2개 보장 / 연속 HOT 3회 이상 불가.
     # sentiment_score: 감성 drift 보정 (≤-2 → HOT 상한 절반, mutant 최대)
     # hour: 시간대 리듬 기반 WARM pool 가중치 조정
+    _conversation_plan: dict = {}
+    try:
+        _conversation_plan = conversation_planner.build_conversation_plan(
+            actual_count,
+            topic,
+            gallery_id=gallery_id,
+            source_posts=_enriched_pool,
+            purpose_slot_enabled=purpose_slot_enabled,
+        )
+        _conversation_block = conversation_planner.batch_prompt_block(_conversation_plan)
+        if _conversation_block and "[Conversation Arc]" not in str(topic):
+            topic = f"{topic}\n\n{_conversation_block}"
+        _arc_quotas = _conversation_plan.get("quotas", {})
+        if isinstance(_arc_quotas, dict) and _arc_quotas:
+            _arc_log = ", ".join(
+                f"{_role}={_count}"
+                for _role, _count in _arc_quotas.items()
+                if int(_count or 0) > 0
+            )
+            q_log(f"[BATCH] topic arc planned — {_arc_log}")
+    except Exception as _arc_e:
+        _conversation_plan = {}
+        q_log(f"[BATCH] topic arc fallback — {str(_arc_e)[:80]}")
+
     _wave_lineup = _build_balanced_lineup(
         actual_count,
         sentiment_score=_sentiment_score,
@@ -1557,6 +1582,25 @@ def _batch_gen_worker(
         _wave_topic = topic
         _base_wave_guidance = _wave_plan["guidance"]
         _wave_topic += "\n" + _base_wave_guidance
+        _arc_block = conversation_planner.wave_prompt_block(
+            _conversation_plan,
+            wave,
+            slot=str(_wave_plan.get("slot") or ""),
+            used_titles=_used_titles,
+        )
+        if _arc_block:
+            _wave_topic += "\n" + _arc_block
+            _arc_assignments = _conversation_plan.get("assignments", []) if isinstance(_conversation_plan, dict) else []
+            _arc_assignment = (
+                _arc_assignments[(wave - 1) % len(_arc_assignments)]
+                if isinstance(_arc_assignments, list) and _arc_assignments
+                else {}
+            )
+            q_log(
+                f"[BATCH] arc [{wave}] "
+                f"{_arc_assignment.get('role', 'auto')} / "
+                f"{_arc_assignment.get('stance_key', 'auto')}"
+            )
         _wave_topic += (
             "\n[🫥 내부자 참여 규칙] 글의 목적은 게시판을 평가하거나 바로잡는 것이 아니라 "
             "이미 진행 중인 소재에 한 조각을 보태는 것이다. 불평·불만·책임 추궁·도덕적 반박을 "
