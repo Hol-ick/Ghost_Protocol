@@ -67,6 +67,24 @@ class UiFormattersTest(unittest.TestCase):
         self.assertIn("- 제목: T", text)
         self.assertIn("- #10: 댓글", text)
 
+    def test_script_copy_labels_simulation_only_comment_targets(self):
+        scripts = [{
+            "wave": 1,
+            "persona_name": "Analyst",
+            "tone": "neutral",
+            "title": "T",
+            "content": "C",
+            "target_comments": [
+                {"post_no": "10", "comment": "candidate", "simulation_only": True},
+            ],
+        }]
+
+        plain = format_scripts_for_copy(scripts)
+        markdown = format_scripts_markdown(scripts)
+
+        self.assertIn("#10 (리허설): candidate", plain)
+        self.assertIn("- #10 (리허설): candidate", markdown)
+
     def test_script_markdown_bundle_includes_failed_candidates(self):
         text = format_scripts_markdown(
             [{

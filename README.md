@@ -87,7 +87,8 @@ Use it only in environments where you have permission to collect data and automa
 python -m pytest -q
 ```
 
-Current local verification: `204 passed`.
+Run the command above before publishing or deploying changes. The suite is
+intentionally kept fast enough for routine local verification.
 
 ## GitHub Pages
 
