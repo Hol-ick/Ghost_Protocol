@@ -56,6 +56,7 @@ from ghost_protocol.domain import board_rhythm
 from ghost_protocol.domain import naturalness
 from ghost_protocol.domain import comment_targets
 from ghost_protocol.domain import conversation_planner
+from ghost_protocol.domain import rehearsal_policy
 from ghost_protocol.domain import writing_enrichment
 from ghost_protocol.domain import lineup as lineup_policy
 from ghost_protocol.domain.validators import validate_slot_diversity
@@ -1152,6 +1153,16 @@ def _batch_gen_worker(
     _banned_topics    = _cm.get_banned_topics(_mem)
     _banned_starts    = _cm.get_banned_starts(_mem)
     _banned_title_kws = _cm.get_banned_title_keywords(_mem)
+    _soft_cooldown_topics: list[str] = []
+    _soft_cooldown_title_kws: list[str] = []
+    if rehearsal:
+        # Rehearsal is diagnostic. Treat repeated normal topics as cooldown
+        # signals instead of hard bans, otherwise the loop produces mostly
+        # empty waves and cannot show how topics naturally evolve.
+        _soft_cooldown_topics = list(_banned_topics)
+        _soft_cooldown_title_kws = list(_banned_title_kws)
+        _banned_topics = []
+        _banned_title_kws = []
     _sentiment_score  = _cm.get_sentiment_score(_mem)
     _topic_ages       = _cm.get_topic_ages(_mem)
     if _topic_ages:
@@ -1242,6 +1253,20 @@ def _batch_gen_worker(
         )
         q_log(f"[CYCLE-MEM] 📰 제목 키워드 금지 {len(_banned_title_kws)}개: {_title_kw_str}")
 
+    if rehearsal:
+        _soft_block = rehearsal_policy.soft_cooldown_prompt_block(
+            topics=_soft_cooldown_topics,
+            title_keywords=_soft_cooldown_title_kws,
+            starts=_banned_starts,
+        )
+        if _soft_block:
+            topic = f"{topic}\n{_soft_block}"
+            q_log(
+                "[REHEARSAL] 소프트 쿨다운 적용 — "
+                f"topics={len(_soft_cooldown_topics)} title_terms={len(_soft_cooldown_title_kws)}"
+            )
+        topic = f"{topic}\n{rehearsal_policy.style_variety_prompt_block()}"
+
     _drift_streak = _mem.get("drift_streak", 0)
     if _sentiment_score <= _cm.DRIFT_THRESHOLD:
         q_log(f"[CYCLE-MEM] 🌡️ 감성 drift 감지 (score={_sentiment_score}, 연속={_drift_streak}) — HOT 상한 절반, mutant 최대 적용")
@@ -1253,16 +1278,30 @@ def _batch_gen_worker(
         _stale = [k for k, v in _topic_ages.items() if v >= 5]
         if _stale:
             _stale_str = ", ".join(_stale)
-            topic += (
-                f"\n[⏳ 장기 화제 피로 경고] 다음 소재는 {5}사이클 이상 반복된 낡은 떡밥입니다: {_stale_str}. "
-                "이 소재는 가급적 피하고 신선한 각도나 완전히 새로운 화제를 우선하세요."
-            )
-            q_log(f"[CYCLE-MEM] ⏳ 장기 화제 피로 경고 주입: {_stale_str}")
+            if rehearsal:
+                topic += (
+                    f"\n[⏳ 리허설 장기 화제 피로] {_stale_str} 소재는 오래 반복됐다. "
+                    "금지하지 말고, 같은 명사·같은 질문·같은 결론만 피한다. "
+                    "원본 앵커에 있는 다른 장면이나 상시 분야 슬롯을 섞어 흐름을 넓힌다."
+                )
+                q_log(f"[REHEARSAL] ⏳ 장기 화제 소프트 피로 신호: {_stale_str}")
+            else:
+                topic += (
+                    f"\n[⏳ 장기 화제 피로 경고] 다음 소재는 {5}사이클 이상 반복된 낡은 떡밥입니다: {_stale_str}. "
+                    "이 소재는 가급적 피하고 신선한 각도나 완전히 새로운 화제를 우선하세요."
+                )
+                q_log(f"[CYCLE-MEM] ⏳ 장기 화제 피로 경고 주입: {_stale_str}")
 
     # ── 자기강화 피드백 루프 차단 — 동일 소재의 관점 분산 ───────────────
     # 화제를 강제로 갈아타면 게시판 흐름과 동떨어진 글이 된다. 원본 데이터
     # 안에서 장면·행동·판단·결과를 나눠 같은 말의 복제만 막는다.
-    _total_bans = len(_banned_topics) + len(_banned_starts) + len(_banned_title_kws)
+    _total_bans = (
+        len(_banned_topics)
+        + len(_banned_starts)
+        + len(_banned_title_kws)
+        + len(_soft_cooldown_topics)
+        + len(_soft_cooldown_title_kws)
+    )
     if _total_bans >= 2:
         topic += (
             "\n[🔄 관점 분산] 현재 화제를 억지로 버리지 마세요. 수집된 원본 안에서 "
@@ -1498,6 +1537,7 @@ def _batch_gen_worker(
             gallery_id=gallery_id,
             source_posts=_enriched_pool,
             purpose_slot_enabled=purpose_slot_enabled,
+            rehearsal_mode=rehearsal,
         )
         _conversation_block = conversation_planner.batch_prompt_block(_conversation_plan)
         if _conversation_block and "[Conversation Arc]" not in str(topic):
@@ -1856,20 +1896,31 @@ def _batch_gen_worker(
                     and _slot_clean != _expected_slot
                     and not _context_fallback_slot
                 ):
-                    if attempt < 2:
+                    if rehearsal and rehearsal_policy.allow_rehearsal_slot_drift(
+                        expected_slot=_expected_slot,
+                        observed_slot=_slot_clean,
+                        title=result.get("title"),
+                        content=result.get("content"),
+                    ):
+                        q_log(
+                            f"[REHEARSAL] 🎚️ [{wave}] 슬롯 이탈 관찰 "
+                            f"({_slot_clean}≠{_expected_slot}) — 후보 유지"
+                        )
+                    elif attempt < 2:
                         q_log(
                             f"[BATCH] 🎚️ [{wave}] 슬롯 이탈 "
                             f"({_slot_clean}≠{_expected_slot}) — 재시도 ({attempt+1}/3)"
                         )
                         continue
-                    q_log(f"[BATCH] 🎚️ [{wave}] 슬롯 이탈 반복 — 이 Wave 스킵")
-                    gen_title = None
-                    gen_content = ""
-                    _failure_reason = (
-                        f"지정 슬롯 {_expected_slot} 대신 "
-                        f"{_slot_clean or '미상'}을 사용했습니다."
-                    )
-                    break
+                    else:
+                        q_log(f"[BATCH] 🎚️ [{wave}] 슬롯 이탈 반복 — 이 Wave 스킵")
+                        gen_title = None
+                        gen_content = ""
+                        _failure_reason = (
+                            f"지정 슬롯 {_expected_slot} 대신 "
+                            f"{_slot_clean or '미상'}을 사용했습니다."
+                        )
+                        break
                 if _context_fallback_slot:
                     q_log(
                         f"[BATCH] 🎚️ [{wave}] 슬롯 {_slot_clean}을 "
@@ -1940,7 +1991,12 @@ def _batch_gen_worker(
                     )
                 )
                 if _wave_plan.get("slot") == "G" and not _matches_purpose_slot:
-                    if attempt < 2:
+                    if rehearsal:
+                        q_log(
+                            f"[REHEARSAL] 🛰️ [{wave}] 본래 주제 슬롯 미충족 — "
+                            "진단 후보로 유지"
+                        )
+                    elif attempt < 2:
                         q_log(
                             f"[BATCH] 🛰️ [{wave}] 갤러리 본래 주제 누락 — "
                             f"재시도 ({attempt+1}/3)"
@@ -1954,7 +2010,12 @@ def _batch_gen_worker(
                         _should_skip_wave = True
 
                 if _wave_plan.get("slot") == "R" and not _matches_source_slot:
-                    if attempt < 2:
+                    if rehearsal:
+                        q_log(
+                            f"[REHEARSAL] 🗂️ [{wave}] 최근 글 슬롯 미충족 — "
+                            "진단 후보로 유지"
+                        )
+                    elif attempt < 2:
                         q_log(
                             f"[BATCH] 🗂️ [{wave}] 실제 최근 글 소재 누락 — "
                             f"재시도 ({attempt+1}/3)"
@@ -2426,7 +2487,8 @@ def _batch_gen_worker(
                 # ── 통합 재시도 판정 ─────────────────────────────────────
                 if _should_skip_wave:
                     q_log(f"[BATCH] ⛔ [{wave}] 금지 위반 스킵 — 대본 생성 중단")
-                    _failure_reason = "검증 규칙을 반복해서 통과하지 못했습니다."
+                    if not _failure_reason or _failure_reason == "생성 결과가 검증을 통과하지 못했습니다.":
+                        _failure_reason = "검증 규칙을 반복해서 통과하지 못했습니다."
                     gen_title = None
                     gen_content = ""
                     break
@@ -2471,14 +2533,22 @@ def _batch_gen_worker(
                                 )
                                 continue
                             else:
-                                q_log(
-                                    f"[BATCH] 🧠 [{wave}] Judge 3회 거부: "
-                                    f"{_judge_reason[:60]} — 이 Wave 스킵"
-                                )
-                                _failure_reason = _judge_reason
-                                gen_title = None
-                                gen_content = ""
-                                break
+                                if rehearsal and not _safety_judge_hit:
+                                    q_log(
+                                        f"[REHEARSAL] 🧠 [{wave}] Judge 품질 거부 관찰: "
+                                        f"{_judge_reason[:60]} — 후보 유지"
+                                    )
+                                else:
+                                    q_log(
+                                        f"[BATCH] 🧠 [{wave}] Judge 3회 거부: "
+                                        f"{_judge_reason[:60]} — 이 Wave 스킵"
+                                    )
+                                    _failure_reason = _judge_reason
+                                    gen_title = None
+                                    gen_content = ""
+                                    break
+                        if gen_title is None:
+                            break
                         # Judge가 제목 수정을 제안한 경우 적용
                         _fixed = _verdict.get("fixed_title")
                         if _fixed and isinstance(_fixed, str) and _fixed.strip():

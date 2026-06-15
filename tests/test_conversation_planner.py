@@ -80,3 +80,26 @@ def test_role_quota_keeps_main_thread_below_half_when_side_topics_exist():
     assert counts["main_thread"] <= 5
     assert counts["side_thread"] >= 2
     assert len(plan["assignments"]) == 10
+
+
+def test_rehearsal_plan_widens_source_and_gallery_roles():
+    topic = "[A: ballot error] / [B: margin debt] / [C: basic income]"
+    posts = [
+        {"title": "외행성 사진 화질 좋아짐", "content": "작은 장면"},
+        {"title": "간식 사진 올라옴", "content": "낮은 소재"},
+        {"title": "점심 뭐 먹냐", "content": "생활 소재"},
+    ]
+
+    plan = conversation_planner.build_conversation_plan(
+        10,
+        topic,
+        gallery_id="universe",
+        source_posts=posts,
+        rehearsal_mode=True,
+    )
+    counts = Counter(a["role"] for a in plan["assignments"])
+
+    assert plan["rehearsal_mode"] is True
+    assert counts["main_thread"] <= 3
+    assert counts["side_thread"] >= 3
+    assert counts["gallery_axis"] >= 2

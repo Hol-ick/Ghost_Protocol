@@ -14,6 +14,7 @@ from typing import Any
 
 from ghost_protocol import content_filter
 from ghost_protocol.domain import gallery_purpose
+from ghost_protocol.domain import rehearsal_policy
 
 
 DEFAULT_CYCLE_LIMIT = 3
@@ -118,6 +119,7 @@ def build_analysis_payload(
     """Build the same lightweight shape used by ``GhostBrain.analyze_trend``."""
 
     valid = [item for item in scripts if not item.get("_failed")]
+    failed = [item for item in scripts if item.get("_failed")]
     anchors = _clean_anchor_posts(anchor_posts)
     low_success = len(valid) < LOW_SUCCESS_MIN_VALID
     titles = [
@@ -171,6 +173,10 @@ def build_analysis_payload(
         "rehearsal_valid_count": len(valid),
         "rehearsal_anchor_count": len(anchor_slice),
         "rehearsal_anchor_topic": str(anchor_topic or "").strip(),
+        "rehearsal_failure_patterns": [
+            rehearsal_policy.failure_pattern_label(item.get("_failure_reason"))
+            for item in failed
+        ],
     }
 
 
@@ -194,6 +200,15 @@ def _successful_titles(scripts: list[dict], *, limit: int = 8) -> list[str]:
         for item in scripts
         if not item.get("_failed") and str(item.get("title") or "").strip()
     ][:limit]
+
+
+def _failure_patterns(scripts: list[dict], *, limit: int = 5) -> list[str]:
+    counter: Counter[str] = Counter()
+    for item in scripts:
+        if not item.get("_failed"):
+            continue
+        counter[rehearsal_policy.failure_pattern_label(item.get("_failure_reason"))] += 1
+    return [f"{label} {count}회" for label, count in counter.most_common(limit)]
 
 
 def _clean_rehearsal_text(text: Any, *, gallery_id: str = "") -> str:
@@ -234,6 +249,7 @@ def build_next_topic(
         analysis = "직전 리허설 원고에서 이어갈 소재: " + " / ".join(titles[:5])
 
     repeated = _repeated_terms(scripts)
+    failure_patterns = _failure_patterns(scripts)
     sample_titles = _successful_titles(scripts)
     valid_count, total_count, success_ratio = _success_stats(scripts)
     anchors = _clean_anchor_posts(anchor_posts, limit=12)
@@ -285,6 +301,17 @@ def build_next_topic(
                 "위 명사는 다음 사이클 제목에서 각각 0~1회만 사용한다. 같은 명사를 반복해야 한다면 원고를 실패 처리하고 다른 슬롯의 장면·수치·결과로 이동한다.",
             ]
         )
+    if failure_patterns:
+        parts.extend(
+            [
+                "",
+                "[직전 실패 패턴]",
+                " / ".join(failure_patterns),
+                "실패 후보의 문구를 살리지 말고, 실패한 구조만 피한다.",
+                "slot_drift는 소재가 완전히 틀렸다는 뜻이 아니라 배합이 뻣뻣했다는 신호다. 다음 사이클에서는 원본 앵커의 다른 장면을 더 많이 쓴다.",
+                "duplicate_loop나 meta_reaction이 많으면 같은 명사 질문을 중단하고, 작은 사물·시간·숫자·이미지 장면으로 바꾼다.",
+            ]
+        )
     if success_ratio < 0.6:
         parts.extend(
             [
@@ -294,6 +321,7 @@ def build_next_topic(
                 "성공 원고가 5개 미만이면 생성 원고보다 원본 게시글 스냅샷 앵커를 먼저 신뢰한다.",
                 "다음 사이클은 직전 성공 제목을 말바꾸기하지 말고 [R]/[G]/서브 슬롯을 먼저 써서 소재 폭을 회복한다.",
                 "실패가 반복된 민감 소재는 반박문으로 살리지 말고 안전한 원본 장면 또는 상시 분야 장면으로 대체한다.",
+                "정상적인 원본 소재를 '금지 화제'처럼 버리지 말고 소프트 쿨다운으로 다룬다. 같은 제목 구조만 피한다.",
             ]
         )
     parts.extend(
@@ -304,6 +332,8 @@ def build_next_topic(
             "- 직전 사이클에서 한 소재가 과점했으면 같은 소재의 질문·불평·지적 글을 중단하고, 다른 슬롯의 독립 장면으로 흘린다.",
             "- 주제 전환은 '왜 이 얘기함'이 아니라 새 구체 소재를 조용히 시작하는 방식으로 한다.",
             "- 제목이 질문형이면 배치 전체에서 최대 1개만 허용한다. 나머지는 평서형 장면 반응으로 쓴다.",
+            "- 불평/지적/교정은 배치의 중심이 아니다. 가능한 경우 관찰, 추가 정보, 농담, 개인 스케일, 다음 장면 예상으로 바꾼다.",
+            "- 이전 성공 제목의 핵심 명사를 다시 쓰려면 본문에 새 정보 하나를 반드시 더한다. 새 정보가 없으면 다른 앵커 글로 이동한다.",
             "",
             "[리허설 전용 규칙]",
             "이 입력은 직전 리허설 원고와 최초 원본 게시글 앵커를 함께 분석한 결과다.",

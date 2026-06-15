@@ -61,6 +61,7 @@ class RehearsalFlowTest(unittest.TestCase):
         self.assertEqual(payload["rehearsal_valid_count"], 1)
         self.assertEqual(payload["rehearsal_anchor_count"], 1)
         self.assertEqual(payload["rehearsal_anchor_topic"], "original briefing")
+        self.assertIn("validation", payload["rehearsal_failure_patterns"])
         self.assertTrue(
             any(post.get("source") == "original_board_anchor" for post in payload["raw_posts"])
         )
@@ -139,6 +140,36 @@ class RehearsalFlowTest(unittest.TestCase):
         self.assertIn("[원본 게시글 스냅샷 앵커]", topic)
         self.assertIn("코라마 화질 오늘 좋네", topic)
         self.assertIn("원본 게시글 스냅샷 앵커를 먼저 신뢰", topic)
+
+    def test_next_topic_summarizes_failure_patterns_without_candidate_text(self):
+        topic = rehearsal.build_next_topic(
+            {
+                "ai_analysis": "직전 원고는 외행성 사진과 시위 반응이 섞였다.",
+            },
+            [
+                {"title": "외행성 사진 화질", "content": "좋아짐"},
+                {
+                    "_failed": True,
+                    "title": "독성 후보 제목",
+                    "content": "독성 후보 본문",
+                    "_failure_reason": "지정 슬롯 R 대신 A을 사용했습니다.",
+                },
+                {
+                    "_failed": True,
+                    "title": "반복 후보 제목",
+                    "content": "반복 후보 본문",
+                    "_failure_reason": "배치 내 기존 제목과 의미적으로 동일한 글입니다.",
+                },
+            ],
+            gallery_id="universe",
+            anchor_posts=[{"title": "로또 1만개 당첨이면 금액 남음", "content": ""}],
+        )
+
+        self.assertIn("[직전 실패 패턴]", topic)
+        self.assertIn("slot_drift 1회", topic)
+        self.assertIn("duplicate_loop 1회", topic)
+        self.assertIn("실패 후보의 문구를 살리지 말고", topic)
+        self.assertNotIn("독성 후보 제목", topic)
 
     def test_markdown_contains_all_cycles_and_failed_candidates(self):
         text = rehearsal.format_markdown(

@@ -248,6 +248,47 @@ def _role_quotas(total_count: int, available_roles: Iterable[str]) -> dict[str, 
     return quotas
 
 
+def _rehearsal_role_quotas(total_count: int, available_roles: Iterable[str]) -> dict[str, int]:
+    """Return wider role quotas for rehearsal diagnostics.
+
+    Rehearsal should expose whether the loop can recover breadth. Keeping the
+    live-mode hot-thread ratio here makes each cycle overfit to the last
+    successful titles, so side/source/gallery roles get more room.
+    """
+
+    total = max(1, int(total_count or 1))
+    roles = set(available_roles)
+    if not roles:
+        return {"main_thread": total}
+    desired = {
+        "main_thread": max(1, round(total * 0.25)),
+        "side_thread": max(0, round(total * 0.35)),
+        "gallery_axis": max(0, math.ceil(total * 0.25)),
+        "casual_detail": max(0, round(total * 0.15)),
+    }
+    for role in list(desired):
+        if role not in roles:
+            desired["side_thread" if "side_thread" in roles else "main_thread"] = (
+                desired.get("side_thread" if "side_thread" in roles else "main_thread", 0)
+                + desired[role]
+            )
+            desired[role] = 0
+    quotas = {role: 0 for role in roles}
+    assigned = 0
+    for role in ("main_thread", "side_thread", "gallery_axis", "casual_detail"):
+        if role in roles:
+            quotas[role] = min(total - assigned, max(0, desired.get(role, 0)))
+            assigned += quotas[role]
+    while assigned < total:
+        for role in ("side_thread", "gallery_axis", "casual_detail", "main_thread"):
+            if role in quotas:
+                quotas[role] += 1
+                assigned += 1
+                if assigned >= total:
+                    break
+    return quotas
+
+
 def _role_schedule(total_count: int, quotas: dict[str, int]) -> list[str]:
     order = [
         "main_thread",
@@ -277,6 +318,7 @@ def build_conversation_plan(
     gallery_id: str = "",
     source_posts: Iterable[dict] = (),
     purpose_slot_enabled: bool = True,
+    rehearsal_mode: bool = False,
 ) -> dict:
     """Return a deterministic, gallery-agnostic conversation arc."""
 
@@ -308,7 +350,11 @@ def build_conversation_plan(
         items_by_role["main_thread"] = fallback
         available_roles = ["main_thread"]
 
-    quotas = _role_quotas(total, available_roles)
+    quotas = (
+        _rehearsal_role_quotas(total, available_roles)
+        if rehearsal_mode
+        else _role_quotas(total, available_roles)
+    )
     schedule = _role_schedule(total, quotas)
     assignments: list[dict] = []
     role_counts: Counter[str] = Counter()
@@ -336,6 +382,7 @@ def build_conversation_plan(
         "total_count": total,
         "quotas": quotas,
         "assignments": assignments,
+        "rehearsal_mode": bool(rehearsal_mode),
     }
 
 
@@ -357,6 +404,7 @@ def batch_prompt_block(plan: dict | None) -> str:
             "- Complaint/critique posts should stay below one third of the batch.",
             "- Prefer detail, small consequence, aside, soft counter, or a quiet standalone post.",
             "- Side and gallery-axis posts must not explain why the board needs variety.",
+            "- If the previous cycle had many failures, prefer source-anchor scenes over broad issue labels.",
         ]
     )
 
