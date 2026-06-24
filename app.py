@@ -4131,6 +4131,24 @@ def _render_source_sampling_panel() -> None:
 
     st.markdown('<div class="utility-section-title">샘플링</div>', unsafe_allow_html=True)
     st.caption("여러 게시판의 제목·본문·댓글 원본을 읽기 전용으로 모아 Markdown으로 복사합니다.")
+    _sample_default_type = ui_options.gallery_type_for_label(
+        st.session_state.get("sample_gallery_type", ui_options.DEFAULT_GALLERY_TYPE_LABEL)
+    )
+    _selected_sample_specs = source_sampler.parse_gallery_specs(
+        st.session_state.get("sample_gallery_ids", ""),
+        default_type=_sample_default_type,
+    )
+    if _selected_sample_specs:
+        _sample_tokens = source_sampler.format_gallery_specs_input(_selected_sample_specs).replace("\n", " · ")
+        st.caption(f"샘플 대상 {len(_selected_sample_specs)}개: {_sample_tokens}")
+        st.button(
+            "샘플 목록 비우기",
+            key="source_sample_clear_btn",
+            use_container_width=True,
+            on_click=_clear_sample_gallery_input,
+        )
+    else:
+        st.caption("최근/관리의 `+ 샘플` 버튼을 여러 번 눌러 샘플링 대상을 누적할 수 있습니다.")
     st.text_area(
         "샘플링할 갤러리 ID",
         key="sample_gallery_ids",
@@ -5238,6 +5256,32 @@ def _apply_quick_pick(kind: str, payload: dict) -> None:
     st.session_state["intel_type_label"] = type_label
 
 
+def _add_quick_pick_to_sample_input(payload: dict) -> None:
+    """Append a recent/history gallery to the multi-gallery sampler input."""
+
+    gallery_id = str(payload.get("gallery_id", "") or "").strip()
+    if not gallery_id:
+        return
+    type_label = ui_options.normalize_gallery_type_label(
+        payload.get("type_label", ui_options.DEFAULT_GALLERY_TYPE_LABEL)
+    )
+    gallery_type = ui_options.gallery_type_for_label(type_label)
+    default_type = ui_options.gallery_type_for_label(
+        st.session_state.get("sample_gallery_type", ui_options.DEFAULT_GALLERY_TYPE_LABEL)
+    )
+    st.session_state["sample_gallery_ids"] = source_sampler.add_gallery_spec(
+        st.session_state.get("sample_gallery_ids", ""),
+        gallery_id,
+        gallery_type,
+        default_type=default_type,
+    )
+    st.toast(f"샘플 목록에 추가: {gallery_id}", icon="➕")
+
+
+def _clear_sample_gallery_input() -> None:
+    st.session_state["sample_gallery_ids"] = ""
+
+
 def _toggle_recent_manage() -> None:
     st.session_state["_recent_manage_open"] = not st.session_state.get("_recent_manage_open", False)
 
@@ -5269,13 +5313,24 @@ def _render_recent_manage_panel() -> None:
         _hcols = st.columns(2, gap="small")
         for _hi, (_kind, _label, _payload) in enumerate(_quick_items):
             with _hcols[_hi % len(_hcols)]:
-                st.button(
-                    _label,
-                    key=f"quick_pick_{_kind}_{_hi}",
-                    use_container_width=True,
-                    on_click=_apply_quick_pick,
-                    args=(_kind, _payload),
-                )
+                _pick_cols = st.columns([0.72, 0.28], gap="small")
+                with _pick_cols[0]:
+                    st.button(
+                        _label,
+                        key=f"quick_pick_{_kind}_{_hi}",
+                        use_container_width=True,
+                        on_click=_apply_quick_pick,
+                        args=(_kind, _payload),
+                    )
+                with _pick_cols[1]:
+                    st.button(
+                        "+ 샘플",
+                        key=f"sample_quick_pick_{_kind}_{_hi}",
+                        use_container_width=True,
+                        help="이 갤러리를 샘플 크롤링 목록에 추가합니다.",
+                        on_click=_add_quick_pick_to_sample_input,
+                        args=(_payload,),
+                    )
     else:
         st.markdown('<div class="utility-empty">아직 최근 기록이 없습니다.</div>', unsafe_allow_html=True)
 

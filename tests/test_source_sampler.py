@@ -21,6 +21,19 @@ def test_parse_gallery_specs_accepts_multiple_forms() -> None:
     ]
 
 
+def test_add_gallery_spec_appends_canonical_tokens_without_duplicates() -> None:
+    raw = "universe\nboardgame:mgallery"
+
+    updated = source_sampler.add_gallery_spec(raw, "baseball_new13", "board")
+    updated = source_sampler.add_gallery_spec(updated, "boardgame", "mgallery")
+
+    assert updated.splitlines() == [
+        "universe:mgallery",
+        "boardgame:mgallery",
+        "baseball_new13:board",
+    ]
+
+
 def test_collect_samples_uses_each_gallery_spec() -> None:
     calls: list[tuple[str, str, int, int, int]] = []
 

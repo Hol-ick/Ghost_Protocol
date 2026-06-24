@@ -69,6 +69,53 @@ def parse_gallery_specs(
     return specs
 
 
+def format_gallery_spec_token(gallery_id: str, gallery_type: str = "mgallery") -> str:
+    """Format a gallery spec for the sampler input box."""
+
+    clean_id = re.sub(r"[^0-9A-Za-z_]", "", str(gallery_id or "").strip())
+    clean_type = str(gallery_type or "").strip().lower()
+    if clean_type not in VALID_GALLERY_TYPES:
+        clean_type = "mgallery"
+    if not clean_id:
+        return ""
+    return f"{clean_id}:{clean_type}"
+
+
+def format_gallery_specs_input(specs: list[GallerySampleSpec]) -> str:
+    """Return the canonical multi-line sampler input text."""
+
+    return "\n".join(
+        token
+        for token in (format_gallery_spec_token(spec.gallery_id, spec.gallery_type) for spec in specs)
+        if token
+    )
+
+
+def add_gallery_spec(
+    raw: str,
+    gallery_id: str,
+    gallery_type: str = "mgallery",
+    *,
+    default_type: str = "mgallery",
+) -> str:
+    """Append a gallery spec to existing sampler text without duplicating it."""
+
+    specs = parse_gallery_specs(raw, default_type=default_type)
+    new_token = format_gallery_spec_token(gallery_id, gallery_type)
+    if not new_token:
+        return format_gallery_specs_input(specs)
+
+    new_spec = parse_gallery_specs(new_token, default_type=default_type)
+    if not new_spec:
+        return format_gallery_specs_input(specs)
+    candidate = new_spec[0]
+
+    seen = {(spec.gallery_id, spec.gallery_type) for spec in specs}
+    if (candidate.gallery_id, candidate.gallery_type) not in seen:
+        specs.append(candidate)
+    return format_gallery_specs_input(specs)
+
+
 def _clean_line(value: Any, *, limit: int = 240) -> str:
     text = " ".join(str(value or "").split())
     if len(text) > limit:
