@@ -580,6 +580,7 @@ class GhostBrain:
             for block in (base_comment_enrichment_block, comment_variation_block)
             if block
         )
+        shared_writing_contract = pm.render("shared_writing_contract.txt")
 
         if recent_posts:
             # Phase 9: 댓글 길이 룰 랜덤 선택 — 봇마다 대사 길이 변주
@@ -603,6 +604,7 @@ class GhostBrain:
                 posts_context="\n".join(_posts_formatted),
                 length_rule=_comment_length_rule,
                 comment_enrichment_block=comment_enrichment_block,
+                shared_writing_contract=shared_writing_contract,
             )
         else:
             recent_posts_context = ""
@@ -632,6 +634,7 @@ class GhostBrain:
                 recent_posts_context=recent_posts_context,
                 composition_profile_block=composition_profile_block,
                 comment_enrichment_block=comment_enrichment_block,
+                shared_writing_contract=shared_writing_contract,
             )
         )
 

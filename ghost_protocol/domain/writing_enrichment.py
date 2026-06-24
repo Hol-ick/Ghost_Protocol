@@ -290,7 +290,7 @@ def comment_rules_from_profile(profile: dict) -> list[str]:
         rules.append("Use one compact sentence unless the target post already has a two-line comment rhythm.")
 
     rules.append(
-        "The comment should feel lower-stakes than the post: agreement, tiny objection, added detail, or dry aside."
+        "The comment should share the post-writing contract but stay lower-stakes: prefer added detail, tiny objection, cost/time/rule friction, or dry aside over plain agreement."
     )
     rules.append(
         "Across a batch, aim for comments on roughly half of publishable drafts when suitable targets exist. Use 1 comment by default and 2 only when both targets clearly share the draft's object."
@@ -334,6 +334,9 @@ def comment_prompt_block(profile: dict | None) -> str:
     )
     lines.append(
         "- Active comment mode: if the target pool contains a post about the same game/card/rule/price/number/scene, write one compact comment instead of leaving target_comments empty."
+    )
+    lines.append(
+        "- Do not make agreement the default. If a comment agrees, it must also add one target-specific noun, number, rule, price, or scene."
     )
     return "\n".join(lines)
 
@@ -484,6 +487,68 @@ _VOICE_LANE_RULES.update(
     }
 )
 
+_COMMENT_MOVE_RULES: dict[str, str] = {
+    "detail": (
+        "Comment move DETAIL: add one small target-specific detail such as a card name, "
+        "component, price, player count, turn step, photo state, or storage issue."
+    ),
+    "counter": (
+        "Comment move SMALL COUNTER: push back with one condition or exception. "
+        "Do not turn it into a debate opener."
+    ),
+    "friction": (
+        "Comment move FRICTION: react through time, money, cleanup, shipping, table space, "
+        "rule lookup, sleeve/storage, or replay burden."
+    ),
+    "rule_hook": (
+        "Comment move RULE/COMPONENT: attach to a rule, card effect, component, expansion, "
+        "edition, or setup detail instead of broad agreement."
+    ),
+    "aside": (
+        "Comment move DRY ASIDE: leave a small joke or aftertaste tied to the target object. "
+        "Avoid generic 'same' or 'true' reactions."
+    ),
+    "next_step": (
+        "Comment move NEXT STEP: suggest one tiny action such as checking condition, player count, "
+        "rulebook wording, price history, or a photo angle."
+    ),
+}
+
+
+def choose_comment_move(
+    profile: dict | None,
+    *,
+    rng: _random.Random | object | None = None,
+) -> str:
+    """Choose a per-comment action so target comments do not collapse into agreement."""
+
+    profile = profile or {}
+    avg_comment_len = float(profile.get("avg_comment_len", 0.0) or 0.0)
+    long_ratio = float(profile.get("long_comment_ratio", 0.0) or 0.0)
+    if long_ratio >= 0.12 or avg_comment_len >= 65:
+        return _weighted_pick(
+            [
+                ("detail", 0.25),
+                ("counter", 0.18),
+                ("friction", 0.20),
+                ("rule_hook", 0.17),
+                ("aside", 0.10),
+                ("next_step", 0.10),
+            ],
+            rng=rng,
+        )
+    return _weighted_pick(
+        [
+            ("detail", 0.25),
+            ("counter", 0.16),
+            ("friction", 0.20),
+            ("rule_hook", 0.18),
+            ("aside", 0.14),
+            ("next_step", 0.07),
+        ],
+        rng=rng,
+    )
+
 
 def generation_variation_block(
     profile: dict | None,
@@ -570,9 +635,12 @@ def comment_variation_block(
     if not isinstance(profile, dict) or int(profile.get("sample_size", 0) or 0) <= 0:
         return ""
     voice_lane = choose_voice_lane(profile, rng=rng)
+    comment_move = choose_comment_move(profile, rng=rng)
     lines = [
         "[This Comment Variation]",
         f"- {_VOICE_LANE_RULES.get(voice_lane, _VOICE_LANE_RULES['mixed'])}",
+        f"- {_COMMENT_MOVE_RULES.get(comment_move, _COMMENT_MOVE_RULES['detail'])}",
         "- A longer comment is allowed only when it follows a concrete target-post detail; otherwise keep it short or return an empty array.",
+        "- Plain agreement alone is not enough; add a concrete noun, number, rule, cost, or scene from the target post.",
     ]
     return "\n".join(lines)

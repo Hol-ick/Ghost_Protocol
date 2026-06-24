@@ -75,6 +75,31 @@ def test_dense_comment_profile_attaches_to_detail():
     assert profile["comment_presence_ratio"] == 1
     assert "concrete detail" in block
     assert "roughly half" in block
+    assert "agreement the default" in block
+
+
+def test_comment_variation_includes_comment_move_not_plain_agreement():
+    raw = {
+        "raw_posts": [
+            {
+                "title": "금제 발표후 제일 불쌍한 카드",
+                "content": "본문",
+                "comments": ["무명자는 금지 가면 덱이 아예 바뀌긴 함"],
+            },
+            {
+                "title": "블매걸 psa 등급부터 봐야함",
+                "content": "본문",
+                "comments": ["상태랑 등급 차이가 가격 거의 다 먹음"],
+            },
+        ]
+    }
+
+    profile = writing_enrichment.build_composition_profile(raw)
+    block = writing_enrichment.comment_variation_block(profile, rng=random.Random(3))
+
+    assert "[This Comment Variation]" in block
+    assert "Comment move" in block
+    assert "Plain agreement alone is not enough" in block
 
 
 def test_generation_variation_can_select_fuller_lane_from_long_sources():

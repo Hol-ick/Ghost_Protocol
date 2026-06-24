@@ -66,12 +66,26 @@ class PromptAssetTest(unittest.TestCase):
         self.assertIn("뜻풀이 질문", prompt)
         self.assertIn("빈 배열보다 1개 짧은 댓글을 우선", prompt)
         self.assertIn("댓글 1개를 기본값", prompt)
+        self.assertIn("$shared_writing_contract", prompt)
+        self.assertIn("동조는 기본값이 아니다", prompt)
+        self.assertIn("작은 독립 정보나 각도", prompt)
 
     def test_generation_prompt_prefers_aligned_target_comments(self):
         prompt = (PROMPTS / "generate_post.txt").read_text(encoding="utf-8")
         self.assertIn("target_comments를 비우지 말고 1개를 우선", prompt)
         self.assertIn("같은 게임명·카드·룰·가격·숫자·장면", prompt)
         self.assertIn("최대 2개까지", prompt)
+        self.assertIn("$shared_writing_contract", prompt)
+
+    def test_shared_writing_contract_is_used_by_post_and_comment_prompts(self):
+        shared = (PROMPTS / "shared_writing_contract.txt").read_text(encoding="utf-8")
+        post_prompt = (PROMPTS / "generate_post.txt").read_text(encoding="utf-8")
+        comment_prompt = (PROMPTS / "generate_comment.txt").read_text(encoding="utf-8")
+
+        self.assertIn("게시글과 댓글은 같은 대화 세계", shared)
+        self.assertIn("기본 동작은 공감이 아니다", shared)
+        self.assertIn("$shared_writing_contract", post_prompt)
+        self.assertIn("$shared_writing_contract", comment_prompt)
 
     def test_humblebragger_does_not_invent_prior_experience(self):
         profiles = _load("persona_profiles.json")
