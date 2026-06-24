@@ -72,3 +72,20 @@ def test_universe_style_identity_is_not_exact_gallery_context():
 
     assert "universe" not in contexts
     assert gallery_style.static_context_for("universe")["gallery_name"] == "우주·천문 계열"
+
+
+def test_boardgame_profile_uses_token_inferred_domain_name():
+    profile = gallery_style.build_style_profile(
+        {
+            "gallery_id": "boardgame",
+            "titles": [
+                "마피아 게임중에 존잼겜 추천점요",
+                "무명자 카드 금제 다시 봐야함",
+                "보드게임 카페 테이블 회전 이거 중요함",
+            ],
+            "comments": ["스파이폴은 인원수랑 멤버빨이 좀 큼"],
+        }
+    )
+
+    assert profile["gallery_name"] == "보드게임 계열"
+    assert "갤러리별 문체 프로필 — 보드게임 계열" in gallery_style.prompt_block(profile)

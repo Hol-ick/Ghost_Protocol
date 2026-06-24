@@ -100,6 +100,7 @@ def test_comment_variation_includes_comment_move_not_plain_agreement():
     assert "[This Comment Variation]" in block
     assert "Comment move" in block
     assert "Plain agreement alone is not enough" in block
+    assert "hedge-only endings" in block
 
 
 def test_generation_variation_can_select_fuller_lane_from_long_sources():
@@ -128,6 +129,7 @@ def test_generation_variation_can_select_fuller_lane_from_long_sources():
     assert profile["long_body_ratio"] >= 0.5
     assert "[This Draft Variation]" in block
     assert "FULLER" in block or "MEDIUM" in block
+    assert "invented memory" in block
 
 
 def test_voice_variation_pushes_back_when_fragment_endings_dominate():

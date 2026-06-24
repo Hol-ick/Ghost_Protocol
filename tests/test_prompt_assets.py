@@ -51,6 +51,9 @@ class PromptAssetTest(unittest.TestCase):
         self.assertIn("욕설·비하어·성적 농담·외모 품평", prompt)
         self.assertIn("무대, 카메라, 조명, 편집", prompt)
         self.assertIn("같은 안전어로 끝나는 글", prompt)
+        self.assertIn("무명자는 아직 묶여있을 카드임", prompt)
+        self.assertIn("질문형이 추천 요청·룰 확인·가격 확인이 아닌가", prompt)
+        self.assertIn("이름 왜 익숙함", prompt)
 
     def test_generation_prompt_requires_concrete_complete_judgment(self):
         prompt = (PROMPTS / "generate_post.txt").read_text(encoding="utf-8")
@@ -69,6 +72,8 @@ class PromptAssetTest(unittest.TestCase):
         self.assertIn("$shared_writing_contract", prompt)
         self.assertIn("동조는 기본값이 아니다", prompt)
         self.assertIn("작은 독립 정보나 각도", prompt)
+        self.assertIn("완충어만 남기는 댓글은 실패", prompt)
+        self.assertIn("구체 조건을 하나 붙이거나 삭제", prompt)
 
     def test_generation_prompt_prefers_aligned_target_comments(self):
         prompt = (PROMPTS / "generate_post.txt").read_text(encoding="utf-8")
@@ -84,6 +89,8 @@ class PromptAssetTest(unittest.TestCase):
 
         self.assertIn("게시글과 댓글은 같은 대화 세계", shared)
         self.assertIn("기본 동작은 공감이 아니다", shared)
+        self.assertIn("질문은 예외 동작", shared)
+        self.assertIn("입력에 없는 기억·경험·체험", shared)
         self.assertIn("$shared_writing_contract", post_prompt)
         self.assertIn("$shared_writing_contract", comment_prompt)
 

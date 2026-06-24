@@ -129,12 +129,21 @@ def build_style_profile(
     ending_counts = Counter(_ending(text) for text in source_titles)
     ending_counts.pop("", None)
 
-    static_ctx = static_context_for(str(gallery_id or raw_data.get("gallery_id", "")))
-    gallery_name = str(static_ctx.get("gallery_name") or gallery_id or raw_data.get("gallery_id") or "갤러리")
+    resolved_gallery_id = str(gallery_id or raw_data.get("gallery_id", "") or "").strip()
+    static_ctx = static_context_for(resolved_gallery_id)
+    gallery_name = str(static_ctx.get("gallery_name") or "").strip()
+    if gallery_name in {"", "갤러리", "게시판"}:
+        identity = gallery_purpose.identity_metadata(resolved_gallery_id)
+        gallery_name = str(
+            identity.get("gallery_name")
+            or identity.get("topic_label")
+            or resolved_gallery_id
+            or "게시판"
+        ).strip()
 
     allow_long_laugh = _ratio(long_laugh_count, total) >= 0.08 or _ratio(laugh_count, total) >= 0.22
     profile = {
-        "gallery_id": str(gallery_id or raw_data.get("gallery_id", "") or ""),
+        "gallery_id": resolved_gallery_id,
         "gallery_name": gallery_name,
         "sample_size": total,
         "avg_title_len": avg_title_len,

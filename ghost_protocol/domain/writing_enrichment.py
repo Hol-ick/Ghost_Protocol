@@ -400,25 +400,25 @@ def choose_voice_lane(
     if dominant == "fragment" and ratio >= 0.42:
         return _weighted_pick(
             [
-                ("plain", 0.38),
-                ("mixed", 0.30),
+                ("plain", 0.42),
+                ("mixed", 0.31),
                 ("fragment", 0.16),
-                ("question", 0.10),
+                ("question", 0.05),
                 ("laugh", 0.06),
             ],
             rng=rng,
         )
     if dominant == "question" and ratio >= 0.35:
         return _weighted_pick(
-            [("plain", 0.42), ("mixed", 0.28), ("question", 0.18), ("fragment", 0.12)],
+            [("plain", 0.48), ("mixed", 0.30), ("question", 0.08), ("fragment", 0.14)],
             rng=rng,
         )
     return _weighted_pick(
         [
             ("plain", 0.30),
-            ("mixed", 0.28),
+            ("mixed", 0.31),
             ("fragment", 0.22),
-            ("question", 0.12),
+            ("question", 0.07),
             ("laugh", 0.08),
         ],
         rng=rng,
@@ -460,8 +460,9 @@ _VOICE_LANE_RULES: dict[str, str] = {
         "Do not make both title and every body line end with the same suffix."
     ),
     "question": (
-        "Voice lane QUESTION: use at most one real question across title/body, and "
-        "end it with ?. The other line should be a small statement."
+        "Voice lane QUESTION: use at most one real question across title/body, only for "
+        "recommendation, rule, price, or availability checks. End it with ?. If the question "
+        "is just curiosity, rewrite it as a small statement."
     ),
     "laugh": (
         "Voice lane LAUGH: a short ㅋㅋ/ㄷㄷ tail is allowed once if the source rhythm "
@@ -571,6 +572,9 @@ def generation_variation_block(
     lines.append(
         "- Avoid the safe default endings piling up across the batch: 신기함, 애매함, 궁금함, 좋겠다, 같음, 듯. If the same topic appears again, switch to a concrete scene, number, comparison, or tiny joke."
     )
+    lines.append(
+        "- Do not finish with empty familiarity or invented memory: 이름 왜 익숙함, 어디서 본 것 같음, 나도 해봄, 막상 해보면. Replace them with a visible condition from the source."
+    )
     if (
         str(profile.get("dominant_ending_family") or "") == "fragment"
         and float(profile.get("dominant_ending_ratio", 0.0) or 0.0) >= 0.42
@@ -642,5 +646,6 @@ def comment_variation_block(
         f"- {_COMMENT_MOVE_RULES.get(comment_move, _COMMENT_MOVE_RULES['detail'])}",
         "- A longer comment is allowed only when it follows a concrete target-post detail; otherwise keep it short or return an empty array.",
         "- Plain agreement alone is not enough; add a concrete noun, number, rule, cost, or scene from the target post.",
+        "- Avoid hedge-only endings such as 같기도 함, 심하긴 함, 될 듯, 궁금함 unless a concrete target detail appears in the same comment.",
     ]
     return "\n".join(lines)
