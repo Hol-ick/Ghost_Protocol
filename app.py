@@ -4183,6 +4183,9 @@ def _render_source_sampling_panel() -> None:
             help="원본 글 하나당 수집할 댓글 샘플 수입니다.",
         )
 
+    if int(st.session_state.get("sample_comments_per_post", 0) or 0) <= 0:
+        st.caption("댓글 문체까지 보려면 `댓글/글`을 2~3개 이상으로 두는 편이 좋습니다.")
+
     if st.button("샘플 크롤링", key="source_sample_crawl_btn", use_container_width=True):
         default_type = ui_options.gallery_type_for_label(
             st.session_state.get("sample_gallery_type", ui_options.DEFAULT_GALLERY_TYPE_LABEL)
@@ -4195,11 +4198,21 @@ def _render_source_sampling_panel() -> None:
             st.warning("샘플링할 갤러리 ID를 하나 이상 입력해 주세요.")
         else:
             logs: list[str] = []
+            live_status = st.empty()
+            live_log = st.empty()
 
             def _sample_log(message: str) -> None:
                 logs.append(str(message))
+                st.session_state["sample_crawl_log"] = logs
+                live_status.caption(f"샘플 크롤링 진행 중 · 로그 {len(logs)}줄 · 최근: {logs[-1][:90]}")
+                live_log.code("\n".join(logs[-32:]), language="text")
 
             with st.spinner("샘플 원본을 수집하는 중입니다..."):
+                _sample_log(
+                    "샘플 크롤링 시작 — "
+                    f"{len(specs)}개 게시판 / {int(st.session_state.get('sample_pages', 1) or 1)}페이지 / "
+                    f"댓글 {int(st.session_state.get('sample_comments_per_post', 3) or 0)}개"
+                )
                 bundle = source_sampler.collect_samples(
                     specs,
                     pages=int(st.session_state.get("sample_pages", 1) or 1),
@@ -4209,17 +4222,20 @@ def _render_source_sampling_panel() -> None:
             st.session_state["sample_crawl_result"] = bundle
             st.session_state["sample_crawl_log"] = logs
             success_count = sum(1 for item in bundle.get("items", []) if item.get("ok"))
+            _sample_log(f"샘플 크롤링 완료 — 성공 {success_count}/{len(specs)}개 게시판")
             st.toast(f"샘플링 완료: {success_count}/{len(specs)}개 게시판", icon="✅")
 
     logs = list(st.session_state.get("sample_crawl_log", []) or [])
     bundle = st.session_state.get("sample_crawl_result") or {}
     if logs:
-        with st.expander("샘플링 로그", expanded=False):
+        with st.expander("샘플링 로그", expanded=True):
             st.code("\n".join(logs[-24:]), language="text")
     if bundle:
         item_count = len(list(bundle.get("items") or []))
         ok_count = sum(1 for item in bundle.get("items", []) if item.get("ok"))
         st.caption(f"최근 샘플링 결과: {ok_count}/{item_count}개 게시판 수집됨")
+        for note in source_sampler.sample_quality_notes(bundle):
+            st.caption(f"샘플 메모: {note}")
         _render_clipboard_button(
             "샘플 패키지 복사",
             source_sampler.format_sample_markdown(bundle),

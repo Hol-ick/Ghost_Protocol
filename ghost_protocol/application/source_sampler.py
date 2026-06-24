@@ -226,6 +226,33 @@ def _post_comments(post: dict, *, limit: int = 5) -> list[str]:
     return comments
 
 
+def sample_quality_notes(bundle: dict) -> list[str]:
+    """Return compact notes that make copied sample packages easier to review."""
+
+    items = [item for item in list(bundle.get("items") or []) if isinstance(item, dict)]
+    posts: list[dict] = []
+    for item in items:
+        result = item.get("result") or {}
+        posts.extend(post for post in list(result.get("raw_posts") or []) if isinstance(post, dict))
+
+    body_count = sum(1 for post in posts if str(post.get("content") or "").strip())
+    comment_count = sum(len(list(post.get("comments") or [])) for post in posts)
+    comments_per_post = int(bundle.get("comments_per_post") or 0)
+
+    notes: list[str] = []
+    if comments_per_post <= 0:
+        notes.append("댓글 샘플 수집이 꺼져 있습니다. 댓글 작문까지 보정하려면 글당 2~3개 정도를 권장합니다.")
+    elif comment_count <= 0 and posts:
+        notes.append("댓글 수집 옵션은 켜져 있지만 수집된 댓글이 없습니다. 대상 게시판의 댓글 구조나 접근 제한을 확인해야 합니다.")
+    if posts and body_count / max(len(posts), 1) < 0.35:
+        notes.append("본문이 없는 글 비율이 높습니다. 제목 문체 분석에는 충분하지만 장문 본문 보정에는 약할 수 있습니다.")
+    if len(items) >= 4 and int(bundle.get("pages") or 1) >= 4:
+        notes.append("여러 게시판을 깊게 수집했습니다. 프롬프트 보정용으로는 게시판당 1~3페이지 샘플이 더 다루기 쉽습니다.")
+    if not notes:
+        notes.append("본문과 댓글 샘플이 함께 들어 있어 작문 프롬프트 보정에 사용할 수 있는 상태입니다.")
+    return notes
+
+
 def format_sample_markdown(bundle: dict, *, max_posts_per_gallery: int = 90) -> str:
     """Format a multi-gallery sample bundle for one-click copy."""
 
@@ -241,6 +268,10 @@ def format_sample_markdown(bundle: dict, *, max_posts_per_gallery: int = 90) -> 
         "",
         "이 패키지는 작문 프롬프트를 보정하기 위한 원본 제목/본문/댓글 샘플입니다.",
     ]
+    quality_notes = sample_quality_notes(bundle)
+    if quality_notes:
+        lines.extend(["", "## 샘플 품질 메모"])
+        lines.extend(f"- {note}" for note in quality_notes)
 
     for item in items:
         gallery_id = str(item.get("gallery_id") or "")
