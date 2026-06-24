@@ -101,5 +101,22 @@ class PromptAssetTest(unittest.TestCase):
         self.assertIn("전에 본 거 같은데", profile["never_say"])
 
 
+    def test_draft_and_comment_cards_are_hidden_plans(self):
+        post_prompt = (PROMPTS / "generate_post.txt").read_text(encoding="utf-8")
+        comment_prompt = (PROMPTS / "generate_comment.txt").read_text(encoding="utf-8")
+
+        self.assertIn("[Draft Card]", post_prompt)
+        self.assertIn("hidden plan", post_prompt)
+        self.assertIn("post_shape", post_prompt)
+        self.assertIn("evidence_anchor", post_prompt)
+        self.assertIn("Do not print card labels", post_prompt)
+
+        self.assertIn("[Comment Relation Card]", comment_prompt)
+        self.assertIn("hidden plan", comment_prompt)
+        self.assertIn("comment_relation", comment_prompt)
+        self.assertIn("target_anchor", comment_prompt)
+        self.assertIn("return an empty array rather than inventing context", comment_prompt)
+
+
 if __name__ == "__main__":
     unittest.main()

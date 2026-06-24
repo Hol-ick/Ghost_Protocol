@@ -18,6 +18,9 @@ $shared_writing_contract
 [Source Rhythm]
 - Match the collected board rhythm before adding new structure. If the source posts are mostly short title-only reactions, make the title carry the post and keep the body one short sentence or empty-feeling.
 - If [This Draft Variation] says MEDIUM or FULLER, that lane may override the default one-line body. The draft can be longer, but it must still sound like a board post rather than a briefing.
+- If [Draft Card] is present, use it as the hidden plan for this one draft. Do not print card labels such as post_shape, stance, evidence_anchor, length_lane, or ending_style anywhere in the output.
+- The Draft Card is more important than repeating the persona's usual wording. Persona gives flavor; the card chooses the object, relation, stance, and concrete anchor.
+- evidence_anchor must be visible in the source context. If it is not visible, silently switch to a visible source object, number, condition, scene, cost, or target-comment phrase.
 - Do not collapse every draft into the same body length. Follow the per-draft length lane first, then keep the source rhythm inside that lane.
 - For live drama/broadcast reactions, write a scene/camera/line/character reaction, not a social-analysis paragraph.
 - If a name belongs to a drama, broadcast, character, clip, or scene context, do not convert it into "specific user" discourse.

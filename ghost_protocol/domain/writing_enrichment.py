@@ -516,6 +516,279 @@ _COMMENT_MOVE_RULES: dict[str, str] = {
 }
 
 
+_POST_SHAPE_RULES: dict[str, str] = {
+    "object_reaction": (
+        "post_shape=object_reaction: react to one visible object, title phrase, "
+        "rule/condition, person-in-scene, number, or result from the source."
+    ),
+    "detail_add": (
+        "post_shape=detail_add: add one small detail the source implies, such as "
+        "a condition, timing, cost, step, count, photo state, setup, or result."
+    ),
+    "small_counter": (
+        "post_shape=small_counter: push back on one narrow point without turning "
+        "the draft into criticism of the whole board."
+    ),
+    "comparison": (
+        "post_shape=comparison: compare two nearby conditions, numbers, versions, "
+        "moments, or outcomes from the collected posts."
+    ),
+    "friction_note": (
+        "post_shape=friction_note: respond through a practical friction such as "
+        "time, money, space, waiting, setup, cleanup, effort, or uncertainty."
+    ),
+    "comment_bridge": (
+        "post_shape=comment_bridge: continue from a target comment or reply-like "
+        "phrase, but do not quote it as a formal summary."
+    ),
+    "quiet_seed": (
+        "post_shape=quiet_seed: start a nearby small topic from a source detail "
+        "without announcing a topic change."
+    ),
+}
+
+_STANCE_RULES: dict[str, str] = {
+    "low_agree": "stance=low_agree: lightly accept the premise, then add one concrete limit.",
+    "small_counter": "stance=small_counter: disagree with one detail, not the whole topic.",
+    "condition": "stance=condition: make the reaction depend on one visible condition.",
+    "friction": "stance=friction: make the point through effort, cost, time, or inconvenience.",
+    "dry_joke": "stance=dry_joke: use one dry joke or aftertaste, without punchline pressure.",
+    "watching": "stance=watching: stay observational and low-stakes, not instructive.",
+}
+
+_EVIDENCE_ANCHOR_RULES: dict[str, str] = {
+    "title_object": (
+        "evidence_anchor=title_object: title must include one concrete noun or named "
+        "object visible in the source, not a broad abstract label."
+    ),
+    "number_or_time": (
+        "evidence_anchor=number_or_time: use one source number, count, date/time, "
+        "rank, price, score, page count, or interval."
+    ),
+    "condition_or_rule": (
+        "evidence_anchor=condition_or_rule: use one rule, condition, cause, setup, "
+        "constraint, exception, or requirement visible in the source."
+    ),
+    "scene_or_action": (
+        "evidence_anchor=scene_or_action: use one action, camera/photo state, physical "
+        "scene, result, or next step visible in the source."
+    ),
+    "comment_phrase": (
+        "evidence_anchor=comment_phrase: continue from one target comment phrase or "
+        "replyable fragment, but paraphrase enough to avoid copy-paste."
+    ),
+    "cost_or_friction": (
+        "evidence_anchor=cost_or_friction: attach the draft to cost, time, effort, "
+        "space, delay, waiting, setup, cleanup, or risk."
+    ),
+}
+
+_COMMENT_RELATION_RULES: dict[str, str] = {
+    "supplement": (
+        "comment_relation=supplement: add one missing detail to the target post."
+    ),
+    "counter_example": (
+        "comment_relation=counter_example: give a small exception or alternate case."
+    ),
+    "condition": (
+        "comment_relation=condition: make the agreement/disagreement depend on one condition."
+    ),
+    "friction": (
+        "comment_relation=friction: react through time, money, effort, setup, cleanup, or risk."
+    ),
+    "rule_detail": (
+        "comment_relation=rule_detail: attach to a rule, procedure, component, step, or wording."
+    ),
+    "dry_aside": (
+        "comment_relation=dry_aside: leave one low-key joke or aftertaste tied to the target."
+    ),
+    "next_step": (
+        "comment_relation=next_step: suggest one small check, comparison, or thing to look at next."
+    ),
+}
+
+_COMMENT_ANCHOR_RULES: dict[str, str] = {
+    "target_noun": "target_anchor=target_noun: reuse the target's concrete noun only if it is not sensitive.",
+    "target_number": "target_anchor=target_number: react to a number, count, price, time, or score.",
+    "target_condition": "target_anchor=target_condition: react to a condition, exception, rule, or setup.",
+    "target_scene": "target_anchor=target_scene: react to the target's scene, photo, result, or action.",
+    "target_aftertaste": "target_anchor=target_aftertaste: react to the target's implication rather than agreement.",
+}
+
+
+def choose_post_shape(
+    profile: dict | None,
+    *,
+    rng: _random.Random | object | None = None,
+) -> str:
+    """Choose what kind of post this call should make."""
+
+    profile = profile or {}
+    shape = str(profile.get("shape") or "")
+    comment_presence = float(profile.get("comment_presence_ratio", 0.0) or 0.0)
+    long_body_ratio = float(profile.get("long_body_ratio", 0.0) or 0.0)
+
+    weights = [
+        ("object_reaction", 0.23),
+        ("detail_add", 0.20),
+        ("small_counter", 0.15),
+        ("comparison", 0.14),
+        ("friction_note", 0.14),
+        ("comment_bridge", 0.07),
+        ("quiet_seed", 0.07),
+    ]
+    if shape == "title_driven":
+        weights = [
+            ("object_reaction", 0.28),
+            ("detail_add", 0.18),
+            ("small_counter", 0.13),
+            ("comparison", 0.13),
+            ("friction_note", 0.13),
+            ("comment_bridge", 0.07),
+            ("quiet_seed", 0.08),
+        ]
+    elif long_body_ratio >= 0.25:
+        weights = [
+            ("object_reaction", 0.16),
+            ("detail_add", 0.24),
+            ("small_counter", 0.14),
+            ("comparison", 0.18),
+            ("friction_note", 0.15),
+            ("comment_bridge", 0.06),
+            ("quiet_seed", 0.07),
+        ]
+    if comment_presence >= 0.25:
+        weights = [(key, weight + (0.08 if key == "comment_bridge" else 0.0)) for key, weight in weights]
+    return _weighted_pick(weights, rng=rng)
+
+
+def choose_stance(
+    profile: dict | None,
+    *,
+    rng: _random.Random | object | None = None,
+) -> str:
+    """Choose a low-key stance for one draft."""
+
+    profile = profile or {}
+    depth = str(profile.get("depth") or "")
+    if depth == "expanded":
+        weights = [
+            ("low_agree", 0.17),
+            ("small_counter", 0.18),
+            ("condition", 0.22),
+            ("friction", 0.16),
+            ("dry_joke", 0.10),
+            ("watching", 0.17),
+        ]
+    else:
+        weights = [
+            ("low_agree", 0.20),
+            ("small_counter", 0.15),
+            ("condition", 0.18),
+            ("friction", 0.18),
+            ("dry_joke", 0.14),
+            ("watching", 0.15),
+        ]
+    return _weighted_pick(weights, rng=rng)
+
+
+def choose_evidence_anchor(
+    profile: dict | None,
+    *,
+    rng: _random.Random | object | None = None,
+) -> str:
+    """Choose the concrete source detail the draft must lean on."""
+
+    profile = profile or {}
+    avg_body_len = float(profile.get("avg_body_len", 0.0) or 0.0)
+    comment_presence = float(profile.get("comment_presence_ratio", 0.0) or 0.0)
+    weights = [
+        ("title_object", 0.25),
+        ("number_or_time", 0.16),
+        ("condition_or_rule", 0.17),
+        ("scene_or_action", 0.17),
+        ("comment_phrase", 0.08),
+        ("cost_or_friction", 0.17),
+    ]
+    if avg_body_len >= 45:
+        weights = [
+            ("title_object", 0.18),
+            ("number_or_time", 0.15),
+            ("condition_or_rule", 0.22),
+            ("scene_or_action", 0.20),
+            ("comment_phrase", 0.07),
+            ("cost_or_friction", 0.18),
+        ]
+    if comment_presence >= 0.25:
+        weights = [(key, weight + (0.07 if key == "comment_phrase" else 0.0)) for key, weight in weights]
+    return _weighted_pick(weights, rng=rng)
+
+
+def choose_comment_relation(
+    profile: dict | None,
+    *,
+    rng: _random.Random | object | None = None,
+) -> str:
+    """Choose how a generated comment relates to its target post."""
+
+    profile = profile or {}
+    long_ratio = float(profile.get("long_comment_ratio", 0.0) or 0.0)
+    avg_comment_len = float(profile.get("avg_comment_len", 0.0) or 0.0)
+    if long_ratio >= 0.12 or avg_comment_len >= 65:
+        return _weighted_pick(
+            [
+                ("supplement", 0.20),
+                ("counter_example", 0.17),
+                ("condition", 0.18),
+                ("friction", 0.15),
+                ("rule_detail", 0.14),
+                ("dry_aside", 0.08),
+                ("next_step", 0.08),
+            ],
+            rng=rng,
+        )
+    return _weighted_pick(
+        [
+            ("supplement", 0.20),
+            ("counter_example", 0.14),
+            ("condition", 0.17),
+            ("friction", 0.18),
+            ("rule_detail", 0.15),
+            ("dry_aside", 0.11),
+            ("next_step", 0.05),
+        ],
+        rng=rng,
+    )
+
+
+def choose_comment_anchor(
+    profile: dict | None,
+    *,
+    rng: _random.Random | object | None = None,
+) -> str:
+    """Choose what target-post detail a generated comment should attach to."""
+
+    profile = profile or {}
+    avg_comment_len = float(profile.get("avg_comment_len", 0.0) or 0.0)
+    if avg_comment_len >= 55:
+        weights = [
+            ("target_noun", 0.22),
+            ("target_number", 0.18),
+            ("target_condition", 0.24),
+            ("target_scene", 0.20),
+            ("target_aftertaste", 0.16),
+        ]
+    else:
+        weights = [
+            ("target_noun", 0.28),
+            ("target_number", 0.16),
+            ("target_condition", 0.18),
+            ("target_scene", 0.20),
+            ("target_aftertaste", 0.18),
+        ]
+    return _weighted_pick(weights, rng=rng)
+
+
 def choose_comment_move(
     profile: dict | None,
     *,
@@ -563,11 +836,21 @@ def generation_variation_block(
         return ""
     length_lane = choose_length_lane(profile, requested_length=requested_length, rng=rng)
     voice_lane = choose_voice_lane(profile, rng=rng)
+    post_shape = choose_post_shape(profile, rng=rng)
+    stance = choose_stance(profile, rng=rng)
+    evidence_anchor = choose_evidence_anchor(profile, rng=rng)
     lines = [
         "[This Draft Variation]",
         f"- {_LENGTH_LANE_RULES.get(length_lane, _LENGTH_LANE_RULES['compact'])}",
         f"- {_VOICE_LANE_RULES.get(voice_lane, _VOICE_LANE_RULES['mixed'])}",
         "- The variation lane overrides only this one draft. Keep the source topic and persona intact.",
+        "[Draft Card]",
+        f"- {_POST_SHAPE_RULES.get(post_shape, _POST_SHAPE_RULES['object_reaction'])}",
+        f"- {_STANCE_RULES.get(stance, _STANCE_RULES['watching'])}",
+        f"- {_EVIDENCE_ANCHOR_RULES.get(evidence_anchor, _EVIDENCE_ANCHOR_RULES['title_object'])}",
+        f"- length_lane={length_lane}: follow the selected length lane above before adding persona flavor.",
+        f"- ending_style={voice_lane}: use the selected voice lane above, but do not expose this label.",
+        "- Satisfy the Draft Card before persona color. If the chosen anchor is not visible in the source, switch to another visible source object instead of inventing one.",
     ]
     lines.append(
         "- Avoid the safe default endings piling up across the batch: 신기함, 애매함, 궁금함, 좋겠다, 같음, 듯. If the same topic appears again, switch to a concrete scene, number, comparison, or tiny joke."
@@ -640,10 +923,16 @@ def comment_variation_block(
         return ""
     voice_lane = choose_voice_lane(profile, rng=rng)
     comment_move = choose_comment_move(profile, rng=rng)
+    comment_relation = choose_comment_relation(profile, rng=rng)
+    comment_anchor = choose_comment_anchor(profile, rng=rng)
     lines = [
         "[This Comment Variation]",
         f"- {_VOICE_LANE_RULES.get(voice_lane, _VOICE_LANE_RULES['mixed'])}",
         f"- {_COMMENT_MOVE_RULES.get(comment_move, _COMMENT_MOVE_RULES['detail'])}",
+        "[Comment Relation Card]",
+        f"- {_COMMENT_RELATION_RULES.get(comment_relation, _COMMENT_RELATION_RULES['supplement'])}",
+        f"- {_COMMENT_ANCHOR_RULES.get(comment_anchor, _COMMENT_ANCHOR_RULES['target_noun'])}",
+        "- Satisfy the Comment Relation Card before adding tone. Do not expose card labels in the final comment.",
         "- A longer comment is allowed only when it follows a concrete target-post detail; otherwise keep it short or return an empty array.",
         "- Plain agreement alone is not enough; add a concrete noun, number, rule, cost, or scene from the target post.",
         "- Avoid hedge-only endings such as 같기도 함, 심하긴 함, 될 듯, 궁금함 unless a concrete target detail appears in the same comment.",

@@ -103,6 +103,60 @@ def test_comment_variation_includes_comment_move_not_plain_agreement():
     assert "hedge-only endings" in block
 
 
+def test_generation_variation_includes_draft_card_axes():
+    raw = {
+        "raw_posts": [
+            {
+                "title": "Terraforming Mars card price changed again",
+                "content": "Base box is fine but the card sleeves and insert cost more than expected.",
+                "comments": ["Sleeves are where the money disappears"],
+            },
+            {
+                "title": "Ark Nova four player time is rough",
+                "content": "Three players felt okay, four players made the downtime obvious.",
+                "comments": ["Four is too long unless everyone knows the rules"],
+            },
+        ]
+    }
+
+    profile = writing_enrichment.build_composition_profile(raw)
+    block = writing_enrichment.generation_variation_block(profile, rng=random.Random(7))
+
+    assert "[Draft Card]" in block
+    assert "post_shape=" in block
+    assert "stance=" in block
+    assert "evidence_anchor=" in block
+    assert "length_lane=" in block
+    assert "ending_style=" in block
+    assert "do not expose this label" in block
+
+
+def test_comment_variation_includes_relation_card_axes():
+    raw = {
+        "raw_posts": [
+            {
+                "title": "Root expansion balance feels odd",
+                "content": "The new faction looks strong only when the table lets it breathe.",
+                "comments": ["Map choice matters more than faction strength"],
+            },
+            {
+                "title": "Brass Birmingham price went up again",
+                "content": "Secondhand copies are not cheap anymore.",
+                "comments": ["Condition matters at that price"],
+            },
+        ]
+    }
+
+    profile = writing_enrichment.build_composition_profile(raw)
+    block = writing_enrichment.comment_variation_block(profile, rng=random.Random(8))
+
+    assert "[Comment Relation Card]" in block
+    assert "comment_relation=" in block
+    assert "target_anchor=" in block
+    assert "Do not expose card labels" in block
+    assert "Plain agreement alone is not enough" in block
+
+
 def test_generation_variation_can_select_fuller_lane_from_long_sources():
     raw = {
         "raw_posts": [

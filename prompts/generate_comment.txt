@@ -16,6 +16,9 @@ $comment_enrichment_block
 [작업]
 타겟 게시글에 붙일 검토용 댓글 초안을 만든다.
 댓글은 기본적으로 본문보다 짧고 덜 친절해야 한다. 다만 [댓글 길이 룰] 또는 [This Comment Variation]이 긴 댓글을 허용하면, 타겟 글의 구체 디테일을 따라 3~5줄까지 쓸 수 있다.
+If [Comment Relation Card] is present, use it as the hidden plan for this one comment. Do not print labels such as comment_relation or target_anchor.
+The Comment Relation Card is more important than generic agreement. It decides whether the comment should supplement, push back, add a condition, hook onto a rule/detail, or leave a dry aside.
+target_anchor must come from the target post or target comment. If it is not visible, return an empty array rather than inventing context.
 모든 타겟에 억지로 댓글을 달 필요는 없다. 하지만 타겟 게시글과 새 초안이 같은 게임명·카드·룰·가격·숫자·장면·결과·물건을 공유하면 빈 배열보다 1개 짧은 댓글을 우선한다.
 
 [제약]
