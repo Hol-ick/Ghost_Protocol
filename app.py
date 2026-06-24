@@ -43,6 +43,7 @@ from ghost_protocol.application import gemini_throttle
 from ghost_protocol.application import operator_settings
 from ghost_protocol.application import observability
 from ghost_protocol.application import rehearsal as rehearsal_flow
+from ghost_protocol.application import source_sampler
 from ghost_protocol.application import stability
 from ghost_protocol.application.run_logs import append_text_log
 from ghost_protocol.application import worker_contracts
@@ -4125,6 +4126,89 @@ def _render_review_package_copy_button() -> None:
     )
 
 
+def _render_source_sampling_panel() -> None:
+    """Render the read-only multi-gallery crawler for prompt calibration samples."""
+
+    st.markdown('<div class="utility-section-title">샘플링</div>', unsafe_allow_html=True)
+    st.caption("여러 게시판의 제목·본문·댓글 원본을 읽기 전용으로 모아 Markdown으로 복사합니다.")
+    st.text_area(
+        "샘플링할 갤러리 ID",
+        key="sample_gallery_ids",
+        placeholder="universe, boardgame:mgallery, baseball_new13|board",
+        height=84,
+        help="쉼표, 공백, 줄바꿈으로 여러 ID를 입력할 수 있습니다. id:mgallery 또는 id|board처럼 타입을 덮어쓸 수 있습니다.",
+    )
+    sample_cols = st.columns(3, gap="small")
+    with sample_cols[0]:
+        st.selectbox(
+            "기본 타입",
+            options=ui_options.GALLERY_TYPE_OPTIONS,
+            key="sample_gallery_type",
+            help="ID별 타입을 따로 적지 않았을 때 사용할 기본 게시판 타입입니다.",
+        )
+    with sample_cols[1]:
+        st.number_input(
+            "페이지",
+            min_value=1,
+            max_value=5,
+            step=1,
+            key="sample_pages",
+            help="샘플링 전용이므로 과도하게 깊게 읽지 않도록 1~5페이지만 허용합니다.",
+        )
+    with sample_cols[2]:
+        st.number_input(
+            "댓글/글",
+            min_value=0,
+            max_value=10,
+            step=1,
+            key="sample_comments_per_post",
+            help="원본 글 하나당 수집할 댓글 샘플 수입니다.",
+        )
+
+    if st.button("샘플 크롤링", key="source_sample_crawl_btn", use_container_width=True):
+        default_type = ui_options.gallery_type_for_label(
+            st.session_state.get("sample_gallery_type", ui_options.DEFAULT_GALLERY_TYPE_LABEL)
+        )
+        specs = source_sampler.parse_gallery_specs(
+            st.session_state.get("sample_gallery_ids", ""),
+            default_type=default_type,
+        )
+        if not specs:
+            st.warning("샘플링할 갤러리 ID를 하나 이상 입력해 주세요.")
+        else:
+            logs: list[str] = []
+
+            def _sample_log(message: str) -> None:
+                logs.append(str(message))
+
+            with st.spinner("샘플 원본을 수집하는 중입니다..."):
+                bundle = source_sampler.collect_samples(
+                    specs,
+                    pages=int(st.session_state.get("sample_pages", 1) or 1),
+                    comments_per_post=int(st.session_state.get("sample_comments_per_post", 3) or 0),
+                    progress_callback=_sample_log,
+                )
+            st.session_state["sample_crawl_result"] = bundle
+            st.session_state["sample_crawl_log"] = logs
+            success_count = sum(1 for item in bundle.get("items", []) if item.get("ok"))
+            st.toast(f"샘플링 완료: {success_count}/{len(specs)}개 게시판", icon="✅")
+
+    logs = list(st.session_state.get("sample_crawl_log", []) or [])
+    bundle = st.session_state.get("sample_crawl_result") or {}
+    if logs:
+        with st.expander("샘플링 로그", expanded=False):
+            st.code("\n".join(logs[-24:]), language="text")
+    if bundle:
+        item_count = len(list(bundle.get("items") or []))
+        ok_count = sum(1 for item in bundle.get("items", []) if item.get("ok"))
+        st.caption(f"최근 샘플링 결과: {ok_count}/{item_count}개 게시판 수집됨")
+        _render_clipboard_button(
+            "샘플 패키지 복사",
+            source_sampler.format_sample_markdown(bundle),
+            key="source_sample_package_copy",
+        )
+
+
 def _ops_status_word(status: object) -> str:
     value = str(status or "").lower()
     if value in {"good", "ok"}:
@@ -5256,6 +5340,8 @@ def _render_recent_manage_panel() -> None:
                 key="wave_interval_max",
                 help="발행 간격 값이 없을 때만 쓰는 백업 랜덤 대기입니다.",
             )
+
+        _render_source_sampling_panel()
 
         st.markdown('<div class="utility-section-title">관리</div>', unsafe_allow_html=True)
         _admin_cols = st.columns(2, gap="small")

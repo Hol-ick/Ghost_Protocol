@@ -83,6 +83,12 @@ SESSION_DEFAULTS: dict = {
     "intel_gallery_id": "",
     "intel_type_label": options.DEFAULT_GALLERY_TYPE_LABEL,
     "intel_pages": 3,
+    "sample_gallery_ids": "",
+    "sample_gallery_type": options.DEFAULT_GALLERY_TYPE_LABEL,
+    "sample_pages": 1,
+    "sample_comments_per_post": 3,
+    "sample_crawl_result": None,
+    "sample_crawl_log": [],
     "_db_reset_confirm": False,
 }
 
