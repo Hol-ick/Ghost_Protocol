@@ -219,6 +219,24 @@ def has_unsupported_personal_claim(title: str, content: str = "") -> bool:
         token in combined for token in experience_tokens
     ):
         return True
+    raw_combined = str(f"{title} {content}" or "")
+    source_framing = (
+        "글 보니까",
+        "사진 보니까",
+        "원글",
+        "원본",
+        "저 글",
+        "저 사진",
+        "게시글",
+    )
+    if not any(marker in raw_combined for marker in source_framing):
+        implied_possession_patterns = (
+            r"(?:창고|방|집|서랍|박스|앨범|장롱).{0,14}(?:정리|뒤지|찾|꺼내).{0,14}(?:발견|나오|나왔|있었)",
+            r"(?:어릴 ?때|예전에|옛날에).{0,14}(?:모으던|사둔|갖고 있던|가지고 있던)",
+            r"(?:오랜만에).{0,12}(?:정리|꺼내|찾).{0,12}(?:카드|박스|구성물|피규어|물건)",
+        )
+        if any(re.search(pattern, raw_combined) for pattern in implied_possession_patterns):
+            return True
     return bool(
         re.search(
             r"(?:난|나는|나도|내가|저는|제가).{0,12}"

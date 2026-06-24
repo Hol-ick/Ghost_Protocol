@@ -336,6 +336,9 @@ def comment_prompt_block(profile: dict | None) -> str:
         "- Active comment mode: if the target pool contains a post about the same game/card/rule/price/number/scene, write one compact comment instead of leaving target_comments empty."
     )
     lines.append(
+        "- Do not use broad board nouns alone as alignment proof. A comment target must share a specific game name, card name, rule, price, count, component, result, or scene."
+    )
+    lines.append(
         "- Do not make agreement the default. If a comment agrees, it must also add one target-specific noun, number, rule, price, or scene."
     )
     return "\n".join(lines)
@@ -543,7 +546,7 @@ _POST_SHAPE_RULES: dict[str, str] = {
     ),
     "quiet_seed": (
         "post_shape=quiet_seed: start a nearby small topic from a source detail "
-        "without announcing a topic change."
+        "without announcing a topic change or claiming the source event as your own."
     ),
 }
 
@@ -851,6 +854,7 @@ def generation_variation_block(
         f"- length_lane={length_lane}: follow the selected length lane above before adding persona flavor.",
         f"- ending_style={voice_lane}: use the selected voice lane above, but do not expose this label.",
         "- Satisfy the Draft Card before persona color. If the chosen anchor is not visible in the source, switch to another visible source object instead of inventing one.",
+        "- If a source post says the writer found, bought, owned, played, or collected something, do not turn that into your own experience; react to the visible post/photo/object.",
     ]
     lines.append(
         "- Avoid the safe default endings piling up across the batch: 신기함, 애매함, 궁금함, 좋겠다, 같음, 듯. If the same topic appears again, switch to a concrete scene, number, comparison, or tiny joke."

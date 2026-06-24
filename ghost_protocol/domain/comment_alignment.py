@@ -43,6 +43,28 @@ _STOPWORDS = {
     "댓글",
     "갤러리",
     "게시판",
+    # Domain-generic board words are too broad to prove that a comment target
+    # and a draft are about the same concrete object.
+    "추천",
+    "할만한",
+    "사람",
+    "정도",
+    "생각",
+    "이야기",
+    "운영",
+}
+
+_BROAD_ALIGNMENT_TOKENS = {
+    "게임",
+    "보드게임",
+    "보겜",
+    "보드겜",
+    "카드",
+    "추천",
+    "추천좀",
+    "할만한",
+    "사람",
+    "정도",
 }
 
 _GENERIC_REACTION_TOKENS = {
@@ -96,17 +118,62 @@ _DOMAIN_ANCHOR_GROUPS = (
 )
 
 
+def _token_variants(token: str) -> set[str]:
+    """Return lightweight Korean variants for coarse overlap checks."""
+
+    values = {token}
+    suffixes = (
+        "보다는",
+        "중에는",
+        "인데",
+        "에는",
+        "에서",
+        "으로",
+        "하고",
+        "보다",
+        "중에",
+        "까지",
+        "부터",
+        "이면",
+        "하면",
+        "인데",
+        "처럼",
+        "이라",
+        "라고",
+        "인가",
+        "인지",
+        "인데",
+        "은",
+        "는",
+        "이",
+        "가",
+        "을",
+        "를",
+        "도",
+        "에",
+        "로",
+        "임",
+        "함",
+        "됨",
+    )
+    for suffix in suffixes:
+        if token.endswith(suffix) and len(token) > len(suffix) + 1:
+            values.add(token[: -len(suffix)])
+    return values
+
+
 def topic_tokens(text: object) -> set[str]:
     """Return concrete-ish tokens suitable for coarse topic overlap checks."""
 
     raw = str(text or "").lower()
     tokens: set[str] = set()
     for token in _TOKEN_RE.findall(raw):
-        if token.isdigit() or token in _STOPWORDS:
-            continue
-        if set(token) <= {"ㅋ", "ㅎ", "ㅠ", "ㅜ"}:
-            continue
-        tokens.add(token)
+        for variant in _token_variants(token):
+            if variant.isdigit() or variant in _STOPWORDS:
+                continue
+            if set(variant) <= {"ㅋ", "ㅎ", "ㅠ", "ㅜ"}:
+                continue
+            tokens.add(variant)
     return tokens
 
 
@@ -138,6 +205,30 @@ def _has_unmatched_domain_anchor(comment_tokens: set[str], draft_tokens: set[str
         return False
     draft_groups = _domain_groups(draft_tokens)
     return bool(comment_groups - draft_groups)
+
+
+def source_post_fits_draft(
+    *,
+    title: object,
+    content: object = "",
+    target_title: object = "",
+    target_content: object = "",
+) -> bool:
+    """Return whether the target post itself shares a concrete draft anchor.
+
+    A generated comment can sound plausible on its own while the selected
+    target post is about something else.  Require the source post to share at
+    least one non-generic token with the draft before evaluating the comment.
+    """
+
+    draft_tokens = topic_tokens(f"{title or ''} {content or ''}")
+    source_tokens = topic_tokens(f"{target_title or ''} {target_content or ''}")
+    if not draft_tokens or not source_tokens:
+        return False
+    if _has_unmatched_domain_anchor(source_tokens, draft_tokens):
+        return False
+    overlap = (source_tokens & draft_tokens) - _BROAD_ALIGNMENT_TOKENS
+    return bool(overlap)
 
 
 def comment_fits_draft(
@@ -179,3 +270,34 @@ def comment_fits_draft(
             return True
 
     return False
+
+
+def target_comment_fits_draft(
+    comment: object,
+    *,
+    title: object,
+    content: object = "",
+    target_title: object = "",
+    target_content: object = "",
+) -> bool:
+    """Return whether a target post/comment pair can accompany a draft.
+
+    This is stricter than :func:`comment_fits_draft`: it first checks that the
+    target post is on the same concrete object, then checks that the comment is
+    either aligned to the draft/source detail or safely generic.
+    """
+
+    if not source_post_fits_draft(
+        title=title,
+        content=content,
+        target_title=target_title,
+        target_content=target_content,
+    ):
+        return False
+    return comment_fits_draft(
+        comment,
+        title=title,
+        content=content,
+        target_title=target_title,
+        target_content=target_content,
+    )

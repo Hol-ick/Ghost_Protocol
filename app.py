@@ -1073,9 +1073,15 @@ def _filter_target_comments_for_topic(
         target_tokens = _topic_tokens_for_match(f"{target_title} {target_content}")
         comment_text = str(item.get("comment", ""))
         comment_tokens = _topic_tokens_for_match(comment_text)
-        if not (generated_tokens & target_tokens or generated_tokens & comment_tokens):
+        if not (generated_tokens & target_tokens):
             continue
-        if not comment_alignment.comment_fits_draft(
+        if comment_tokens and not (
+            comment_tokens & generated_tokens
+            or comment_tokens & target_tokens
+            or comment_alignment.is_generic_reaction(comment_text)
+        ):
+            continue
+        if not comment_alignment.target_comment_fits_draft(
             comment_text,
             title=title,
             content=content,

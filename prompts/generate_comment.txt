@@ -19,6 +19,7 @@ $comment_enrichment_block
 If [Comment Relation Card] is present, use it as the hidden plan for this one comment. Do not print labels such as comment_relation or target_anchor.
 The Comment Relation Card is more important than generic agreement. It decides whether the comment should supplement, push back, add a condition, hook onto a rule/detail, or leave a dry aside.
 target_anchor must come from the target post or target comment. If it is not visible, return an empty array rather than inventing context.
+Do not attach a comment when the target only shares broad board words such as 게임, 보드게임, 카드, 추천, 사람, or 정도. It needs a specific shared object, title, rule, price, number, component, scene, or result.
 모든 타겟에 억지로 댓글을 달 필요는 없다. 하지만 타겟 게시글과 새 초안이 같은 게임명·카드·룰·가격·숫자·장면·결과·물건을 공유하면 빈 배열보다 1개 짧은 댓글을 우선한다.
 
 [제약]
