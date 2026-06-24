@@ -54,3 +54,13 @@ def test_domain_anchored_comment_needs_same_domain_not_generic_overlap():
         target_title="목성 중력 행성 공장",
         target_content="먼지와 중력 이야기",
     )
+
+
+def test_same_source_detail_comment_can_survive_without_exact_word_overlap():
+    assert comment_alignment.comment_fits_draft(
+        "대관비가 은근 커서 회전율 봐야 됨",
+        title="보드게임 카페는 수익이 얼마나 남음?",
+        content="테이블 오래 잡히면 계산이 빡셀 것 같긴 함",
+        target_title="보드게임 카페 수익 구조",
+        target_content="카페 운영비랑 회전율 이야기",
+    )

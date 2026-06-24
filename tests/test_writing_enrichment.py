@@ -56,7 +56,8 @@ def test_sparse_comment_profile_allows_empty_comments():
     block = writing_enrichment.comment_prompt_block(profile)
 
     assert profile["comment_presence_ratio"] == 0
-    assert "empty array" in block
+    assert "prefer one short target comment" in block
+    assert "Active comment mode" in block
 
 
 def test_dense_comment_profile_attaches_to_detail():
@@ -73,6 +74,7 @@ def test_dense_comment_profile_attaches_to_detail():
 
     assert profile["comment_presence_ratio"] == 1
     assert "concrete detail" in block
+    assert "roughly half" in block
 
 
 def test_generation_variation_can_select_fuller_lane_from_long_sources():

@@ -73,6 +73,26 @@ _DOMAIN_ANCHOR_GROUPS = (
     frozenset({"김밥", "햄버거", "국밥", "브런치", "아점", "점심", "공짜밥", "식사"}),
     frozenset({"여행", "해외여행", "나홀로", "일본", "숙소", "관광"}),
     frozenset({"우주", "목성", "행성", "중력", "빅뱅", "망원경", "천문", "외계인", "태양계"}),
+    frozenset(
+        {
+            "보드게임",
+            "보겜",
+            "게임",
+            "카드",
+            "주사위",
+            "룰",
+            "룰북",
+            "플레이",
+            "카페",
+            "확장",
+            "박스",
+            "중고",
+            "입문",
+            "마피아",
+            "아크노바",
+            "테라포밍",
+        }
+    ),
 )
 
 
@@ -146,7 +166,16 @@ def comment_fits_draft(
         return True
 
     source_tokens = topic_tokens(f"{target_title or ''} {target_content or ''}")
+    source_overlap = source_tokens & draft_tokens
     if is_generic_reaction(comment) and source_tokens & draft_tokens:
         return True
+    # A useful reply often picks up a detail from the same source post without
+    # repeating the draft's exact words (e.g. draft says "boardgame cafe
+    # profit", comment says "rent is the real cost").  Allow that when the
+    # draft clearly shares the source post and the comment does not introduce a
+    # conflicting domain anchor.
+    if source_overlap and not _has_unmatched_domain_anchor(comment_tokens, draft_tokens):
+        if len(source_overlap) >= 2 or len(comment_tokens) <= 5:
+            return True
 
     return False

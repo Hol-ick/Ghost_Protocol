@@ -64,6 +64,14 @@ class PromptAssetTest(unittest.TestCase):
         self.assertIn("무슨 뜻임?", prompt)
         self.assertIn("사용 맥락이 뭐임?", prompt)
         self.assertIn("뜻풀이 질문", prompt)
+        self.assertIn("빈 배열보다 1개 짧은 댓글을 우선", prompt)
+        self.assertIn("댓글 1개를 기본값", prompt)
+
+    def test_generation_prompt_prefers_aligned_target_comments(self):
+        prompt = (PROMPTS / "generate_post.txt").read_text(encoding="utf-8")
+        self.assertIn("target_comments를 비우지 말고 1개를 우선", prompt)
+        self.assertIn("같은 게임명·카드·룰·가격·숫자·장면", prompt)
+        self.assertIn("최대 2개까지", prompt)
 
     def test_humblebragger_does_not_invent_prior_experience(self):
         profiles = _load("persona_profiles.json")

@@ -271,11 +271,11 @@ def comment_rules_from_profile(profile: dict) -> list[str]:
 
     if comment_presence <= 0.12:
         rules.append(
-            "Comments are sparse in the source set. Generate target comments only when the target post has a clear hook; otherwise return an empty array."
+            "Comments are sparse in the source set, but do not default to silence: when a target post shares the same concrete object, number, game title, rule, price, or scene, prefer one short target comment over an empty array."
         )
     else:
         rules.append(
-            "Comments are part of the rhythm. Attach to one concrete detail from the target post, not to the whole board mood."
+            "Comments are part of the rhythm. Prefer at least one target comment when a same-object target exists; attach to one concrete detail from the target post, not to the whole board mood."
         )
 
     if float(profile.get("long_comment_ratio", 0.0) or 0.0) >= 0.12:
@@ -291,6 +291,9 @@ def comment_rules_from_profile(profile: dict) -> list[str]:
 
     rules.append(
         "The comment should feel lower-stakes than the post: agreement, tiny objection, added detail, or dry aside."
+    )
+    rules.append(
+        "Across a batch, aim for comments on roughly half of publishable drafts when suitable targets exist. Use 1 comment by default and 2 only when both targets clearly share the draft's object."
     )
     return rules[:4]
 
@@ -328,6 +331,9 @@ def comment_prompt_block(profile: dict | None) -> str:
     )
     lines.append(
         "- Attach comments to a concrete word or detail from the generated draft. Do not import an unrelated side topic just because it came from the same source thread."
+    )
+    lines.append(
+        "- Active comment mode: if the target pool contains a post about the same game/card/rule/price/number/scene, write one compact comment instead of leaving target_comments empty."
     )
     return "\n".join(lines)
 

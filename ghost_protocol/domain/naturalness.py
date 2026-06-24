@@ -398,6 +398,32 @@ _QUESTION_ENDINGS = (
     "뭐임",
 )
 
+_INTERROGATIVE_MARKERS = (
+    "얼마나",
+    "어떻게",
+    "어디",
+    "누가",
+    "뭐가",
+    "뭐를",
+    "뭘",
+    "몇",
+)
+
+_INTERROGATIVE_OMITTED_ENDINGS = (
+    "남음",
+    "남나",
+    "나옴",
+    "됨",
+    "되냐",
+    "걸림",
+    "듦",
+    "들어감",
+    "필요함",
+    "받음",
+    "씀",
+    "팜",
+)
+
 
 def _policy_question_endings() -> tuple[str, ...]:
     values = tuple(
@@ -425,6 +451,10 @@ def looks_like_question(text: str) -> bool:
     if core.endswith("?"):
         return True
     compact_core = _compact(core)
+    if any(marker in compact_core for marker in _INTERROGATIVE_MARKERS) and any(
+        compact_core.endswith(ending) for ending in _INTERROGATIVE_OMITTED_ENDINGS
+    ):
+        return True
     return any(
         compact_core.endswith(_compact(ending))
         for ending in _policy_question_endings()

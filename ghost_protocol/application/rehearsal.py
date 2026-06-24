@@ -224,6 +224,27 @@ def _clean_rehearsal_text(text: Any, *, gallery_id: str = "") -> str:
     cleaned = gallery_purpose.strip_identity_echo(str(text or "").strip(), gallery_id)
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     cleaned = re.sub(r"(현재\s*수집분(?:에)?서는\s*){2,}", "현재 수집분에서는 ", cleaned).strip()
+    # Trend analysis sometimes over-sanitizes ordinary nouns into "특정 유저",
+    # then leaves that placeholder attached to unrelated topic words.  Keep
+    # legitimate user-callout warnings elsewhere, but remove the dangling
+    # placeholder from rehearsal topic/guidance text so the next cycle does not
+    # inherit nonsense such as "게임 추천에 특정 유저 관심".
+    cleaned = re.sub(
+        r"(\S+에)\s*특정\s*유저\s+(관심|불만|반응|논쟁|유머러스한|현실적인|직접적인|가벼운)",
+        r"\1 \2",
+        cleaned,
+    )
+    cleaned = re.sub(
+        r"특정\s*개인에\s*특정\s*유저\s*(저격|비방|비난)",
+        r"특정 개인 \1",
+        cleaned,
+    )
+    cleaned = re.sub(
+        r"[\"']?특정\s*유저[\"']?\s*(?:과|와)\s+같은\s+밈은\s+가볍게\s+활용하되,?\s*",
+        "",
+        cleaned,
+    )
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
     return cleaned
 
 

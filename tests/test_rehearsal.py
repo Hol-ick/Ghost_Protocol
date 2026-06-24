@@ -274,6 +274,30 @@ class RehearsalFlowTest(unittest.TestCase):
         self.assertIn("목성 중력 글이 이어집니다.", text)
         self.assertIn("목성 먼지 장면으로 낮춘다.", text)
 
+    def test_rehearsal_text_strips_dangling_specific_user_placeholders(self):
+        text = rehearsal.format_markdown(
+            [
+                {
+                    "cycle": 1,
+                    "cycle_limit": 1,
+                    "expected_count": 1,
+                    "intel": {
+                        "ai_analysis": "마피아 게임 추천에 특정 유저 관심이 보이고 보드게임 카페 수익에 특정 유저 현실적인 반응이 있다.",
+                        "generation_guidance": "특정 게임이나 카드에 특정 유저 직접적인 비난을 피하고, '특정 유저'과 같은 밈은 가볍게 활용하되 안전하게 쓴다.",
+                    },
+                    "scripts": [{"wave": 1, "title": "보드게임 카페 수익", "content": "본문"}],
+                }
+            ],
+            gallery_id="boardgame",
+        )
+
+        self.assertNotIn("특정 유저 관심", text)
+        self.assertNotIn("특정 유저 현실적인", text)
+        self.assertNotIn("특정 유저 직접적인", text)
+        self.assertNotIn("특정 유저'과 같은 밈", text)
+        self.assertIn("마피아 게임 추천에 관심", text)
+        self.assertIn("카드에 직접적인 비난", text)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -241,6 +241,12 @@ def test_question_punctuation_is_added_without_moving_laughter():
     assert naturalness.ensure_question_punctuation("예수님덜 여기서 뭐하는 거임") == (
         "예수님덜 여기서 뭐하는 거임?"
     )
+    assert naturalness.ensure_question_punctuation("보드게임 카페는 수익이 얼마나 남음") == (
+        "보드게임 카페는 수익이 얼마나 남음?"
+    )
+    assert naturalness.ensure_question_punctuation("마피아 게임 몇 명 필요함") == (
+        "마피아 게임 몇 명 필요함?"
+    )
     assert naturalness.ensure_question_punctuation("그건 맞음") == "그건 맞음"
     assert naturalness.ensure_question_punctuation("이 계산이 맞음") == "이 계산이 맞음"
 
@@ -276,6 +282,7 @@ def test_incomplete_title_endings_are_rejected():
         "골드번호 응모 매번 해도",
         "외행성 사진 화질 좋아지면",
         "목성 중력으로 행성 제조 가능하단 거",
+        "창고 정리하다 나온 카드들 이거",
     ]
 
     for title in failures:
