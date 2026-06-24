@@ -4198,14 +4198,17 @@ def _render_source_sampling_panel() -> None:
             st.warning("샘플링할 갤러리 ID를 하나 이상 입력해 주세요.")
         else:
             logs: list[str] = []
+            st.session_state["sample_crawl_running"] = True
+            st.session_state["_sample_log_focus"] = True
+            st.session_state["sample_crawl_log"] = []
             live_status = st.empty()
-            live_log = st.empty()
 
             def _sample_log(message: str) -> None:
                 logs.append(str(message))
                 st.session_state["sample_crawl_log"] = logs
-                live_status.caption(f"샘플 크롤링 진행 중 · 로그 {len(logs)}줄 · 최근: {logs[-1][:90]}")
-                live_log.code("\n".join(logs[-32:]), language="text")
+                live_status.caption(
+                    f"샘플 크롤링 진행 중 · 우측 실행로그에 {len(logs)}줄 기록 중 · 최근: {logs[-1][:90]}"
+                )
 
             with st.spinner("샘플 원본을 수집하는 중입니다..."):
                 _sample_log(
@@ -4223,13 +4226,15 @@ def _render_source_sampling_panel() -> None:
             st.session_state["sample_crawl_log"] = logs
             success_count = sum(1 for item in bundle.get("items", []) if item.get("ok"))
             _sample_log(f"샘플 크롤링 완료 — 성공 {success_count}/{len(specs)}개 게시판")
+            st.session_state["sample_crawl_running"] = False
+            st.session_state["_sample_log_focus"] = True
             st.toast(f"샘플링 완료: {success_count}/{len(specs)}개 게시판", icon="✅")
+            st.rerun()
 
     logs = list(st.session_state.get("sample_crawl_log", []) or [])
     bundle = st.session_state.get("sample_crawl_result") or {}
     if logs:
-        with st.expander("샘플링 로그", expanded=True):
-            st.code("\n".join(logs[-24:]), language="text")
+        st.caption(f"최근 샘플링 로그 {len(logs)}줄은 우측 실행로그에서 확인할 수 있습니다.")
     if bundle:
         item_count = len(list(bundle.get("items") or []))
         ok_count = sum(1 for item in bundle.get("items", []) if item.get("ok"))
@@ -5511,7 +5516,11 @@ else:
 
 _intel_logs = list(st.session_state.get("intel_log", []) or [])
 _swarm_logs = list(st.session_state.get("swarm_log", []) or [])
-_live_logs: list = _intel_logs + _swarm_logs
+_sample_logs = list(st.session_state.get("sample_crawl_log", []) or [])
+_sample_log_active = bool(
+    st.session_state.get("sample_crawl_running") or st.session_state.get("_sample_log_focus")
+)
+_live_logs: list = _intel_logs + _swarm_logs + _sample_logs
 _live_title = "누적 로그"
 if _intel_is_running:
     _live_logs = _intel_logs
@@ -5525,6 +5534,9 @@ elif _is_running:
 elif _is_reviewing and _swarm_logs:
     _live_logs = _swarm_logs
     _live_title = "초안 작성 로그"
+elif _sample_log_active and _sample_logs:
+    _live_logs = _sample_logs
+    _live_title = "샘플 크롤링 로그"
 elif _has_brief and _intel_logs:
     _live_logs = _intel_logs
     _live_title = "게시판 읽기 로그"
