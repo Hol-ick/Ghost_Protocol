@@ -88,6 +88,7 @@ SESSION_DEFAULTS: dict = {
     "sample_pages": 1,
     "sample_comments_per_post": 3,
     "sample_crawl_result": None,
+    "sample_analysis_result": None,
     "sample_crawl_log": [],
     "sample_crawl_running": False,
     "_sample_log_focus": False,

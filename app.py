@@ -4201,6 +4201,7 @@ def _render_source_sampling_panel() -> None:
             st.session_state["sample_crawl_running"] = True
             st.session_state["_sample_log_focus"] = True
             st.session_state["sample_crawl_log"] = []
+            st.session_state["sample_analysis_result"] = None
             live_status = st.empty()
 
             def _sample_log(message: str) -> None:
@@ -4241,6 +4242,32 @@ def _render_source_sampling_panel() -> None:
         st.caption(f"최근 샘플링 결과: {ok_count}/{item_count}개 게시판 수집됨")
         for note in source_sampler.sample_quality_notes(bundle):
             st.caption(f"샘플 메모: {note}")
+        if st.button("샘플 분석", key="source_sample_analyze_btn", use_container_width=True):
+            analysis = source_sampler.analyze_sample_bundle(bundle)
+            st.session_state["sample_analysis_result"] = analysis
+            profile_count = len(list(analysis.get("profiles") or []))
+            st.session_state.setdefault("sample_crawl_log", []).append(
+                f"샘플 분석 완료 — {profile_count}개 게시판 프로필"
+            )
+            st.session_state["_sample_log_focus"] = True
+            st.toast("샘플 분석 프로필을 만들었습니다.", icon="✅")
+
+        analysis = st.session_state.get("sample_analysis_result") or {}
+        if analysis:
+            with st.expander("샘플 분석 요약", expanded=True):
+                for profile in list(analysis.get("profiles") or [])[:6]:
+                    topics = ", ".join(row.get("label", "") for row in list(profile.get("topic_mix") or [])[:3])
+                    patterns = ", ".join(
+                        row.get("label", "") for row in list(profile.get("title_patterns") or [])[:2]
+                    )
+                    st.caption(
+                        f"{profile.get('gallery_id')} · 주제: {topics or '샘플 없음'} · 제목: {patterns or '샘플 없음'}"
+                    )
+            _render_clipboard_button(
+                "샘플 분석 복사",
+                source_sampler.format_sample_analysis_markdown(analysis),
+                key="source_sample_analysis_copy",
+            )
         _render_clipboard_button(
             "샘플 패키지 복사",
             source_sampler.format_sample_markdown(bundle),
