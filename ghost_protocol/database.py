@@ -72,6 +72,22 @@ def init_db() -> None:
 
         CREATE INDEX IF NOT EXISTS idx_posts_gallery ON posts(gallery_id);
         CREATE INDEX IF NOT EXISTS idx_comments_post ON comments(post_id, gallery_id);
+
+        CREATE TABLE IF NOT EXISTS ai_post_comments (
+            comment_id       INTEGER PRIMARY KEY AUTOINCREMENT,
+            post_id          TEXT    NOT NULL,
+            gallery_id       TEXT    NOT NULL,
+            author           TEXT    DEFAULT '',
+            content          TEXT    NOT NULL,
+            created_at       TEXT    DEFAULT '',
+            scraped_at       TEXT    DEFAULT (datetime('now','localtime')),
+            marker_feedback  INTEGER DEFAULT 0,
+            feedback_reason  TEXT    DEFAULT '',
+            UNIQUE(post_id, gallery_id, author, content, created_at)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_ai_post_comments_gallery
+            ON ai_post_comments(gallery_id, post_id);
     """)
 
     # v1.0 migration: 신규 컬럼 추가 (기존 DB 호환)
@@ -89,6 +105,20 @@ def init_db() -> None:
 
     conn.commit()
     conn.close()
+
+
+def truncate_posts() -> int:
+    """게시글·댓글 테이블 전체 삭제 (Context Poisoning 방지용 DB 초기화).
+
+    이전 테스트 사이클에서 스크래퍼가 읽어오는 찌꺼기 데이터를 완전히 제거한다.
+    반환값: 삭제된 총 행 수 (posts + comments).
+    """
+    conn = get_connection()
+    n_comments = conn.execute("DELETE FROM comments").rowcount
+    n_posts    = conn.execute("DELETE FROM posts").rowcount
+    conn.commit()
+    conn.close()
+    return n_posts + n_comments
 
 
 def insert_post(
@@ -176,6 +206,61 @@ def get_ai_post_nos(gallery_id: str) -> set[str]:
     return {str(r[0]) for r in rows}
 
 
+def get_ai_posts(gallery_id: str, limit: int = 50) -> list[dict]:
+    """Return recent AI-marked posts for comment monitoring."""
+    conn = get_connection()
+    rows = conn.execute(
+        """SELECT post_id, gallery_id, title, content, created_at, scraped_at
+           FROM posts
+           WHERE gallery_id = ? AND is_ai = 1
+           ORDER BY CAST(post_id AS INTEGER) DESC
+           LIMIT ?""",
+        (gallery_id, max(1, int(limit or 50))),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def record_ai_post_comments(comments: list[dict]) -> int:
+    """Persist comments attached to AI-marked posts.
+
+    Returns the number of rows newly inserted. Repeated crawls are ignored by
+    the UNIQUE constraint.
+    """
+    if not comments:
+        return 0
+
+    conn = get_connection()
+    before = conn.total_changes
+    conn.executemany(
+        """INSERT OR IGNORE INTO ai_post_comments
+           (post_id, gallery_id, author, content, created_at, marker_feedback, feedback_reason)
+           VALUES (:post_id, :gallery_id, :author, :content, :created_at,
+                   :marker_feedback, :feedback_reason)""",
+        comments,
+    )
+    conn.commit()
+    inserted = conn.total_changes - before
+    conn.close()
+    return int(inserted)
+
+
+def get_ai_post_comments(gallery_id: str, limit: int = 120) -> list[dict]:
+    """Return recently observed comments on AI-marked posts."""
+    conn = get_connection()
+    rows = conn.execute(
+        """SELECT post_id, gallery_id, author, content, created_at,
+                  scraped_at, marker_feedback, feedback_reason
+           FROM ai_post_comments
+           WHERE gallery_id = ?
+           ORDER BY comment_id DESC
+           LIMIT ?""",
+        (gallery_id, max(1, int(limit or 120))),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
 def insert_comments(comments: list[dict]) -> None:
     if not comments:
         return
@@ -258,6 +343,22 @@ def get_ai_post_count(gallery_id: str) -> int:
     ).fetchone()
     conn.close()
     return result[0]
+
+
+def get_bot_titles(gallery_id: str, limit: int = 200) -> list[str]:
+    """최근 봇 게시글 제목 리스트 반환 (스크래핑 데이터 오염 필터용).
+
+    is_ai=1인 게시글의 제목을 최근 순으로 최대 limit개 반환.
+    collect_trending()에서 ledger에 안 잡힌 봇 글을 유사도 비교로 추가 필터링할 때 사용.
+    """
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT title FROM posts WHERE gallery_id = ? AND is_ai = 1 "
+        "ORDER BY rowid DESC LIMIT ?",
+        (gallery_id, limit),
+    ).fetchall()
+    conn.close()
+    return [r["title"] for r in rows]
 
 
 def get_winner_posts(gallery_id: str, limit: int = 3) -> list[dict]:

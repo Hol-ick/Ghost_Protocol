@@ -2,7 +2,7 @@
 
 Pipeline:
   accounts.txt → 아이디 목록 읽기 → 공통 비밀번호 매핑
-  Playwright   → headless browser (anti-detection)
+  Playwright   → browser session
   DC Inside    → login → WAF delay → write post → done
   log_callback → real-time UI logging
 """
@@ -13,7 +13,7 @@ import random
 import re
 import time
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from playwright.async_api import async_playwright
 
@@ -128,6 +128,435 @@ class GhostPoster:
         self._context = None
         self._page = None
 
+    @staticmethod
+    def _looks_like_editor(raw: str) -> bool:
+        text = (raw or "").lower()
+        editor_markers = (
+            "editor",
+            "write",
+            "content",
+            "smart",
+            "se2",
+            "cheditor",
+            "tx_",
+            "ir1",
+        )
+        return any(marker in text for marker in editor_markers)
+
+    @staticmethod
+    def _looks_like_ad(raw: str, box: Optional[dict[str, float]] = None) -> bool:
+        text = (raw or "").lower()
+        if GhostPoster._looks_like_editor(text):
+            return False
+
+        ad_markers = (
+            "ad",
+            "ads",
+            "adv",
+            "adfit",
+            "adop",
+            "doubleclick",
+            "googlesyndication",
+            "criteo",
+            "banner",
+            "sponsor",
+            "promotion",
+        )
+        if any(marker in text for marker in ad_markers):
+            return True
+
+        if box:
+            width = float(box.get("width") or 0)
+            height = float(box.get("height") or 0)
+            # DC write-page banner ads sit between the title and editor.
+            if width >= 250 and 20 <= height <= 160:
+                return True
+        return False
+
+    async def _disable_write_page_distractions(self, log: Optional[Callable] = None) -> None:
+        """Prevent banner ads from stealing clicks while the editor is being focused."""
+        page = self._page
+        if not page:
+            return
+
+        try:
+            hidden_count = await page.evaluate(
+                """() => {
+                    const editorWords = /editor|write|content|smart|se2|cheditor|tx_|ir1/i;
+                    const adWords = /(^|_|-|\\b)(ad|ads|adv|banner|sponsor|promotion)(_|-|\\b|$)|adfit|adop|doubleclick|googlesyndication|criteo/i;
+                    const hide = (el) => {
+                        if (!el || el.dataset.ghostAdDisabled === "1") return 0;
+                        el.dataset.ghostAdDisabled = "1";
+                        el.style.pointerEvents = "none";
+                        el.style.visibility = "hidden";
+                        el.style.maxHeight = "0px";
+                        el.style.overflow = "hidden";
+                        el.style.position = "relative";
+                        el.style.zIndex = "0";
+                        return 1;
+                    };
+
+                    let count = 0;
+                    document.querySelectorAll("iframe").forEach((el) => {
+                        const raw = [
+                            el.id,
+                            el.name,
+                            el.title,
+                            el.className,
+                            el.getAttribute("src") || "",
+                        ].join(" ");
+                        const rect = el.getBoundingClientRect();
+                        const bannerSized = rect.width >= 250 && rect.height >= 20 && rect.height <= 160;
+                        if (!editorWords.test(raw) && (adWords.test(raw) || bannerSized)) {
+                            count += hide(el);
+                        }
+                    });
+
+                    const selectors = [
+                        ".ad", ".ad_box", ".gall_ad", ".banner", ".banner_box",
+                        ".promotion", ".adv", ".adv_ad", "#ad", "[id^='ad_']",
+                        "[id$='_ad']", "[class*='adfit']", "[class*='adop']"
+                    ];
+                    document.querySelectorAll(selectors.join(",")).forEach((el) => {
+                        const raw = [el.id, el.className].join(" ");
+                        if (!editorWords.test(raw)) count += hide(el);
+                    });
+
+                    [...document.querySelectorAll("a, button")].forEach((el) => {
+                        const text = (el.innerText || el.textContent || "").trim();
+                        if (text === "바로가기") {
+                            const block = el.closest("div, section, article") || el;
+                            const rect = block.getBoundingClientRect();
+                            if (rect.width >= 250 && rect.height <= 180) count += hide(block);
+                        }
+                    });
+                    return count;
+                }"""
+            )
+            if log and hidden_count:
+                log(f"[POSTER] 광고/배너 클릭 차단 {hidden_count}개 적용")
+        except Exception as exc:
+            if log:
+                log(f"[POSTER] 광고 차단 준비 실패, 계속 진행: {str(exc)[:80]}")
+
+    async def _focus_editor(self, editor: Any, log: Optional[Callable] = None) -> bool:
+        try:
+            await editor.scroll_into_view_if_needed(timeout=3000)
+        except Exception:
+            pass
+
+        try:
+            await editor.click(timeout=4000)
+            focused = await editor.evaluate(
+                """(el) => {
+                    if (el && typeof el.focus === "function") el.focus();
+                    const active = document.activeElement;
+                    return active === el || (el && el.contains && el.contains(active)) || !!(active && active.isContentEditable);
+                }"""
+            )
+            if focused:
+                return True
+        except Exception as exc:
+            if log:
+                log(f"[POSTER] 에디터 포커스 확인 실패: {str(exc)[:80]}")
+        return False
+
+    async def _find_write_editor(self, log: Optional[Callable] = None) -> Any:
+        """Find the real DCInside write editor without falling into ad iframes."""
+        page = self._page
+        if not page:
+            return None
+
+        await self._disable_write_page_distractions(log)
+
+        try:
+            frames = page.locator("iframe")
+            frame_count = await frames.count()
+        except Exception:
+            frame_count = 0
+
+        for index in range(frame_count):
+            iframe = frames.nth(index)
+            try:
+                attrs: list[str] = []
+                for attr in ("id", "name", "title", "class", "src"):
+                    value = await iframe.get_attribute(attr, timeout=1200)
+                    if value:
+                        attrs.append(value)
+                raw = " ".join(attrs)
+                box = await iframe.bounding_box(timeout=1200)
+                if self._looks_like_ad(raw, box):
+                    continue
+
+                handle = await iframe.element_handle(timeout=1200)
+                frame = await handle.content_frame() if handle else None
+                if not frame:
+                    continue
+
+                for selector in ("body[contenteditable='true']", "[contenteditable='true']", "body"):
+                    candidate = frame.locator(selector).first
+                    try:
+                        await candidate.wait_for(state="attached", timeout=1500)
+                        candidate_box = await candidate.bounding_box(timeout=1000)
+                        if selector == "body" and candidate_box and float(candidate_box.get("height") or 0) < 80:
+                            continue
+                        if await self._focus_editor(candidate):
+                            if log:
+                                log(f"[POSTER] 에디터 발견 (iframe #{index + 1}, {selector})")
+                            return candidate
+                    except Exception:
+                        continue
+            except Exception:
+                continue
+
+        try:
+            contenteditables = page.locator("[contenteditable='true']")
+            editable_count = await contenteditables.count()
+        except Exception:
+            editable_count = 0
+
+        for index in range(editable_count):
+            candidate = contenteditables.nth(index)
+            try:
+                box = await candidate.bounding_box(timeout=1200)
+                if box and (float(box.get("width") or 0) < 150 or float(box.get("height") or 0) < 80):
+                    continue
+                if await self._focus_editor(candidate):
+                    if log:
+                        log(f"[POSTER] 에디터 발견 (contenteditable #{index + 1})")
+                    return candidate
+            except Exception:
+                continue
+
+        return None
+
+    async def _type_into_editor(self, editor: Any, text: str, log: Optional[Callable] = None) -> bool:
+        delay = int(random.uniform(80, 130))
+        if not await self._focus_editor(editor, log):
+            return False
+        try:
+            await editor.type(text, delay=delay)
+            return True
+        except Exception as exc:
+            if log:
+                log(f"[POSTER] 에디터 직접 입력 실패, 키보드 입력 재시도: {str(exc)[:80]}")
+
+        if not await self._focus_editor(editor, log):
+            return False
+        try:
+            await self._page.keyboard.type(text, delay=delay)
+            return True
+        except Exception as exc:
+            if log:
+                log(f"[POSTER] 키보드 입력 실패: {str(exc)[:80]}")
+            return False
+
+    async def _click_post_submit(self, log: Optional[Callable] = None) -> bool:
+        """Click the final post submit control, not the editor's image-register button."""
+        page = self._page
+        if not page:
+            return False
+
+        candidates: list[tuple[float, float, Any, str]] = []
+        controls = page.locator(
+            "button, input[type='submit'], input[type='button'], a"
+        )
+        try:
+            control_count = await controls.count()
+        except Exception:
+            control_count = 0
+
+        visible_labels: list[str] = []
+        for index in range(control_count):
+            control = controls.nth(index)
+            try:
+                if not await control.is_visible(timeout=800):
+                    continue
+                label = (
+                    (await control.inner_text(timeout=800))
+                    or (await control.get_attribute("value", timeout=800))
+                    or (await control.get_attribute("aria-label", timeout=800))
+                    or ""
+                )
+                label = re.sub(r"\s+", " ", label).strip()
+                if label and len(visible_labels) < 20:
+                    visible_labels.append(label[:40])
+                # "등록(50회)" is the image attachment control, not post submit.
+                if label != "등록":
+                    continue
+                box = await control.bounding_box(timeout=800)
+                if not box:
+                    continue
+                candidates.append(
+                    (
+                        float(box.get("y") or 0),
+                        float(box.get("x") or 0),
+                        control,
+                        label,
+                    )
+                )
+            except Exception:
+                continue
+
+        # The final registration button is below editor-specific attachment controls.
+        candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        for _, _, control, _ in candidates:
+            try:
+                await control.scroll_into_view_if_needed(timeout=2500)
+                await control.click(timeout=5000)
+                if log:
+                    log("[POSTER] 등록 버튼 클릭 완료 (정확한 텍스트/위치 기준)")
+                return True
+            except Exception:
+                continue
+
+        # Last resort: submit the form that owns the subject field.
+        try:
+            submitted = await page.evaluate(
+                """() => {
+                    const subject = document.querySelector("#subject");
+                    const form = subject && subject.closest("form");
+                    if (!form) return false;
+                    const controls = [...form.querySelectorAll("button, input")];
+                    const submitter = controls.find((el) => {
+                        const label = (el.innerText || el.value || "").replace(/\\s+/g, " ").trim();
+                        return label === "등록";
+                    });
+                    if (typeof form.requestSubmit === "function") {
+                        form.requestSubmit(submitter || undefined);
+                    } else {
+                        form.submit();
+                    }
+                    return true;
+                }"""
+            )
+            if submitted:
+                if log:
+                    log("[POSTER] 등록 폼 제출 완료 (requestSubmit fallback)")
+                return True
+        except Exception:
+            pass
+
+        if log:
+            labels = ", ".join(visible_labels) or "없음"
+            log(f"[POSTER] [ERROR] 등록 버튼 탐색 실패 — 가시 컨트롤: {labels[:300]}")
+        return False
+
+    async def _click_comment_submit(
+        self,
+        comment_input: Any,
+        log: Optional[Callable] = None,
+    ) -> bool:
+        """Click the plain registration control nearest the active comment box."""
+        page = self._page
+        if not page:
+            return False
+
+        try:
+            input_box = await comment_input.bounding_box(timeout=1200)
+        except Exception:
+            input_box = None
+
+        input_bottom = 0.0
+        input_x = 0.0
+        if input_box:
+            input_bottom = float(input_box.get("y") or 0) + float(
+                input_box.get("height") or 0
+            )
+            input_x = float(input_box.get("x") or 0)
+
+        candidates: list[tuple[int, float, float, Any]] = []
+        visible_labels: list[str] = []
+        controls = page.locator(
+            "button, input[type='submit'], input[type='button'], a"
+        )
+        try:
+            control_count = await controls.count()
+        except Exception:
+            control_count = 0
+
+        for index in range(control_count):
+            control = controls.nth(index)
+            try:
+                if not await control.is_visible(timeout=800):
+                    continue
+                label = (
+                    (await control.inner_text(timeout=800))
+                    or (await control.get_attribute("value", timeout=800))
+                    or (await control.get_attribute("aria-label", timeout=800))
+                    or ""
+                )
+                label = re.sub(r"\s+", " ", label).strip()
+                if label and len(visible_labels) < 24:
+                    visible_labels.append(label[:40])
+                # "등록+추천" is a different action. Submit only the plain comment.
+                if label not in {"등록", "댓글 등록", "댓글등록"}:
+                    continue
+                box = await control.bounding_box(timeout=800)
+                if not box:
+                    continue
+                y = float(box.get("y") or 0)
+                x = float(box.get("x") or 0)
+                candidates.append(
+                    (
+                        0 if not input_box or y >= input_bottom - 8 else 1,
+                        abs(y - input_bottom) if input_box else y,
+                        abs(x - input_x),
+                        control,
+                    )
+                )
+            except Exception:
+                continue
+
+        candidates.sort(key=lambda item: (item[0], item[1], item[2]))
+        for _, _, _, control in candidates:
+            try:
+                await control.scroll_into_view_if_needed(timeout=2500)
+                await control.click(timeout=5000)
+                if log:
+                    log("[POSTER] 🖱️ 댓글 등록 버튼 클릭 (입력창/위치 기준)")
+                return True
+            except Exception:
+                continue
+
+        try:
+            submitted = await comment_input.evaluate(
+                """(textarea) => {
+                    const root = textarea.closest(
+                        "form, .cmt_write_box, .reply_write, .comment_write"
+                    ) || textarea.parentElement;
+                    if (!root) return false;
+                    const controls = [...root.querySelectorAll(
+                        "button, input[type='submit'], input[type='button'], a"
+                    )];
+                    const submitter = controls.find((el) => {
+                        const label = (el.innerText || el.value || el.getAttribute("aria-label") || "")
+                            .replace(/\\s+/g, " ")
+                            .trim();
+                        return label === "등록" || label === "댓글 등록" || label === "댓글등록";
+                    });
+                    if (!submitter) return false;
+                    const form = textarea.closest("form");
+                    if (form && typeof form.requestSubmit === "function") {
+                        form.requestSubmit(submitter);
+                    } else {
+                        submitter.click();
+                    }
+                    return true;
+                }"""
+            )
+            if submitted:
+                if log:
+                    log("[POSTER] 🖱️ 댓글 등록 폼 제출 (DOM fallback)")
+                return True
+        except Exception:
+            pass
+
+        if log:
+            labels = ", ".join(visible_labels) or "없음"
+            log(f"[POSTER] [ERROR] 댓글 등록 버튼 탐색 실패 — 가시 컨트롤: {labels[:300]}")
+        return False
+
     async def _take_death_cam(self, log: Optional[Callable] = None) -> None:
         """에러 직전 스크린샷 캡처 (Death Cam) — logs/screenshots/ 저장."""
         if not self._page:
@@ -147,7 +576,7 @@ class GhostPoster:
                 log("[POSTER] 📸 스크린샷 저장 실패 (브라우저 이미 닫힘?)")
 
     # ══════════════════════════════════════════════
-    # 브라우저 관리 (scraper.py와 동일한 스텔스 설정)
+    # 브라우저 관리
     # ══════════════════════════════════════════════
 
     async def start_browser(
@@ -155,7 +584,7 @@ class GhostPoster:
         log: Optional[Callable] = None,
         storage_state: Optional[str] = None,
     ) -> None:
-        """브라우저 시작 — 헤드리스 탐지 우회.
+        """브라우저 시작.
 
         Args:
             storage_state: sessions/*.json 경로 문자열.
@@ -163,7 +592,7 @@ class GhostPoster:
                            None이면 새 빈 컨텍스트로 시작.
         """
         if log:
-            log("[POSTER] 🌐 브라우저 스텔스 모드 시작...")
+            log("[POSTER] 🌐 브라우저 세션 시작...")
 
         try:
             self._playwright = await async_playwright().start()
@@ -560,7 +989,9 @@ class GhostPoster:
         editor_found = False
         try:
             # 시도 1: 일반적인 웹에디터의 iframe 내부 body
-            editor = page.frame_locator("iframe").last.locator("body")
+            editor = await self._find_write_editor(log)
+            if editor is None:
+                raise RuntimeError("write editor not found")
             await editor.click(timeout=3000)
             editor_found = True
             if log:
@@ -628,6 +1059,7 @@ class GhostPoster:
 
             # editor.evaluate(fn) — iframe 내부 에디터도 올바른 프레임 컨텍스트에서 실행
             await editor.evaluate(paste_js)
+            await self._focus_editor(editor)
             # 디시 서버 이미지 업로드 대기
             await page.wait_for_timeout(2000)
             await page.keyboard.press("Enter")
@@ -636,21 +1068,21 @@ class GhostPoster:
             if log:
                 log(f"[POSTER] ⚠️ 짤방 삽입 실패 (무시하고 계속): {str(e)[:80]}")
 
-        # ── 본문 타이핑 (전각 마침표 스텔스 마커 본문 끝에 삽입) ──
-        # 제목 끝 마커는 HTML 목록 페이지에서 보여 식별 위험 존재.
-        # 본문 끝은 목록에 노출되지 않아 스텔스성이 훨씬 높음.
-        # 이중 삽입 방지: LLM이 이미 ．로 끝나는 본문을 드물게 생성하는 엣지케이스 처리.
-        _c_stripped  = content.rstrip()
-        marked_content = _c_stripped if _c_stripped.endswith("\uff0e") else _c_stripped + "\uff0e"
+        # ── 본문 타이핑 ────────────────────────────────────────────────
+        # 발행 텍스트는 그대로 입력한다. AI 작성 여부 추적은 post_no DB/ledger
+        # 기록으로 처리하며, 본문에는 공개/비공개 표식을 삽입하지 않는다.
+        marked_content = content.rstrip()
 
         if log:
-            log("[POSTER] ⌨️ 본문 타이핑 시작... [전각 마침표 마커 본문 말미 삽입]")
+            log("[POSTER] ⌨️ 본문 타이핑 시작...")
 
         # Jitter: 에디터 포커스 후 타이핑 시작 전 짧은 멈춤
         await page.wait_for_timeout(int(random.uniform(800, 1800)))
 
         try:
-            await page.keyboard.type(marked_content, delay=int(random.uniform(80, 130)))
+            typed_ok = await self._type_into_editor(editor, marked_content, log=log)
+            if not typed_ok:
+                raise RuntimeError("editor typing failed")
             # Jitter: 타이핑 완료 후 검토하는 척 멈춤
             await page.wait_for_timeout(int(random.uniform(1000, 2500)))
         except Exception as e:
@@ -671,8 +1103,9 @@ class GhostPoster:
         await page.wait_for_timeout(int(random.uniform(1200, 2800)))
 
         try:
-            submit_btn = page.locator(".btn_blue.btn_svc.write")
-            await submit_btn.click()
+            submitted = await self._click_post_submit(log)
+            if not submitted:
+                raise RuntimeError("post submit control not found")
         except Exception as e:
             if log:
                 log(f"[POSTER] [ERROR] .btn_blue.btn_svc.write 클릭 실패: {str(e)[:100]}")
@@ -853,40 +1286,8 @@ class GhostPoster:
         if log:
             log(f"[POSTER] ✅ 댓글 입력 완료 ({len(comment)}자). 등록 버튼 클릭 중...")
 
-        # ── 등록 버튼 탐색 (멀티 셀렉터 + 텍스트 fallback) ──
-        submitted = False
-        for _sel in [
-            ".btn_comment_ok",
-            ".btn_write.comment",
-            ".write_btn",
-            ".btn_submit",
-        ]:
-            try:
-                btn = page.locator(_sel).first
-                await btn.wait_for(state="attached", timeout=2000)
-                await btn.scroll_into_view_if_needed()
-                await page.wait_for_timeout(int(random.uniform(600, 1200)))
-                await btn.click(force=True)
-                submitted = True
-                if log:
-                    log(f"[POSTER] 🖱️ 등록 버튼 클릭 ({_sel})")
-                break
-            except Exception:
-                continue
-
-        if not submitted:
-            # 텍스트 "등록" 버튼 fallback
-            try:
-                btn = page.locator("button").filter(has_text="등록").last
-                await btn.wait_for(state="attached", timeout=2000)
-                await btn.scroll_into_view_if_needed()
-                await page.wait_for_timeout(int(random.uniform(600, 1200)))
-                await btn.click(force=True)
-                submitted = True
-                if log:
-                    log("[POSTER] 🖱️ 등록 버튼 클릭 (텍스트 fallback)")
-            except Exception:
-                pass
+        await page.wait_for_timeout(int(random.uniform(600, 1200)))
+        submitted = await self._click_comment_submit(comment_input, log)
 
         if not submitted:
             if log:

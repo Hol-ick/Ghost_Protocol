@@ -28,6 +28,15 @@ from dotenv import load_dotenv
 
 from . import database
 from . import prompt_manager as pm
+from .content_filter import (
+    filter_noise_strings,
+    sanitize_analysis_keywords,
+    sanitize_sensitive_target_comments,
+    sanitize_user_drama_text,
+    sensitive_generation_violations,
+)
+from .application import gemini_budget, gemini_throttle, trend_cache
+from .domain import gallery_purpose, gallery_style, naturalness, writing_enrichment
 
 # .env 에서 GEMINI_API_KEY 로딩
 load_dotenv()
@@ -87,7 +96,18 @@ def _parse_json_robust(text: str) -> dict:
 # ══════════════════════════════════════════════
 # 고정 모델 (무료 티어 최적화 — Fallback 없음)
 # ══════════════════════════════════════════════
-MODEL_NAME = "gemini-2.5-flash"
+MODEL_NAME = os.getenv("GEMINI_MODEL_NAME", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
+FALLBACK_MODEL_NAMES = tuple(
+    model
+    for model in (
+        item.strip()
+        for item in os.getenv(
+            "GEMINI_FALLBACK_MODELS",
+            "gemini-2.5-flash-lite",
+        ).split(",")
+    )
+    if model and model != MODEL_NAME
+)
 
 
 class RateLimitError(Exception):
@@ -97,6 +117,17 @@ class RateLimitError(Exception):
 # ══════════════════════════════════════════════
 # Safety Settings: 전 카테고리 검열 해제
 # ══════════════════════════════════════════════
+def _shorten_log_value(value: object, *, limit: int = 800) -> str:
+    """Return a compact, single-line representation for API diagnostics."""
+
+    try:
+        text = str(value)
+    except Exception:
+        text = repr(value)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:limit]
+
+
 SAFETY_SETTINGS = [
     types.SafetySetting(category="HARM_CATEGORY_HARASSMENT",        threshold="BLOCK_NONE"),
     types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH",       threshold="BLOCK_NONE"),
@@ -105,7 +136,7 @@ SAFETY_SETTINGS = [
 ]
 
 # ══════════════════════════════════════════════
-# Jailbreak System Prompt → prompts/system_base.txt
+# System prompt → prompts/system_base.txt
 # pm.load("system_base.txt") 로 동적 주입
 # ══════════════════════════════════════════════
 
@@ -113,14 +144,12 @@ SAFETY_SETTINGS = [
 MAX_CONTENT_LENGTH = 300
 
 # ── 댓글 길이 룰 — Phase 9: 동적 랜덤 할당 ────────────────────────────────
-# generate_post() 호출마다 랜덤 선택 → $length_rule 로 generate_comment.txt 에 주입.
-# 비율: 1줄(40%) / 2줄(35%) / 2~3줄(25%) — 1줄이 커뮤니티 현실에 가장 많으므로 가중치 유지.
+# Legacy fallback only.  The active path now uses writing_enrichment.comment_length_rule()
+# so long comments appear only when the collected source rhythm supports them.
 _COMMENT_LENGTH_RULES: list[str] = [
-    "딱 1줄. 짧고 강렬하게. 설명 없이 반응만 툭 던져라.",
-    "딱 1줄. 짧고 강렬하게. 설명 없이 반응만 툭 던져라.",
-    "2줄. 첫 줄 리액션, 둘째 줄 구체적 이유·딴지 한 마디. (줄바꿈 1회)",
-    "2줄. 첫 줄 리액션, 둘째 줄 구체적 이유·딴지 한 마디. (줄바꿈 1회)",
-    "2~3줄. 본문이나 기존 댓글의 디테일을 꼬투리 잡아 풀어써라. 단, 각 줄은 짧게.",
+    "1줄. 짧게 반응만 둔다.",
+    "2줄. 첫 줄 반응, 둘째 줄 아주 짧은 이유.",
+    "3줄 이내. 타겟 글에 이미 긴 댓글 흐름이 있을 때만 허용한다.",
 ]
 
 
@@ -139,36 +168,53 @@ class GhostBrain:
                 "Gemini API Key가 없습니다. "
                 ".env 파일에 GEMINI_API_KEY를 설정하거나 사이드바에 입력하세요."
             )
-        self._client = genai.Client(api_key=key)
+        try:
+            http_timeout_ms = int(os.getenv("GEMINI_HTTP_TIMEOUT_MS", "35000"))
+        except (TypeError, ValueError):
+            http_timeout_ms = 35000
+        http_timeout_ms = max(5000, min(120000, http_timeout_ms))
+        self._client = genai.Client(
+            api_key=key,
+            http_options=types.HttpOptions(timeout=http_timeout_ms),
+        )
         self.model_name = MODEL_NAME
+        self.fallback_model_names = FALLBACK_MODEL_NAMES
 
     # ══════════════════════════════════════════════
     # 내부 헬퍼
     # ══════════════════════════════════════════════
 
     def _get_gallery_context(self, gallery_id: str) -> str:
-        """갤러리 ID → 고유 문법 룰 + 퓨샷 예시 프롬프트 블록 반환.
+        """갤러리 ID → legacy 고유 문법 룰 + 퓨샷 예시 프롬프트 블록 반환.
 
         라우팅 우선순위:
           1. gallery_contexts.json에서 gallery_id 정확 매치
           2. 포함 관계 매치 (key in gallery_id OR gallery_id in key)
           3. "default" 폴백
 
+        새 갤러리는 여기에 ID별 하드코딩을 추가하지 않는다. 지속 분야는
+        gallery_purposes.json의 ID/name 토큰 추론과 현재 원본 문체 프로필로
+        처리한다.
+
         토큰 최적화:
           - 문법 룰 최대 3개, 퓨샷 최대 2개, 본문 80자 제한
           - 빈 컨텍스트(default fewshot=[])는 룰만 반환 → ~150 토큰 이하
         """
         ctx_db: dict = pm.load_json("gallery_contexts.json")
+        if not isinstance(ctx_db, dict):
+            return ""
+        gallery_id = str(gallery_id or "").strip()
 
         # 1차: 정확 매치
-        ctx = ctx_db.get(gallery_id)
+        ctx = ctx_db.get(gallery_id) if gallery_id else None
 
         # 2차: 부분 포함 매치 (_로 시작하는 메타 키 제외)
         if ctx is None:
             for key, val in ctx_db.items():
-                if key.startswith("_"):
+                key_text = str(key)
+                if key_text.startswith("_") or key_text == "default" or not gallery_id:
                     continue
-                if key in gallery_id or gallery_id in key:
+                if key_text in gallery_id or gallery_id in key_text:
                     ctx = val
                     break
 
@@ -228,6 +274,112 @@ class GhostBrain:
             or "rate" in err_str and "limit" in err_str
         )
 
+    @staticmethod
+    def _is_billing_or_credit_error(err: Exception) -> bool:
+        """Billing/credit exhaustion should stop immediately, not fallback."""
+
+        return gemini_budget.is_billing_or_credit_error(err)
+
+    @staticmethod
+    def _describe_exception(err: Exception) -> str:
+        """Extract useful SDK error details without crashing logging."""
+
+        parts: list[str] = []
+        for attr in ("status_code", "code", "message", "details"):
+            if not hasattr(err, attr):
+                continue
+            try:
+                value = getattr(err, attr)
+            except Exception:
+                continue
+            if value:
+                parts.append(f"{attr}={_shorten_log_value(value)}")
+
+        response = getattr(err, "response", None)
+        if response is not None:
+            for attr in ("status_code", "text", "content"):
+                try:
+                    value = getattr(response, attr, None)
+                except Exception:
+                    value = None
+                if value:
+                    parts.append(f"response.{attr}={_shorten_log_value(value)}")
+
+        if not parts:
+            parts.append(_shorten_log_value(err))
+        return " | ".join(parts)
+
+    def _generate_content_paced(self, *, label: str, **kwargs):
+        """Call Gemini through the shared throttle, with model fallback on 429."""
+
+        requested_model = kwargs.get("model") or self.model_name
+        fallback_models = tuple(getattr(self, "fallback_model_names", ()) or ())
+        models_to_try = [requested_model]
+        models_to_try.extend(
+            model for model in fallback_models if model and model != requested_model
+        )
+
+        last_rate_limit: Exception | None = None
+        for index, model_name in enumerate(models_to_try):
+            call_kwargs = dict(kwargs)
+            call_kwargs["model"] = model_name
+            call_label = f"{label}:{model_name}"
+
+            waited = gemini_throttle.wait_before_call(call_label)
+            if waited >= 0.5:
+                _api_logger.debug(
+                    "gemini throttle wait %.2fs before %s",
+                    waited,
+                    call_label,
+                )
+            if index > 0:
+                _api_logger.warning(
+                    "gemini fallback model selected label=%s model=%s after=%s",
+                    label,
+                    model_name,
+                    requested_model,
+                )
+
+            call_record: dict | None = None
+            try:
+                call_record = gemini_budget.begin_call(
+                    label=label,
+                    model=model_name,
+                    contents=call_kwargs.get("contents"),
+                )
+                response = self._client.models.generate_content(**call_kwargs)
+                gemini_budget.record_success(call_record, response)
+                return response
+            except Exception as err:
+                gemini_budget.record_error(call_record, err)
+                if self._is_billing_or_credit_error(err):
+                    raise gemini_budget.GeminiBillingError(
+                        f"Gemini billing/credit exhausted: {self._describe_exception(err)}"
+                    ) from err
+                if not self._is_rate_limit_error(err):
+                    raise
+
+                last_rate_limit = err
+                _api_logger.warning(
+                    "gemini rate limit label=%s model=%s detail=%s repr=%s",
+                    label,
+                    model_name,
+                    self._describe_exception(err),
+                    _shorten_log_value(repr(err)),
+                )
+
+                if (
+                    index < len(models_to_try) - 1
+                    and gemini_budget.should_try_fallback_after_error(err)
+                ):
+                    gemini_throttle.note_rate_limit_pause(5.0)
+                    continue
+                gemini_throttle.note_rate_limit_pause(60.0)
+
+        if last_rate_limit is not None:
+            raise last_rate_limit
+        raise RuntimeError("No Gemini model configured")
+
     # ══════════════════════════════════════════════
     # 공개 API
     # ══════════════════════════════════════════════
@@ -238,7 +390,7 @@ class GhostBrain:
         context_hours: float = 1.0,
         keywords: Optional[list[str]] = None,
     ) -> str:
-        """최근 글 제목 + 핫 키워드를 바탕으로 자극적인 게시글 주제 1개를 추천.
+        """최근 글 제목 + 핫 키워드를 바탕으로 후속 초안 주제 1개를 추천.
 
         Args:
             gallery_id: 갤러리 ID
@@ -277,7 +429,8 @@ class GhostBrain:
                 temperature=0.9,
                 max_output_tokens=200,   # 50 → 200 (JSON 래퍼 + 한글 주제 잘림 방지)
             )
-            response = self._client.models.generate_content(
+            response = self._generate_content_paced(
+                label="suggest_topic",
                 model=MODEL_NAME,
                 contents=prompt,
                 config=_cfg,
@@ -315,6 +468,7 @@ class GhostBrain:
         length: str = "보통 (3~4문장)",
         keywords: Optional[list[str]] = None,
         recent_posts: Optional[list[dict]] = None,
+        composition_profile: Optional[dict] = None,
     ) -> dict:
         """DC Inside 스타일 게시글 생성 + 소셜 인터랙션 댓글 콤보.
 
@@ -372,6 +526,23 @@ class GhostBrain:
         tone_instruction = tone_desc.get(tone, tone_desc["cynical"])
         length_instruction = length_desc.get(length, length_desc["보통 (3~4문장)"])
 
+        # ── 페르소나 심화 프로필 — 관심 도메인 + 어휘 스타일 주입 ──────────
+        _profiles = pm.load_json("persona_profiles.json")
+        _prof = _profiles.get(tone)
+        if _prof:
+            _domain = ", ".join(_prof.get("domain_affinity", []))
+            _vstyle = _prof.get("vocab_style", "")
+            _never  = ", ".join(_prof.get("never_say", []))
+            _good_moves = " / ".join(_prof.get("good_moves", []))
+            _bad_moves = " / ".join(_prof.get("bad_moves", []))
+            tone_instruction += (
+                f"\n[페르소나 심화] 관심 도메인: {_domain}. "
+                f"어휘 스타일: {_vstyle}. "
+                f"좋은 발화 동작: {_good_moves}. "
+                f"피해야 할 동작: {_bad_moves}. "
+                f"절대 쓰지 않는 표현: {_never}."
+            )
+
         # 키워드 떡밥 주입 (분위기 파악용 — 욱여넣기 방지)
         kw_inject = ""
         if keywords and len(keywords) > 0:
@@ -383,33 +554,79 @@ class GhostBrain:
                 "키워드 나열 = 최악의 AI 냄새다. 절대 금지.\n"
             )
 
-        # ── 교차 지시 — prompts/cross_instructions.json 에서 로드 ────────────
-        # 규칙: tone 키가 cross_instructions.json에 있으면 자동 적용.
-        # 특수 조합(monologue × 아주 짧게)은 별도 키로 오버라이드.
-        _cross = pm.load_json("cross_instructions.json")
-        cross_instruction = _cross.get(tone, "")   # 모든 페르소나 tone 자동 적용
-        if tone == "monologue" and length == "아주 짧게 (1문장)":
-            cross_instruction = _cross.get("monologue_ultrashort", cross_instruction)
+        # Persona behavior now has one source of truth: persona_profiles.json.
+        # The previous cross-instruction + policy-persona overlays repeated the
+        # same prohibitions in slightly different words and pushed every role
+        # toward the same cautious question template.
+        cross_instruction = ""
 
         # ── 댓글 타겟 컨텍스트 빌드 ─────────────────────────────────────────
-        # recent_posts 각 항목: {"post_no": str, "title": str, "existing_comments": list[str]}
+        # recent_posts 각 항목:
+        # {"post_no": str, "title": str, "content": str, "existing_comments": list[str]}
         # existing_comments: 호출자(app.py)가 AJAX로 프리패치한 기존 댓글 (최대 5개, 없으면 [])
         # post_no 검증은 파서 단계에서 수행 (hallucination 방어).
+        source_composition_profile = (
+            composition_profile
+            if isinstance(composition_profile, dict)
+            else writing_enrichment.build_composition_profile(
+                {"raw_posts": recent_posts or []},
+                recent_posts=recent_posts,
+            )
+        )
+        base_composition_profile_block = (
+            ""
+            if "[Composition Profile]" in str(topic or "")
+            else writing_enrichment.prompt_block(source_composition_profile)
+        )
+        generation_variation_block = writing_enrichment.generation_variation_block(
+            source_composition_profile,
+            requested_length=length,
+            rng=random,
+        )
+        composition_profile_block = "\n\n".join(
+            block
+            for block in (base_composition_profile_block, generation_variation_block)
+            if block
+        )
+        base_comment_enrichment_block = (
+            ""
+            if "[Comment Composition Profile]" in str(topic or "")
+            else writing_enrichment.comment_prompt_block(source_composition_profile)
+        )
+        comment_variation_block = writing_enrichment.comment_variation_block(
+            source_composition_profile,
+            rng=random,
+        )
+        comment_enrichment_block = "\n\n".join(
+            block
+            for block in (base_comment_enrichment_block, comment_variation_block)
+            if block
+        )
+        shared_writing_contract = pm.render("shared_writing_contract.txt")
+
         if recent_posts:
             # Phase 9: 댓글 길이 룰 랜덤 선택 — 봇마다 대사 길이 변주
-            _comment_length_rule = random.choice(_COMMENT_LENGTH_RULES)
+            _comment_length_rule = writing_enrichment.comment_length_rule(
+                source_composition_profile,
+                rng=random,
+            )
             _posts_formatted: list[str] = []
             for p in recent_posts:
                 _line = f"#{p.get('post_no', '?')} | {p.get('title', '')}"
+                _content = str(p.get("content") or "").strip()
+                if _content:
+                    _line += f"\n  └ 본문: {_content[:80]}"
                 _existing = p.get("existing_comments", [])
                 if _existing:
-                    _cmt_sample = " / ".join(f'"{c[:40]}"' for c in _existing[:3])
+                    _cmt_sample = " / ".join(f'"{c[:28]}"' for c in _existing[:2])
                     _line += f"\n  └ 기존 댓글: {_cmt_sample}"
                 _posts_formatted.append(_line)
             recent_posts_context = pm.render(
                 "generate_comment.txt",
                 posts_context="\n".join(_posts_formatted),
                 length_rule=_comment_length_rule,
+                comment_enrichment_block=comment_enrichment_block,
+                shared_writing_contract=shared_writing_contract,
             )
         else:
             recent_posts_context = ""
@@ -432,9 +649,14 @@ class GhostBrain:
                 topic=topic,
                 tone_instruction=tone_instruction,
                 length_instruction=length_instruction,
+                naturalness_policy=naturalness.generation_policy_block(),
+                naturalness_final_check=naturalness.final_check_block(),
                 cross_instruction=cross_instruction,
                 kw_inject=kw_inject,
                 recent_posts_context=recent_posts_context,
+                composition_profile_block=composition_profile_block,
+                comment_enrichment_block=comment_enrichment_block,
+                shared_writing_contract=shared_writing_contract,
             )
         )
 
@@ -454,26 +676,30 @@ class GhostBrain:
                     "properties": {
                         "target_noun": {
                             "type": "string",
-                            "description": "브리핑에서 훔쳐온 구체적 명사 1개 (인물명/팀명/사건명/숫자)",
+                            "description": "브리핑에서 고른 구체 소재 1개. 안전 치환어가 있으면 사람 이름이 아니라 표현·장면·사건·숫자·물건을 고른다.",
                         },
                         "persona_metaphor": {
                             "type": "string",
-                            "description": "페르소나를 '바닥이다/망했다/개좋다/터진다' 같은 클리셰 없이 일상 비유로 표현한 한 문장",
+                            "description": "페르소나의 발화 행동을 내부 메모로 설명한다. 이 문장을 title/content에 복사하지 않는다.",
                         },
                         "start_style": {  # <-- 여기 변경
                             "type": "string",
-                            "description": "본문을 시작하는 방식. 첫 단어가 반드시 '아니/아/하/다들/에휴/진짜' 이외여야 한다. (예: target_noun 직격, 숫자 직격, 동사 직격, 욕설 초성 등 매번 다르게 설정)",
+                            "description": "본문을 시작하는 호흡. 같은 접속사나 첫 단어를 반복하지 않는다. 예: 장면 직격, 구체 행동, 짧은 판단, 경험 회상, 낮은 반박 등. 질문형은 예외적으로만 쓴다.",
+                        },
+                        "slot_used": {
+                            "type": "string",
+                            "description": "target_noun의 출처 슬롯. A/B/C/R/G/context 중 정확히 하나.",
                         },
                     },
-                    "required": ["target_noun", "persona_metaphor", "start_style"], # <-- 여기 변경
+                    "required": ["target_noun", "persona_metaphor", "start_style", "slot_used"], # <-- 여기 변경
                 },
                 "title": {
                     "type": "string",
-                    "description": "갤러리 게시글 제목. 길이 제한 없음. 툭 던지는 짧은 단어부터 감정을 주체 못 하고 구구절절 늘어놓는 긴 제목까지 매번 길이를 무작위로 다르게 설정해라. 마침표 금지.",
+                    "description": "갤러리 게시글 제목. 한 가지 장면이나 판단을 자연스러운 길이로 쓴다. 질문형·빈도 불평형 제목은 드물게만 쓰고 마침표는 붙이지 않는다.",
                 },
                 "content": {
                     "type": "string",
-                    "description": "갤러리 게시글 본문 (1~2줄 초단문, 마침표 금지). 첫 문장은 _thought_process.start_style 방식을 따라야 한다.", # <-- 여기 변경
+                    "description": "갤러리 게시글 본문. This Draft Variation의 길이 레인을 따른다. 짧은 레인은 0~1줄, medium/fuller 레인은 2~5줄까지 가능하다. 제목을 다시 말하지 말고 구체 장면·근거·반응 중 하나를 더한다. 마침표는 붙이지 않는다.",
                 },
                 "target_comments": {
                     "type": "array",
@@ -494,7 +720,7 @@ class GhostBrain:
                                     },
                                     "start_style": { # <-- 여기 변경
                                         "type": "string",
-                                        "description": "댓글을 시작하는 방식. 첫 단어가 반드시 '아니/아/하/다들/에휴/진짜' 이외여야 한다. (예: 본문 내용 반박, 동조하는 욕설, 다짜고짜 비웃기 등)",
+                                        "description": "댓글을 시작하는 호흡. 타겟 글에 반응하되 같은 접속사와 같은 첫 단어를 반복하지 않는다.",
                                     },
                                 },
                                 "required": ["target_noun", "reused_word", "start_style"], # <-- 여기 변경
@@ -522,22 +748,26 @@ class GhostBrain:
             safety_settings=SAFETY_SETTINGS,
             response_mime_type="application/json",
             response_schema=_POST_SCHEMA,
-            max_output_tokens=2048,
-            temperature=0.9,
+            max_output_tokens=2048 if gemini_budget.cost_saver_enabled() else 3072,
+            temperature=0.78,
             thinking_config=types.ThinkingConfig(thinking_budget=0),
         )
 
         try:
-            response = self._client.models.generate_content(
+            response = self._generate_content_paced(
+                label="generate_post",
                 model=MODEL_NAME,
                 contents=prompt,
                 config=_cfg,
             )
         except Exception as e:
+            if self._is_billing_or_credit_error(e) or isinstance(e, gemini_budget.GeminiBillingError):
+                raise
             if self._is_rate_limit_error(e):
                 # 에러 dict 반환 대신 명시적 예외 발생 — 호출자가 재시도 여부를 결정 (Flaw #2 수정)
+                detail = self._describe_exception(e)
                 raise RateLimitError(
-                    "Gemini API Rate Limit 초과 (429). 잠시 후 재시도 필요."
+                    f"Gemini API Rate Limit 초과 (429): {detail}"
                 ) from e
             raise  # 다른 에러는 그대로 상위로 전파
 
@@ -596,6 +826,17 @@ class GhostBrain:
                 {"post_no": k, "comment": v}
                 for k, v in list(_tc_merged.items())[:2]  # 서로 다른 게시글 최대 2개 상한
             ]
+            target_comments = sanitize_sensitive_target_comments(
+                target_comments,
+                topic=topic,
+            )
+            title = naturalness.ensure_question_punctuation(title)
+            content = naturalness.ensure_question_punctuation_in_lines(content)
+            for _tc in target_comments:
+                if isinstance(_tc, dict):
+                    _tc["comment"] = naturalness.ensure_question_punctuation_in_lines(
+                        _tc.get("comment", "")
+                    )
 
         except Exception as _exc:
             _api_logger.error(
@@ -604,15 +845,28 @@ class GhostBrain:
             )
             return {"title": "", "content": "", "target_comments": [], "_parse_error": True, "_raw_response": raw_text}
 
-        # ── score_reporter: Python 레벨 숫자 검증 ─────────────────────────────
-        # cross_instruction에서 수치 강제했음에도 LLM이 누락하는 경우 reject.
-        # re.search(r'\d', content) → 아라비아 숫자 하나라도 있으면 통과.
-        if tone == "score_reporter" and not re.search(r"\d", content):
+        _sensitive_hits = sensitive_generation_violations(
+            f"{title}\n{content}",
+            topic=topic,
+        )
+        if _sensitive_hits:
             _api_logger.warning(
-                "generate_post SCORE_REPORTER NO_DIGIT ▶ content에 숫자 없음 → reject\ncontent: %r",
-                content,
+                "generate_post SENSITIVE_GUARD ▶ violations=%s title=%r content=%r topic=%r",
+                _sensitive_hits, title, content, topic,
             )
-            return {"title": "", "content": "", "target_comments": [], "_parse_error": True, "_raw_response": raw_text}
+            return {
+                "title": "",
+                "content": "",
+                "target_comments": [],
+                "_parse_error": True,
+                "_raw_response": raw_text,
+                "_safety_error": True,
+                "_safety_reasons": _sensitive_hits,
+                # 발행에는 사용하지 않되 비공개 검토 자료에는 남긴다.
+                "_rejected_title": title,
+                "_rejected_content": content,
+                "_rejected_comments": target_comments,
+            }
 
         if not title or not content:
             _api_logger.warning(
@@ -625,6 +879,7 @@ class GhostBrain:
             "title":           title,
             "content":         content,
             "target_comments": target_comments,
+            "_thought_process": _json_out.get("_thought_process", {}),
         }
 
     # ══════════════════════════════════════════════
@@ -665,6 +920,19 @@ class GhostBrain:
         titles:   list[str] = raw_data.get("titles",   [])
         comments: list[str] = raw_data.get("comments", [])
         authors:  list[str] = raw_data.get("authors",  [])
+        titles, title_noise_stats = filter_noise_strings(titles)
+        comments, comment_noise_stats = filter_noise_strings(comments)
+        style_profile = gallery_style.build_style_profile(
+            raw_data,
+            gallery_id=str(raw_data.get("gallery_id", "") or ""),
+            titles=titles,
+            comments=comments,
+        )
+        composition_profile = writing_enrichment.build_composition_profile(
+            raw_data,
+            style_profile=style_profile,
+        )
+        upstream_noise_stats = raw_data.get("noise_filter", {}) or {}
 
         # ── 봇 점유율 계산 ──────────────────────────────────────────────────
         # scraper.collect_trending()이 주입한 ai_post_count / total_post_count를 사용.
@@ -687,6 +955,10 @@ class GhostBrain:
         filtered    = [t for t in tokens if t not in KEYWORD_STOPWORDS]
         counter     = Counter(filtered)
         top_keywords: list[str] = [w for w, _ in counter.most_common(top_k)]
+        top_keywords = sanitize_analysis_keywords(
+            top_keywords,
+            source_text=all_text,
+        )[:top_k]
 
         # ── 4. Author Dominance 계산 ────────────────────────
         # 작성자 점유율 Top 5 → "$author_stats" 변수로 Gemini에 전달
@@ -714,15 +986,25 @@ class GhostBrain:
 
         gallery_id = raw_data.get("gallery_id", "알 수 없음")
 
+        prompt_template = pm.load("trend_analysis.txt")
         prompt = pm.render(
             "trend_analysis.txt",
             gallery_id=gallery_id,
+            gallery_identity_context=gallery_purpose.analysis_context(gallery_id),
+            rehearsal_analysis_notes=str(raw_data.get("rehearsal_analysis_notes") or ""),
             top_k_count=min(len(top_keywords), 20),
             kw_text=kw_text,
             titles_text=titles_text,
             comments_text=comments_text,
             author_stats=author_stats,
             ai_share=ai_share,
+        )
+        cache_key = trend_cache.build_key(
+            gallery_id=str(gallery_id),
+            titles=titles,
+            comments=comments,
+            prompt_template=prompt_template,
+            extra=str(raw_data.get("rehearsal_analysis_notes") or ""),
         )
 
         # ── 6. Gemini API 호출 (분석용 — Native JSON Mode + Schema 강제) ──
@@ -735,32 +1017,40 @@ class GhostBrain:
                 "hot_topics": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "현재 갤러리에서 가장 핫한 떡밥 3개",
+                    "description": "현재 글과 댓글에서 반복적으로 보이는 소재 2~4개",
                 },
                 "sentiment": {
                     "type": "string",
-                    "description": "전반적인 갤러리 감성 (우호적/적대적/조롱/패닉 등)",
+                    "description": "전반적인 갤러리 감성. 불만/냉소/혼란/기대/무관심/장난/과열 중 가까운 단어",
                 },
                 "memes": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "유행하는 밈·유행어",
+                    "description": "반복되는 표현, 짧은 드립, 질문 패턴",
                 },
                 "summary": {
                     "type": "string",
-                    "description": "2문장 갤러리 분위기 요약",
+                    "description": "[A: 메인 떡밥] / [B: 서브 떡밥] / [C: 파생 각도] 형식의 짧은 소재 팔레트",
                 },
                 "ai_analysis": {
                     "type": "string",
-                    "description": "갤러리의 전반적인 분위기와 민심에 대한 AI의 평문 분석 요약",
+                    "minLength": 180,
+                    "maxLength": 520,
+                    "description": "사람이 읽는 220~340자 브리핑. 소재, 갈등 축, 반응 톤만 포함하고 작문 지시는 넣지 않는다.",
+                },
+                "generation_guidance": {
+                    "type": "string",
+                    "minLength": 80,
+                    "maxLength": 420,
+                    "description": "후속 초안 생성 모델에게 전달할 별도 작문 지시. 금지사항과 안전한 접근 각도를 포함한다.",
                 },
             },
-            "required": ["hot_topics", "sentiment", "memes", "summary", "ai_analysis"],
+            "required": ["hot_topics", "sentiment", "memes", "summary", "ai_analysis", "generation_guidance"],
         }
         cfg = types.GenerateContentConfig(
             response_mime_type="application/json",
             response_schema=_TREND_SCHEMA,
-            max_output_tokens=8192,                              # 2048 → 8192: 안전 마진 4× 확장
+            max_output_tokens=3072 if gemini_budget.cost_saver_enabled() else 4096,
             temperature=0.3,                                     # 분석 태스크 → 낮은 온도 = 일관성 ↑
             thinking_config=types.ThinkingConfig(thinking_budget=0),
             # ↑ gemini-2.5-flash 기본 thinking 비활성화:
@@ -770,74 +1060,147 @@ class GhostBrain:
         )
 
         raw_text = ""
-        try:
-            # ── 로그: Gemini에 보내는 프롬프트 전문 기록 ──────────────────────
+        cached_result = trend_cache.get(cache_key)
+        if cached_result:
+            result = cached_result
+            result["_cache_hit"] = True
             _api_logger.debug(
-                "analyze_trend PROMPT ▶ gallery=%s\n%s\n%s",
-                gallery_id, "─" * 60, prompt,
+                "analyze_trend CACHE HIT ▶ gallery=%s key=%s ttl=%s",
+                gallery_id,
+                cache_key[:12],
+                gemini_budget.trend_cache_ttl_seconds(),
             )
-
-            response = self._client.models.generate_content(
-                model=MODEL_NAME,
-                contents=prompt,
-                config=cfg,
-            )
-            raw_text = response.text.strip()
-
-            # ── 로그: Gemini Raw 응답 + finish_reason 기록 ────────────────────
-            _finish_reason = (
-                str(response.candidates[0].finish_reason)
-                if response.candidates else "UNKNOWN"
-            )
-            _api_logger.debug(
-                "analyze_trend RESPONSE ▶ len=%d finish_reason=%s\n%s\n%s",
-                len(raw_text), _finish_reason, "─" * 60, raw_text,
-            )
-            # finish_reason != STOP → 잘림/안전필터 경고 (MAX_TOKENS 포함)
-            if _finish_reason != "FinishReason.STOP":
-                _api_logger.warning(
-                    "analyze_trend NON-STOP finish_reason=%s — 응답 잘림 또는 필터링 가능성",
-                    _finish_reason,
+        else:
+            try:
+                # ── 로그: Gemini에 보내는 프롬프트 전문 기록 ──────────────────
+                _api_logger.debug(
+                    "analyze_trend PROMPT ▶ gallery=%s\n%s\n%s",
+                    gallery_id, "─" * 60, prompt,
                 )
 
-            # 강화된 JSON 파싱 (마크다운 펜스 + 앞뒤 산문 제거)
-            result = _parse_json_robust(raw_text)
+                response = self._generate_content_paced(
+                    label="analyze_trend",
+                    model=MODEL_NAME,
+                    contents=prompt,
+                    config=cfg,
+                )
+                raw_text = response.text.strip()
 
-        except json.JSONDecodeError as _exc:
-            # ── 로그: 파싱 실패 상세 기록 ─────────────────────────────────────
-            _api_logger.error(
-                "analyze_trend PARSE ERROR ▶ %s\nRAW RESPONSE (len=%d):\n%s\n%s",
-                _exc, len(raw_text), "─" * 60, raw_text,
+                # ── 로그: Gemini Raw 응답 + finish_reason 기록 ────────────────
+                _finish_reason = (
+                    str(response.candidates[0].finish_reason)
+                    if response.candidates else "UNKNOWN"
+                )
+                _api_logger.debug(
+                    "analyze_trend RESPONSE ▶ len=%d finish_reason=%s\n%s\n%s",
+                    len(raw_text), _finish_reason, "─" * 60, raw_text,
+                )
+                # finish_reason != STOP → 잘림/안전필터 경고 (MAX_TOKENS 포함)
+                if _finish_reason != "FinishReason.STOP":
+                    _api_logger.warning(
+                        "analyze_trend NON-STOP finish_reason=%s — 응답 잘림 또는 필터링 가능성",
+                        _finish_reason,
+                    )
+
+                # 강화된 JSON 파싱 (마크다운 펜스 + 앞뒤 산문 제거)
+                result = _parse_json_robust(raw_text)
+                trend_cache.set(cache_key, result)
+
+            except json.JSONDecodeError as _exc:
+                # ── 로그: 파싱 실패 상세 기록 ────────────────────────────────
+                _api_logger.error(
+                    "analyze_trend PARSE ERROR ▶ %s\nRAW RESPONSE (len=%d):\n%s\n%s",
+                    _exc, len(raw_text), "─" * 60, raw_text,
+                )
+                print(
+                    f"[RAW RESPONSE] analyze_trend JSON parse failed "
+                    f"(len={len(raw_text)} chars):\n{raw_text}",
+                    flush=True,
+                )
+                # 안전한 기본 딕셔너리 반환 — UI 붕괴 방지
+                # _parse_error / _raw_response: app.py 디버그 뷰어가 감지·표시
+                result = {
+                    "hot_topics":    top_keywords[:3],
+                    "sentiment":     "분석 실패",
+                    "memes":         [],
+                    "summary":       "N/A",
+                    "ai_analysis":   "⚠️ API 응답 파싱 실패 — logs/api_debug.log 를 확인하세요.",
+                    "generation_guidance": "파싱 실패 상태에서는 자동 초안 생성을 진행하지 말고 원본 로그를 먼저 확인하세요.",
+                    "_parse_error":  True,
+                    "_raw_response": raw_text,
+                }
+            except Exception as e:
+                if self._is_billing_or_credit_error(e) or isinstance(e, gemini_budget.GeminiBillingError):
+                    raise
+                if self._is_rate_limit_error(e):
+                    detail = self._describe_exception(e)
+                    raise RateLimitError(
+                        f"Gemini API Rate Limit 초과 (429): {detail}"
+                    ) from e
+                raise
+
+        # ── 민감 주제 라벨 정리 ─────────────────────────────────────────
+        # UI와 후속 작문 프롬프트에 원문 비하어/직접 집단명이 재주입되지 않도록
+        # LLM 요약 라벨도 추상화된 표현만 남긴다.
+        _sensitive_source = "\n".join([
+            all_text,
+            str(result.get("ai_analysis", "")),
+            str(result.get("generation_guidance", "")),
+            str(result.get("summary", "")),
+        ])
+        result["ai_analysis"] = sanitize_user_drama_text(
+            str(result.get("ai_analysis", "")),
+            source_text=_sensitive_source,
+        )
+        result["generation_guidance"] = sanitize_user_drama_text(
+            str(result.get("generation_guidance", "")),
+            source_text=_sensitive_source,
+        )
+        result["summary"] = sanitize_user_drama_text(
+            str(result.get("summary", "")),
+            source_text=_sensitive_source,
+        )
+        result["hot_topics"] = sanitize_analysis_keywords(
+            result.get("hot_topics", []),
+            source_text=_sensitive_source,
+        )
+        result["memes"] = sanitize_analysis_keywords(
+            result.get("memes", []),
+            source_text=_sensitive_source,
+        )
+
+        # Current scrape data describes the moment. The ID-derived profile
+        # preserves the board's durable subject across rehearsal cycles.
+        identity = gallery_purpose.identity_metadata(gallery_id)
+        if identity:
+            prefix = gallery_purpose.briefing_prefix(gallery_id)
+            analysis_text = gallery_purpose.strip_identity_echo(
+                str(result.get("ai_analysis") or "").strip(),
+                gallery_id,
             )
-            print(
-                f"[RAW RESPONSE] analyze_trend JSON parse failed "
-                f"(len={len(raw_text)} chars):\n{raw_text}",
-                flush=True,
+            if prefix and not analysis_text.startswith(prefix):
+                result["ai_analysis"] = f"{prefix} {analysis_text}".strip()
+            instruction = gallery_purpose.generation_instruction(gallery_id)
+            guidance_text = str(result.get("generation_guidance") or "").strip()
+            topic_label = str(identity.get("topic_label") or "").strip()
+            has_identity_guidance = (
+                bool(topic_label and topic_label in guidance_text)
+                and any(marker in guidance_text for marker in ("상시", "기본 분야", "10%"))
             )
-            # 안전한 기본 딕셔너리 반환 — UI 붕괴 방지
-            # _parse_error / _raw_response: app.py 디버그 뷰어가 감지·표시
-            result = {
-                "hot_topics":    top_keywords[:3],
-                "sentiment":     "분석 실패",
-                "memes":         [],
-                "summary":       "N/A",
-                "ai_analysis":   "⚠️ API 응답 파싱 실패 — logs/api_debug.log 를 확인하세요.",
-                "_parse_error":  True,
-                "_raw_response": raw_text,
-            }
-        except Exception as e:
-            if self._is_rate_limit_error(e):
-                raise RateLimitError(
-                    "Gemini API Rate Limit 초과 (429). 잠시 후 재시도 필요."
-                ) from e
-            raise
+            if instruction and instruction not in guidance_text and not has_identity_guidance:
+                result["generation_guidance"] = (
+                    f"{guidance_text}\n\n{instruction}".strip()
+                )
+            result["gallery_identity"] = identity
 
         # ── 7. 공통 메타데이터 주입 ─────────────────────────
         result["top_keywords"] = top_keywords
         # keyword_counts: Plotly 빈도 차트용 (word → 실제 등장 횟수)
-        result["keyword_counts"] = dict(counter.most_common(top_k))
+        result["keyword_counts"] = {word: counter[word] for word in top_keywords}
         result["author_stats"] = author_stats   # author dominance 요약 문자열
         result["ai_share"]     = ai_share       # ledger 기반 봇 점유율 문자열
+        result["style_profile"] = style_profile
+        result["composition_profile"] = composition_profile
         result["stats"] = {
             "titles_count":    len(titles),
             "comments_count":  len(comments),
@@ -845,8 +1208,109 @@ class GhostBrain:
             "keywords_found":  len(filtered),
             "ai_post_count":   _ai_post_count,
             "total_post_count": _total_post_count,
+            "noise_post_count": int(upstream_noise_stats.get("post_count", 0) or 0),
+            "noise_comment_count": int(upstream_noise_stats.get("comment_count", 0) or 0)
+                + int(comment_noise_stats.get("removed_count", 0) or 0),
+            "noise_title_count": int(title_noise_stats.get("removed_count", 0) or 0),
+        }
+        result["noise_filter"] = {
+            **upstream_noise_stats,
+            "title_samples": title_noise_stats.get("removed_samples", []),
+            "comment_samples": comment_noise_stats.get("removed_samples", []),
         }
         # 원본 게시글 목록 pass-through (UI 디버깅용, analyze_trend에서 가공 안 함)
         result["raw_posts"] = raw_data.get("raw_posts", [])
 
         return result
+
+    # ══════════════════════════════════════════════
+    # LLM Judge — 생성된 게시글 품질 판정 (Flash, 저비용)
+    # ══════════════════════════════════════════════
+
+    def judge_post(
+        self,
+        title: str,
+        content: str,
+        *,
+        banned_topics: list[str] | None = None,
+        batch_titles: list[str] | None = None,
+        gallery_id: str = "",
+        topic: str = "",
+    ) -> dict:
+        """생성된 게시글 1건의 품질을 LLM으로 판정.
+
+        Returns:
+            {"pass": True/False, "reason": "...", "fixed_title": "..." or None}
+            - pass=False 시 reason에 거부 사유
+            - fixed_title: 사소한 결함(물음표 누락 등)은 수정 제안
+        """
+        _banned_str = ", ".join(banned_topics) if banned_topics else "없음"
+        _batch_str = "\n".join(f"  - {t}" for t in (batch_titles or []))
+        if not _batch_str:
+            _batch_str = "(첫 번째 글)"
+        _topic_str = topic[:3000] if topic else "(브리핑 없음)"
+
+        prompt = f"""[Task] 아래 게시글의 품질을 판정해라. JSON으로 응답.
+
+[게시글]
+제목: {title}
+본문: {content}
+
+[현재 브리핑/작문 지시]
+{_topic_str}
+
+[금지 화제 목록] {_banned_str}
+[이번 배치 기존 제목]
+{_batch_str}
+
+[판정 기준 — 하나라도 위반 시 pass: false]
+1. 금지 화제의 동의어·변형·우회 표현이 제목이나 본문에 있는가? (예: "사랑아 시끄럽다" 금지 시 "사랑이 좀 조용히 해라"도 위반)
+2. 순수 메타 평론인가? (글 수, 리젠 속도, 분위기 평가만 있고 구체 소재 반응이 없음)
+3. 배치 내 기존 제목과 의미적으로 동일한 글인가? (단어만 바꾼 near-duplicate)
+4. 제목이 중간에 잘려서 문장이 완성되지 않았는가?
+5. 브리핑에 없는 외부 사이트·스포츠·게임·정치 소재를 '{gallery_id}' 이름만 보고 억지로 끌고 왔는가?
+6. 현재 브리핑/씨앗 떡밥/주요 소재/반복 표현에 직접 없는 최근 글의 사이트명·개인명·별명을 제목/본문 주제로 끌고 왔는가?
+7. 자연스러움 정책을 위반하는가?
+{naturalness.judge_policy_text()}
+
+[허용]
+- 게시판 ID가 baseball_new13이어도 브리핑에 야구가 없으면 야구 연결을 요구하지 않는다.
+- 브리핑의 주요 소재나 반복 표현에 직접 등장한 별명·호칭은 그 소재를 가리키는 커뮤니티 어휘로 본다. 성희롱/비하/저격이 아니라면 "최근 글 별명" 사유로 거부하지 않는다.
+- 배치 내 기존 제목과 같은 큰 소재여도 관점, 질문, 감정, 결론이 다르면 통과다. 완전히 같은 주장과 제목 구조일 때만 near-duplicate로 본다.
+
+[출력 형식 — 이것만 출력]
+{{"pass": true}} 또는 {{"pass": false, "reason": "위반 사유 1줄"}}
+제목이 잘렸거나 물음표가 빠진 경우: {{"pass": true, "fixed_title": "수정된 제목"}}"""
+
+        cfg = types.GenerateContentConfig(
+            safety_settings=SAFETY_SETTINGS,
+            max_output_tokens=256,
+            temperature=0.0,
+            thinking_config=types.ThinkingConfig(thinking_budget=0),
+        )
+
+        try:
+            response = self._generate_content_paced(
+                label="judge_post",
+                model=MODEL_NAME,
+                contents=prompt,
+                config=cfg,
+            )
+            raw = response.text.strip()
+            _api_logger.debug("judge_post RESPONSE ▶ %s", raw)
+            result = _parse_json_robust(raw)
+            if not isinstance(result, dict):
+                return {"pass": True}
+            return result
+        except Exception as e:
+            if isinstance(
+                e,
+                (
+                    gemini_budget.GeminiBillingError,
+                    gemini_budget.GeminiBudgetExceededError,
+                ),
+            ):
+                raise
+            _api_logger.warning("judge_post FAILED: %s — 기본 통과 처리", e)
+            # Judge 실패 시 기본 통과 (생성 자체를 막지 않음)
+            return {"pass": True}

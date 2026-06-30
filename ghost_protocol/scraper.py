@@ -85,7 +85,9 @@ from .config import (
     CLEAN_TEXT_PATTERNS,
 )
 from . import database
+from .content_filter import classify_noise_text, summarize_noise_decisions
 from .database import StreamWriter
+from .domain import board_rhythm
 
 
 # ══════════════════════════════════════════════
@@ -828,8 +830,9 @@ class GalleryScraper:
                 # ── High-Quality Tagging (념글 판별) ──
                 result.is_winner = result.recommends >= 10
 
-                # ── Bot Detection (딥 스크래핑): 본문 전각 마침표(U+FF0E) 1차 + ledger 2차 ──
-                # 마커가 본문 끝에 삽입되므로 style_tags/clean_text 적용 전에 체크.
+                # ── AI-written post detection ───────────────────────────
+                # 신규 글은 poster ledger/DB 마킹으로 판별한다. U+FF0E 체크는
+                # 과거 버전에서 발행된 레거시 글을 놓치지 않기 위한 보조 호환이다.
                 try:
                     from .ledger import ledger_load_set as _lls
                     result.is_ai = "\uff0e" in result.content or str(post_id) in _lls(self.gallery_id)
@@ -1366,6 +1369,14 @@ class TrendScraper:
                 # 조회수 / 추천수
                 views_el = tr.select_one("td.gall_count")
                 rec_el   = tr.select_one("td.gall_recommend")
+                date_el  = tr.select_one("td.gall_date")
+                created_at = ""
+                if date_el:
+                    created_at = (
+                        date_el.get("title")
+                        or date_el.get_text(" ", strip=True)
+                        or ""
+                    ).strip()
 
                 def _parse_int(el) -> int:
                     if el is None:
@@ -1394,6 +1405,7 @@ class TrendScraper:
                     "views":      _parse_int(views_el),
                     "recommends": _parse_int(rec_el),
                     "author":     author,
+                    "created_at":  created_at,
                     # 목록 스캔: 본문 접근 불가 → ledger 대조만으로 판별
                     "is_bot":     post_no in _bot_nos,
                 })
@@ -1407,6 +1419,7 @@ class TrendScraper:
         gallery_id: str,
         post_no: str,
         gallery_type: str = "mgallery",
+        e_s_n_o: str = "",
     ) -> list[str]:
         """DC Inside 내부 AJAX API로 댓글 텍스트 리스트를 반환한다.
 
@@ -1424,10 +1437,23 @@ class TrendScraper:
             "Content-Type":     "application/x-www-form-urlencoded; charset=UTF-8",
             "Referer":          referer,
         }
+        token = str(e_s_n_o or "").strip()
+        if not token:
+            try:
+                view_resp = self._session.get(referer, timeout=8)
+                view_resp.raise_for_status()
+                token = self._extract_esno(_BeautifulSoup(view_resp.text, "html.parser"))
+            except _requests.RequestException:
+                token = ""
+
         payload = {
             "id":      gallery_id,
             "no":      post_no,
-            "re_page": "1",
+            "cmt_id":  gallery_id,
+            "cmt_no":  post_no,
+            "e_s_n_o": token,
+            "comment_page": "1",
+            "sort": "D",
         }
 
         try:
@@ -1441,7 +1467,13 @@ class TrendScraper:
 
         comment_list = []
         if isinstance(data, dict):
-            comment_list = data.get("comment_list", [])
+            comment_list = (
+                data.get("comments")
+                or data.get("comment_list")
+                or data.get("commentList")
+                or data.get("list")
+                or []
+            )
         elif isinstance(data, list):
             comment_list = data
 
@@ -1456,6 +1488,93 @@ class TrendScraper:
 
         return texts
 
+    def _extract_esno(self, soup: "_BeautifulSoup") -> str:
+        """Return DC Inside's comment request token from a detail page."""
+
+        token_el = soup.select_one("#e_s_n_o") or soup.select_one('input[name="e_s_n_o"]')
+        if not token_el:
+            return ""
+        return str(token_el.get("value") or "").strip()
+
+    def _extract_inline_comments(self, soup: "_BeautifulSoup") -> list[str]:
+        """Extract comments already present in a post detail HTML snapshot."""
+
+        comments: list[str] = []
+        selectors = (
+            ".cmt_info .usertxt",
+            ".comment_box .usertxt",
+            ".cmt_txtbox .usertxt",
+            ".comment_wrap .usertxt",
+            ".reply_box .usertxt",
+            ".comment_dccon .usertxt",
+            "[class*=usertxt]",
+        )
+        for el in soup.select(", ".join(selectors)):
+            text = self._clean(el.get_text(" ", strip=True))
+            if text and len(text) > 1 and text not in comments:
+                comments.append(text)
+        return comments
+
+    def fetch_post_snapshot(
+        self,
+        gallery_id: str,
+        post_no: str,
+        gallery_type: str = "mgallery",
+    ) -> dict:
+        """Return a lightweight title/body snapshot for review packages.
+
+        Live logs intentionally stay compact; these snapshots are retained in
+        raw_posts so copy/export tooling can inspect the source board rhythm.
+        """
+
+        if not post_no:
+            return {}
+
+        view_pattern = POST_URL_PATTERNS.get(gallery_type, POST_URL_PATTERNS["mgallery"])
+        url = view_pattern.format(gallery_id=gallery_id, post_id=post_no)
+        try:
+            resp = self._session.get(url, timeout=8)
+            resp.raise_for_status()
+        except _requests.RequestException:
+            return {}
+
+        soup = _BeautifulSoup(resp.text, "html.parser")
+
+        title = ""
+        title_el = soup.select_one(".title_subject") or soup.select_one(".gallview_head .title")
+        if title_el:
+            title = self._clean(title_el.get_text(" ", strip=True))
+
+        content = ""
+        content_el = (
+            soup.select_one(".write_div")
+            or soup.select_one(".writing_view_box")
+            or soup.select_one(".view_content_wrap")
+        )
+        if content_el:
+            for removable in content_el.select("script, style, iframe, noscript"):
+                removable.decompose()
+            content = self._clean(content_el.get_text("\n", strip=True))
+
+        created_at = ""
+        date_el = soup.select_one(".gall_date")
+        if date_el:
+            created_at = (date_el.get("title") or date_el.get_text(" ", strip=True) or "").strip()
+
+        inline_comments = self._extract_inline_comments(soup)
+        e_s_n_o = self._extract_esno(soup)
+
+        return {
+            "url": url,
+            "source_title": title,
+            "content": content,
+            "comments": inline_comments,
+            "e_s_n_o": e_s_n_o,
+            "created_at": created_at,
+            "content_len": len(content),
+            "snapshot_ok": bool(title or content),
+        }
+
     def collect_trending(
         self,
         gallery_id: str,
@@ -1463,6 +1582,8 @@ class TrendScraper:
         pages: int = 3,
         max_comments_per_post: int = 5,
         top_posts_per_page: int = 5,
+        source_detail_limit: int = 0,
+        source_comments_per_post: int = 5,
         progress_callback: Optional[Callable[[str], None]] = None,
     ) -> dict:
         """트렌드 수집 오케스트레이터.
@@ -1491,10 +1612,24 @@ class TrendScraper:
         all_posts:    list[dict] = []  # 원본 게시글 목록 (디버깅용 raw data)
         ai_post_count    = 0           # ledger 대조로 확인된 봇 게시글 수
         total_post_count = 0           # 전체 수집된 게시글 수
+        noise_post_decisions = []
+        noise_comment_decisions = []
+        noise_post_samples: list[dict] = []
 
-        TITLE_CAP   = 100
-        COMMENT_CAP = 100
-        AUTHOR_CAP  = 200              # 상위 200개면 dominance 계산에 충분
+        source_detail_limit = max(0, int(source_detail_limit or 0))
+        source_comments_per_post = max(0, int(source_comments_per_post or 0))
+        TITLE_CAP   = 300   # 100→300: 최대 20페이지 스캔 시 봇 필터 후에도 충분한 사람 글 확보
+        COMMENT_CAP = 300 if source_detail_limit else 150
+        AUTHOR_CAP  = 300   # 200→300: 더 넓은 작성자 풀
+
+        # 봇 제목 DB 로드 — 스크래핑된 제목과 유사도 비교하여 봇 글 2차 필터링
+        try:
+            from . import database as _db
+            _bot_title_set = _db.get_bot_titles(gallery_id, limit=200)
+            if _bot_title_set:
+                _log(f"🤖 봇 제목 DB 로드: {len(_bot_title_set)}개 (유사도 필터 활성)")
+        except Exception:
+            _bot_title_set = []
 
         for page_no in range(1, pages + 1):
             _log(f"📄 목록 수집 중... ({page_no}/{pages} 페이지)")
@@ -1504,38 +1639,155 @@ class TrendScraper:
                 _log(f"⚠️ {page_no} 페이지 수집 실패 — 건너뜀")
                 continue
 
+            for p in posts:
+                p["page"] = page_no
+
             # 원본 목록 누적 (디버깅용 — 상한 없음, UI에서 slice)
             all_posts.extend(posts)
 
             # 제목 + 작성자 누적 (상한 적용) + ledger 봇 집계
             for p in posts:
-                # ledger 봇 점유율 집계: 상한 없이 전체 게시글 카운트
                 total_post_count += 1
+                noise_decision = classify_noise_text(p.get("title", ""))
+                if noise_decision.is_noise:
+                    p["is_noise"] = True
+                    p["noise_reasons"] = list(noise_decision.reasons)
+                    noise_post_decisions.append(noise_decision)
+                    if len(noise_post_samples) < 8:
+                        noise_post_samples.append({
+                            "post_no": p.get("post_no", ""),
+                            "title": p.get("title", ""),
+                            "reasons": list(noise_decision.reasons),
+                        })
+                    continue
                 if p.get("is_bot"):
                     ai_post_count += 1
-                # 제목·작성자 누적 (상한 적용)
+                    continue  # 봇 게시글 제목은 트렌드 분석에서 제외 (자기강화 루프 차단)
+                # 2차 필터: DB 봇 제목과 토큰 유사도 80%+ → 봇 의심 제외
+                if _bot_title_set and p["title"]:
+                    _ptoks = p["title"].strip().split()
+                    _is_bot_like = False
+                    for _bt in _bot_title_set:
+                        _bt_toks = _bt.strip().split()
+                        if not _bt_toks or not _ptoks:
+                            continue
+                        _ml = max(len(_ptoks), len(_bt_toks))
+                        _mc = sum(1 for a, b in zip(_ptoks, _bt_toks) if a == b)
+                        if _ml > 0 and _mc / _ml >= 0.8:
+                            _is_bot_like = True
+                            break
+                    if _is_bot_like:
+                        p["is_bot"] = True
+                        ai_post_count += 1
+                        continue
+                # 제목·작성자 누적 (상한 적용) — 사람 글만
                 if len(all_titles) < TITLE_CAP:
                     all_titles.append(p["title"])
                 if len(all_authors) < AUTHOR_CAP and p.get("author"):
                     all_authors.append(p["author"])
 
-            # 추천수 Top N 글의 댓글 수집
-            top = sorted(posts, key=lambda x: x.get("recommends", 0), reverse=True)
-            top = top[:top_posts_per_page]
+            if not source_detail_limit:
+                # 추천수 Top N 글의 댓글 수집 (자동 갱신 등 경량 모드)
+                top = sorted(posts, key=lambda x: x.get("recommends", 0), reverse=True)
+                top = top[:top_posts_per_page]
 
-            for p in top:
-                if len(all_comments) >= COMMENT_CAP:
-                    break
-                _log(f"💬 댓글 수집: [{p['post_no']}] {p['title'][:24]}...")
-                cmts = self.fetch_comments_ajax(gallery_id, p["post_no"], gallery_type)
-                # 개별 댓글 50자 trim — analyze_trend 토큰 절약
-                trimmed = [c[:50] for c in cmts[:max_comments_per_post]]
-                all_comments.extend(trimmed)
-                _time.sleep(random.uniform(0.3, 0.7))  # 차단 회피 딜레이
+                for p in top:
+                    if len(all_comments) >= COMMENT_CAP:
+                        break
+                    if p.get("is_noise"):
+                        continue
+                    _log(f"💬 댓글 수집: [{p['post_no']}] {p['title'][:24]}...")
+                    cmts = self.fetch_comments_ajax(gallery_id, p["post_no"], gallery_type)
+                    # 개별 댓글 50자 trim — analyze_trend 토큰 절약
+                    trimmed = []
+                    for c in cmts[:max_comments_per_post]:
+                        comment_noise = classify_noise_text(c)
+                        if comment_noise.is_noise:
+                            noise_comment_decisions.append(comment_noise)
+                            continue
+                        trimmed.append(c[:50])
+                    all_comments.extend(trimmed)
+                    _time.sleep(random.uniform(0.3, 0.7))  # 차단 회피 딜레이
 
             # 페이지 간 쿨다운
             if page_no < pages:
                 _time.sleep(random.uniform(0.5, 1.0))
+
+        if source_detail_limit and all_posts:
+            # 생성 글은 원본 검토 자료와 댓글 맥락에서도 제외한다. 제목만
+            # 제외하고 본문/댓글을 다시 넣으면 다음 생성에 같은 표현이 되먹임된다.
+            detail_targets = [
+                post for post in all_posts
+                if not post.get("is_bot") and not post.get("is_noise")
+            ][:source_detail_limit]
+            detail_ok = 0
+            comment_ok = 0
+            for idx, p in enumerate(detail_targets, 1):
+                post_no = str(p.get("post_no", "")).strip()
+                if not post_no:
+                    continue
+                list_created_at = str(p.get("created_at") or "").strip()
+                snapshot = self.fetch_post_snapshot(gallery_id, post_no, gallery_type)
+                if snapshot:
+                    if list_created_at and not str(snapshot.get("created_at") or "").strip():
+                        snapshot["created_at"] = list_created_at
+                    p.update(snapshot)
+                    if snapshot.get("snapshot_ok"):
+                        detail_ok += 1
+                ajax_comments = (
+                    self.fetch_comments_ajax(
+                        gallery_id,
+                        post_no,
+                        gallery_type,
+                        e_s_n_o=str(p.get("e_s_n_o") or ""),
+                    )
+                    if source_comments_per_post
+                    else []
+                )
+                comments = []
+                for comment in list(p.get("comments") or []) + ajax_comments:
+                    text = self._clean(str(comment))
+                    if text and text not in comments:
+                        comments.append(text)
+                    if len(comments) >= source_comments_per_post:
+                        break
+                p["comments"] = comments
+                p["comment_count"] = len(comments)
+                if comments:
+                    comment_ok += 1
+                for c in comments[:max_comments_per_post]:
+                    if len(all_comments) >= COMMENT_CAP:
+                        break
+                    comment_noise = classify_noise_text(c)
+                    if comment_noise.is_noise:
+                        noise_comment_decisions.append(comment_noise)
+                        continue
+                    all_comments.append(c[:80])
+                title_preview = str(p.get("title") or p.get("source_title") or "")[:36]
+                _log(
+                    f"🧾 원본 세트 [{idx}/{len(detail_targets)}] "
+                    f"p{p.get('page', '?')} #{post_no} — {title_preview} "
+                    f"(본문 {len(str(p.get('content') or ''))}자 · 댓글 {len(comments)}개)"
+                )
+                for cidx, comment in enumerate(comments[:2], 1):
+                    _log(f"   ↳ 댓글 {cidx}: {comment[:52]}")
+                if not comments:
+                    _log("   ↳ 댓글 없음/미수집")
+                if idx < len(detail_targets):
+                    _time.sleep(random.uniform(0.08, 0.18))
+            _log(
+                f"🗂️ 원본 글 스냅샷 저장 — 제목 {len(detail_targets)}개 / "
+                f"본문 {detail_ok}개 / 댓글 세트 {comment_ok}개"
+            )
+
+        posting_rhythm = board_rhythm.analyze_posting_rhythm(all_posts)
+        if posting_rhythm.get("interval_count"):
+            _log(
+                "⏱️ 게시판 글 간격 — "
+                f"평균 {board_rhythm.format_seconds(posting_rhythm.get('average_seconds'))} / "
+                f"중앙 {board_rhythm.format_seconds(posting_rhythm.get('median_seconds'))} / "
+                f"추천 {posting_rhythm.get('recommended_minutes')}분"
+            )
 
         _log(
             f"✅ 수집 완료 — 제목 {len(all_titles)}개 / "
@@ -1543,6 +1795,12 @@ class TrendScraper:
             f"작성자 {len(all_authors)}개 / "
             f"🤖 봇 게시글 {ai_post_count}/{total_post_count}개"
         )
+        if noise_post_decisions or noise_comment_decisions:
+            _log(
+                "🧹 광고/매크로 의심 제외 — "
+                f"게시글 {len(noise_post_decisions)}개 / 댓글 {len(noise_comment_decisions)}개"
+            )
+
         return {
             "titles":           all_titles,
             "comments":         all_comments,
@@ -1550,6 +1808,14 @@ class TrendScraper:
             "gallery_id":       gallery_id,
             "gallery_type":     gallery_type,
             "collected_at":     datetime.now().isoformat(),
+            "noise_filter": {
+                "post_count": len(noise_post_decisions),
+                "comment_count": len(noise_comment_decisions),
+                "post_reason_counts": summarize_noise_decisions(noise_post_decisions)["reason_counts"],
+                "comment_reason_counts": summarize_noise_decisions(noise_comment_decisions)["reason_counts"],
+                "post_samples": noise_post_samples,
+            },
+            "posting_rhythm":  posting_rhythm,
             "ai_post_count":    ai_post_count,    # ledger 기반 봇 게시글 수
             "total_post_count": total_post_count, # 전체 수집 게시글 수
             "raw_posts":        all_posts,        # 원본 게시글 목록 (디버깅용)
