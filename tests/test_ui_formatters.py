@@ -7,6 +7,7 @@ from ghost_protocol.ui.formatters import (
     build_intel_fig,
     compact_text,
     format_activity_log_markdown,
+    format_actor_briefing_markdown,
     format_review_package_markdown,
     format_export_limit_caption,
     format_intel_markdown,
@@ -335,6 +336,77 @@ class UiFormattersTest(unittest.TestCase):
         self.assertIn("작성 로그", text)
         self.assertIn("# 검토용 원고 모음", text)
         self.assertIn("## 원고 2", text)
+
+    def test_format_actor_briefing_markdown_mentions_public_cluster_boundary(self):
+        text = format_actor_briefing_markdown(
+            {
+                "summary": {
+                    "actor_count": 1,
+                    "major_actor_count": 1,
+                    "resident_like_count": 0,
+                    "skipped_comment_count": 2,
+                },
+                "actors": [
+                    {
+                        "display_label": "고닉 · fixed",
+                        "post_count": 1,
+                        "comment_count": 1,
+                        "total_count": 2,
+                        "top_terms": ["보드게임"],
+                        "active_hours": ["20"],
+                        "style": {
+                            "avg_chars": 24,
+                            "laugh_rate": 0,
+                            "question_rate": 0.5,
+                        },
+                        "scores": {"resident_score": 0.3, "activity_score": 0.2},
+                        "observations": [
+                            {
+                                "kind": "post",
+                                "post_no": "1",
+                                "title": "제목",
+                                "excerpt": "본문",
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+
+        self.assertIn("공개 닉네임/ID/IP 힌트", text)
+        self.assertIn("작성자 정보 없는 댓글 2개", text)
+
+    def test_review_package_markdown_includes_actor_briefing(self):
+        text = format_review_package_markdown(
+            intel_result={
+                "actor_briefing": {
+                    "summary": {
+                        "actor_count": 1,
+                        "major_actor_count": 1,
+                        "resident_like_count": 1,
+                        "skipped_comment_count": 0,
+                    },
+                    "actors": [
+                        {
+                            "display_label": "ㅇㅇ · 1.2",
+                            "post_count": 2,
+                            "comment_count": 0,
+                            "total_count": 2,
+                            "top_terms": ["목성"],
+                            "style": {"avg_chars": 18.0},
+                            "scores": {
+                                "resident_score": 0.7,
+                                "activity_score": 0.4,
+                            },
+                        }
+                    ],
+                }
+            },
+            gallery_id="universe",
+        )
+
+        self.assertIn("## 주요 액터 브리핑", text)
+        self.assertIn("ㅇㅇ · 1.2", text)
 
     def test_has_briefing_topic_source_accepts_summary_only(self):
         self.assertTrue(has_briefing_topic_source({"summary": "요약"}))

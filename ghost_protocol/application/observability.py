@@ -469,6 +469,7 @@ def format_ops_markdown(
         target_count=int(state.get("run_target_count") or 0),
     )
     source = source_snapshot_health(intel_result)
+    actor_summary = ((intel_result or {}).get("actor_briefing") or {}).get("summary") or {}
     diagnostics = classify_gemini_logs(logs)
     gemini_usage = gemini_budget.snapshot()
     gemini_comparison = gemini_budget.usage_comparison()
@@ -480,6 +481,12 @@ def format_ops_markdown(
         f"- Gallery: `{state.get('run_gallery_id') or '-'}`",
         f"- Drafts: {draft['valid']}/{draft['requested']} ready, {draft['failed']} failed",
         f"- Source: {source['raw_count']} posts · {source['body_count']} bodies · {source['comment_count']} comments",
+        (
+            "- Actors: "
+            f"{int(actor_summary.get('actor_count') or 0)} observed · "
+            f"{int(actor_summary.get('resident_like_count') or 0)} resident-like · "
+            f"{int(actor_summary.get('skipped_comment_count') or 0)} comments skipped"
+        ),
         (
             "- Gemini: "
             f"{gemini_usage['physical_calls']}"

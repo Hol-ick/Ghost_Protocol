@@ -88,6 +88,48 @@ def init_db() -> None:
 
         CREATE INDEX IF NOT EXISTS idx_ai_post_comments_gallery
             ON ai_post_comments(gallery_id, post_id);
+
+        CREATE TABLE IF NOT EXISTS actor_briefings (
+            gallery_id      TEXT PRIMARY KEY,
+            briefing_json   TEXT NOT NULL,
+            updated_at      TEXT DEFAULT (datetime('now','localtime'))
+        );
+
+        CREATE TABLE IF NOT EXISTS actor_profiles (
+            gallery_id       TEXT NOT NULL,
+            actor_key        TEXT NOT NULL,
+            display_label    TEXT DEFAULT '',
+            identity_type    TEXT DEFAULT '',
+            post_count       INTEGER DEFAULT 0,
+            comment_count    INTEGER DEFAULT 0,
+            total_count      INTEGER DEFAULT 0,
+            resident_score   REAL DEFAULT 0,
+            activity_score   REAL DEFAULT 0,
+            top_terms_json   TEXT DEFAULT '[]',
+            style_json       TEXT DEFAULT '{}',
+            summary_json     TEXT DEFAULT '{}',
+            updated_at       TEXT DEFAULT (datetime('now','localtime')),
+            PRIMARY KEY (gallery_id, actor_key)
+        );
+
+        CREATE TABLE IF NOT EXISTS actor_observations (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            gallery_id    TEXT NOT NULL,
+            actor_key     TEXT NOT NULL,
+            kind          TEXT DEFAULT '',
+            post_no       TEXT DEFAULT '',
+            comment_id    TEXT DEFAULT '',
+            title         TEXT DEFAULT '',
+            excerpt       TEXT DEFAULT '',
+            observed_at   TEXT DEFAULT '',
+            scraped_at    TEXT DEFAULT (datetime('now','localtime')),
+            UNIQUE(gallery_id, actor_key, kind, post_no, comment_id, excerpt)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_actor_profiles_gallery
+            ON actor_profiles(gallery_id, total_count DESC);
+        CREATE INDEX IF NOT EXISTS idx_actor_observations_actor
+            ON actor_observations(gallery_id, actor_key);
     """)
 
     # v1.0 migration: 신규 컬럼 추가 (기존 DB 호환)
@@ -259,6 +301,129 @@ def get_ai_post_comments(gallery_id: str, limit: int = 120) -> list[dict]:
     ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+def save_actor_briefing(gallery_id: str, analysis: dict) -> None:
+    """Persist the latest public-identity actor briefing for a gallery."""
+    if not gallery_id or not isinstance(analysis, dict):
+        return
+
+    conn = get_connection()
+    now = datetime.now().isoformat()
+    payload = json.dumps(analysis, ensure_ascii=False)
+    conn.execute(
+        """INSERT INTO actor_briefings (gallery_id, briefing_json, updated_at)
+           VALUES (?, ?, ?)
+           ON CONFLICT(gallery_id) DO UPDATE SET
+               briefing_json = excluded.briefing_json,
+               updated_at = excluded.updated_at""",
+        (gallery_id, payload, now),
+    )
+    conn.execute("DELETE FROM actor_profiles WHERE gallery_id = ?", (gallery_id,))
+
+    for actor in list(analysis.get("actors") or []):
+        if not isinstance(actor, dict) or not actor.get("actor_key"):
+            continue
+        scores = dict(actor.get("scores") or {})
+        summary = {
+            "active_hours": actor.get("active_hours", []),
+            "observed_total": actor.get("total_count", 0),
+        }
+        conn.execute(
+            """INSERT INTO actor_profiles
+               (gallery_id, actor_key, display_label, identity_type,
+                post_count, comment_count, total_count, resident_score,
+                activity_score, top_terms_json, style_json, summary_json, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(gallery_id, actor_key) DO UPDATE SET
+                   display_label = excluded.display_label,
+                   identity_type = excluded.identity_type,
+                   post_count = excluded.post_count,
+                   comment_count = excluded.comment_count,
+                   total_count = excluded.total_count,
+                   resident_score = excluded.resident_score,
+                   activity_score = excluded.activity_score,
+                   top_terms_json = excluded.top_terms_json,
+                   style_json = excluded.style_json,
+                   summary_json = excluded.summary_json,
+                   updated_at = excluded.updated_at""",
+            (
+                gallery_id,
+                actor.get("actor_key"),
+                actor.get("display_label", ""),
+                actor.get("identity_type", ""),
+                int(actor.get("post_count") or 0),
+                int(actor.get("comment_count") or 0),
+                int(actor.get("total_count") or 0),
+                float(scores.get("resident_score") or 0),
+                float(scores.get("activity_score") or 0),
+                json.dumps(actor.get("top_terms", []), ensure_ascii=False),
+                json.dumps(actor.get("style", {}), ensure_ascii=False),
+                json.dumps(summary, ensure_ascii=False),
+                now,
+            ),
+        )
+        for obs in list(actor.get("observations") or []):
+            if not isinstance(obs, dict):
+                continue
+            conn.execute(
+                """INSERT OR IGNORE INTO actor_observations
+                   (gallery_id, actor_key, kind, post_no, comment_id,
+                    title, excerpt, observed_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    gallery_id,
+                    actor.get("actor_key"),
+                    obs.get("kind", ""),
+                    str(obs.get("post_no") or ""),
+                    str(obs.get("comment_id") or ""),
+                    obs.get("title", ""),
+                    obs.get("excerpt", ""),
+                    obs.get("created_at", ""),
+                ),
+            )
+
+    conn.commit()
+    conn.close()
+
+
+def get_actor_briefing(gallery_id: str) -> dict:
+    """Return the latest actor briefing JSON for a gallery."""
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT briefing_json FROM actor_briefings WHERE gallery_id = ?",
+        (gallery_id,),
+    ).fetchone()
+    conn.close()
+    if not row:
+        return {}
+    try:
+        return json.loads(row["briefing_json"] or "{}")
+    except json.JSONDecodeError:
+        return {}
+
+
+def get_actor_profiles(gallery_id: str, limit: int = 12) -> list[dict]:
+    """Return stored actor profile rows for a gallery."""
+    conn = get_connection()
+    rows = conn.execute(
+        """SELECT * FROM actor_profiles
+           WHERE gallery_id = ?
+           ORDER BY total_count DESC, resident_score DESC
+           LIMIT ?""",
+        (gallery_id, max(1, int(limit or 12))),
+    ).fetchall()
+    conn.close()
+    result: list[dict] = []
+    for row in rows:
+        item = dict(row)
+        for key in ("top_terms_json", "style_json", "summary_json"):
+            try:
+                item[key[:-5]] = json.loads(item.get(key) or "[]")
+            except json.JSONDecodeError:
+                item[key[:-5]] = [] if key == "top_terms_json" else {}
+        result.append(item)
+    return result
 
 
 def insert_comments(comments: list[dict]) -> None:

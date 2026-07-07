@@ -229,6 +229,29 @@ class ObservabilityTest(unittest.TestCase):
         self.assertIn("## Gemini Usage Comparison", text)
         self.assertIn("Baseline", text)
 
+    def test_ops_markdown_includes_actor_summary(self):
+        text = observability.format_ops_markdown(
+            state={
+                "run_id": "run-actor",
+                "run_mode": "read",
+                "run_gallery_id": "universe",
+            },
+            scripts=[],
+            logs=[],
+            intel_result={
+                "actor_briefing": {
+                    "summary": {
+                        "actor_count": 4,
+                        "resident_like_count": 1,
+                        "skipped_comment_count": 2,
+                    }
+                }
+            },
+        )
+
+        self.assertIn("- Actors: 4 observed", text)
+        self.assertIn("1 resident-like", text)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -58,6 +58,7 @@ from ghost_protocol.domain import gallery_purpose
 from ghost_protocol.domain import gallery_style
 from ghost_protocol.domain import board_rhythm
 from ghost_protocol.domain import naturalness
+from ghost_protocol.domain import actor_analysis
 from ghost_protocol.domain import comment_alignment
 from ghost_protocol.domain import comment_targets
 from ghost_protocol.domain import conversation_planner
@@ -231,6 +232,54 @@ def _watch_recent_ai_post_comments(
 # ══════════════════════════════════════════════
 # Page Config
 # ══════════════════════════════════════════════
+def _ensure_actor_briefing(
+    intel_result: dict | None,
+    *,
+    gallery_id: str,
+    session_state: dict | None = None,
+) -> dict | None:
+    """Attach a rule-based public actor briefing to an Intel result."""
+
+    if not isinstance(intel_result, dict):
+        return intel_result
+    if intel_result.get("actor_briefing"):
+        return intel_result
+
+    raw_posts = intel_result.get("raw_posts")
+    if not isinstance(raw_posts, list) or not raw_posts:
+        return intel_result
+
+    gid = str(gallery_id or intel_result.get("gallery_id") or "").strip()
+    try:
+        briefing = actor_analysis.analyze_actors(raw_posts, gallery_id=gid)
+        intel_result["actor_briefing"] = briefing
+        if gid:
+            database.save_actor_briefing(gid, briefing)
+        if session_state is not None:
+            summary = briefing.get("summary", {})
+            observability.append_event(
+                session_state,
+                kind="actor_briefing",
+                title="actor briefing updated",
+                detail=(
+                    f"actors={summary.get('actor_count', 0)} "
+                    f"major={summary.get('major_actor_count', 0)}"
+                ),
+                status="ok",
+                metrics=summary,
+            )
+    except Exception as exc:
+        if session_state is not None:
+            observability.append_exception_event(
+                session_state,
+                kind="actor_briefing_error",
+                title="actor briefing failed",
+                detail=f"gallery={gid or '-'}",
+                exc=exc,
+            )
+    return intel_result
+
+
 st.set_page_config(
     page_title="작업대",
     page_icon="⚡",
@@ -4834,8 +4883,15 @@ def _intel_results_fragment() -> None:
         for msg in worker_contracts.drain_queue(iq):
             msg_type = msg.get("type")
             if msg_type == worker_contracts.MSG_INTEL_RESULT:
+                data = msg.get("data") or {}
+                _ensure_actor_briefing(
+                    data,
+                    gallery_id=str(ss.get("intel_gallery_id", "")),
+                    session_state=ss,
+                )
+                msg["data"] = data
                 source = observability.source_snapshot_health(
-                    msg.get("data") or {},
+                    data,
                     requested_pages=int(ss.get("intel_pages", 0) or 0),
                 )
                 observability.append_event(
@@ -4875,6 +4931,11 @@ def _intel_results_fragment() -> None:
         _cached = ss.intel_cache.get(_ck)
         if intel_cache.is_cache_fresh(_cached):
             _ir = _cached["result"]
+    _ir = _ensure_actor_briefing(
+        _ir,
+        gallery_id=str(ss.get("intel_gallery_id", "")),
+        session_state=ss,
+    )
 
     # ── 결과 렌더링 ─────────────────────────────────────────────────────
     if _ir:
@@ -6001,6 +6062,54 @@ def _render_execution_context() -> str:
     )
 
 
+def _render_actor_context_card() -> str:
+    ir = st.session_state.get("intel_result") or {}
+    briefing = ir.get("actor_briefing") if isinstance(ir, dict) else None
+    if not isinstance(briefing, dict):
+        return ""
+    summary = briefing.get("summary") or {}
+    actors = [item for item in list(briefing.get("actors") or []) if isinstance(item, dict)]
+    if not actors and not summary:
+        return ""
+
+    actor_count = int(summary.get("actor_count") or 0)
+    major_count = int(summary.get("major_actor_count") or 0)
+    resident_count = int(summary.get("resident_like_count") or 0)
+    skipped = int(summary.get("skipped_comment_count") or 0)
+    rows = []
+    for actor in actors[:3]:
+        label = str(actor.get("display_label") or actor.get("actor_key") or "-")
+        terms = ", ".join(str(term) for term in list(actor.get("top_terms") or [])[:3])
+        rows.append(
+            '<div class="actor-row">'
+            f'<b>{_html.escape(label)}</b>'
+            f'<span>글 {int(actor.get("post_count") or 0)} · 댓글 {int(actor.get("comment_count") or 0)}</span>'
+            f'<em>{_html.escape(terms or "반복 토큰 없음")}</em>'
+            '</div>'
+        )
+    return (
+        '<style>'
+        '.actor-card{margin:12px 0;border:1px solid #E2E8F0;border-radius:20px;background:linear-gradient(180deg,#fff,#F8FAFC);padding:14px;box-shadow:0 10px 30px rgba(15,23,42,.05);}'
+        '.actor-card .actor-head{display:flex;align-items:center;justify-content:space-between;gap:8px;border-bottom:1px solid #E2E8F0;padding-bottom:10px;margin-bottom:10px;}'
+        '.actor-card .actor-head b{font-size:13px;color:#0F172A;font-weight:900;}.actor-card .actor-head span{font-size:10px;color:#4F46E5;font-weight:900;}'
+        '.actor-card .actor-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;margin-bottom:10px;}'
+        '.actor-card .actor-metric{border:1px solid #E2E8F0;border-radius:14px;background:#fff;padding:8px;}.actor-card .actor-metric small{display:block;color:#64748B;font-weight:850;font-size:9px;}.actor-card .actor-metric strong{display:block;color:#0F172A;font-size:14px;}'
+        '.actor-row{border:1px solid #E2E8F0;border-radius:14px;background:#fff;padding:9px;margin-top:7px;}.actor-row b{display:block;color:#0F172A;font-size:12px;}.actor-row span,.actor-row em{display:block;margin-top:3px;color:#64748B;font-size:10px;font-style:normal;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}'
+        '.actor-card .actor-note{margin-top:8px;color:#94A3B8;font-size:9px;font-weight:800;line-height:1.35;}'
+        '</style>'
+        '<div class="actor-card">'
+        '<div class="actor-head"><b>액터 관측</b><span>PUBLIC CLUSTERS</span></div>'
+        '<div class="actor-grid">'
+        f'<div class="actor-metric"><small>액터</small><strong>{actor_count}</strong></div>'
+        f'<div class="actor-metric"><small>주요</small><strong>{major_count}</strong></div>'
+        f'<div class="actor-metric"><small>상주형</small><strong>{resident_count}</strong></div>'
+        '</div>'
+        + "".join(rows)
+        + f'<div class="actor-note">작성자 정보 없는 댓글 {skipped}개는 액터로 묶지 않았습니다.</div>'
+        '</div>'
+    )
+
+
 def _render_stack_intel_actions() -> None:
     """Keep result actions in the left stack so the main briefing card stays clean."""
 
@@ -6390,6 +6499,7 @@ with stack_col:
         '<div class="stack-panel-marker"></div>'
         + _render_execution_context()
         + _render_ops_summary_card()
+        + _render_actor_context_card()
         + _render_ops_resource_card()
     )
     if _is_generating or _has_drafts or _active_stage in ("review", "publish"):

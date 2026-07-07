@@ -387,6 +387,74 @@ def format_source_posts_markdown(
     return "\n".join(lines).strip()
 
 
+def format_actor_briefing_markdown(actor_briefing: dict | None) -> str:
+    """Format the public-identity actor briefing for review packages."""
+
+    briefing = actor_briefing or {}
+    actors = [item for item in list(briefing.get("actors") or []) if isinstance(item, dict)]
+    summary = briefing.get("summary") or {}
+    if not actors and not summary:
+        return ""
+
+    lines: list[str] = [
+        "## 주요 액터 브리핑",
+        "",
+        "- 기준: 공개 닉네임/ID/IP 힌트로만 묶은 발화 클러스터",
+        "- 주의: 실제 개인 식별이 아니라 게시판 안에서 관측된 글쓰기 패턴 요약",
+        (
+            "- 요약: "
+            f"액터 {summary.get('actor_count', 0)}개 · "
+            f"주요 {summary.get('major_actor_count', 0)}개 · "
+            f"상주 추정 {summary.get('resident_like_count', 0)}개 · "
+            f"작성자 정보 없는 댓글 {summary.get('skipped_comment_count', 0)}개 제외"
+        ),
+    ]
+
+    for idx, actor in enumerate(actors[:10], 1):
+        scores = actor.get("scores") or {}
+        style = actor.get("style") or {}
+        terms = ", ".join(str(term) for term in list(actor.get("top_terms") or [])[:8])
+        hours = ", ".join(str(hour) for hour in list(actor.get("active_hours") or [])[:6])
+        lines.extend(
+            [
+                "",
+                f"### 액터 {idx}: {actor.get('display_label', actor.get('actor_key', '-'))}",
+                (
+                    f"- 관측: 글 {actor.get('post_count', 0)}개 · "
+                    f"댓글 {actor.get('comment_count', 0)}개 · "
+                    f"총 {actor.get('total_count', 0)}회"
+                ),
+                (
+                    "- 점수: "
+                    f"상주성 {scores.get('resident_score', 0)} · "
+                    f"활동성 {scores.get('activity_score', 0)}"
+                ),
+                (
+                    "- 어투: "
+                    f"평균 {style.get('avg_chars', 0)}자 · "
+                    f"웃음률 {style.get('laugh_rate', 0)} · "
+                    f"질문률 {style.get('question_rate', 0)}"
+                ),
+                f"- 반복 토큰: {terms or '-'}",
+                f"- 관측 시간대: {hours or '-'}",
+            ]
+        )
+        observations = [obs for obs in list(actor.get("observations") or []) if isinstance(obs, dict)]
+        if observations:
+            lines.extend(["", "관측 예시:"])
+            for obs in observations[:3]:
+                post_no = obs.get("post_no") or "?"
+                kind = obs.get("kind") or "post"
+                title = str(obs.get("title") or "").strip()
+                excerpt = str(obs.get("excerpt") or "").strip()
+                label = f"#{post_no} · {kind}"
+                if title:
+                    label += f" · {title}"
+                lines.append(f"- {label}: {excerpt}")
+
+    return "\n".join(lines).strip()
+
+
 def format_review_package_markdown(
     *,
     intel_result: dict | None = None,
@@ -442,6 +510,11 @@ def format_review_package_markdown(
         source_posts = format_source_posts_markdown(intel_result.get("raw_posts", []))
         if source_posts:
             lines.extend(["", source_posts])
+
+    if intel_result and intel_result.get("actor_briefing"):
+        actor_section = format_actor_briefing_markdown(intel_result.get("actor_briefing"))
+        if actor_section:
+            lines.extend(["", actor_section])
 
     if intel_result:
         lines.extend([
