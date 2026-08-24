@@ -47,6 +47,8 @@ from ghost_protocol.application import rehearsal as rehearsal_flow
 from ghost_protocol.application import run_config
 from ghost_protocol.application import source_sampler
 from ghost_protocol.application import stability
+from ghost_protocol.application import studio_event_adapter
+from ghost_protocol.application import studio_jobs
 from ghost_protocol.application.run_logs import append_text_log
 from ghost_protocol.application import worker_contracts
 from ghost_protocol.application.timeouts import run_with_timeout
@@ -890,6 +892,7 @@ def _intel_worker(
     gallery_id: str,
     gallery_type: str,
     pages: int,
+    stop_ev: threading.Event | None = None,
 ) -> None:
     """백그라운드 스레드: TrendScraper 수집 → GhostBrain.analyze_trend() 분석."""
     from ghost_protocol.scraper import TrendScraper
@@ -914,6 +917,10 @@ def _intel_worker(
             source_detail_limit=min(max(int(pages), 1) * 30, 120),
             progress_callback=_log,
         )
+        if stop_ev is not None and stop_ev.is_set():
+            _log("🛑 중단 요청 — 트렌드 분석을 종료합니다.")
+            log_q.put(worker_contracts.worker_message(worker_contracts.MSG_INTEL_DONE))
+            return
         _record_ai_comments_from_raw_posts(
             raw_data.get("raw_posts", []),
             gallery_id=gallery_id,
@@ -3117,6 +3124,58 @@ def _batch_gen_worker_guarded(
             )
         except Exception:
             pass
+
+
+# ── Web Studio adapter bridge ───────────────────────────────────────────────
+def _streamlit_studio_emit(log_q: queue.Queue, *, mode: str):
+    """Bridge Web Studio events back to the legacy Streamlit queue contract."""
+
+    def emit(event) -> None:
+        log_q.put(studio_event_adapter.to_worker_message(event, mode=mode))
+
+    return emit
+
+
+def _streamlit_intel_job(
+    log_q: queue.Queue,
+    *,
+    api_key: str,
+    gallery_id: str,
+    gallery_type: str,
+    pages: int,
+) -> None:
+    """Run the existing Intel worker through the shared Studio seam."""
+
+    runner = studio_jobs.StudioJobRunner(intel_worker=_intel_worker)
+    runner.run_intel(
+        {
+            "api_key": api_key,
+            "gallery_id": gallery_id,
+            "gallery_type": gallery_type,
+            "pages": pages,
+        },
+        _streamlit_studio_emit(log_q, mode="intel"),
+        threading.Event(),
+    )
+
+
+def _streamlit_rehearsal_job(
+    log_q: queue.Queue,
+    stop_ev: threading.Event,
+    **kwargs,
+) -> None:
+    """Run batch generation through the shared Studio seam.
+
+    The wrapper keeps the original queue and stop-event contract, so existing
+    Streamlit fragments continue to consume exactly the same message types.
+    """
+
+    runner = studio_jobs.StudioJobRunner(batch_worker=_batch_gen_worker_guarded)
+    runner.run_rehearsal(
+        kwargs,
+        _streamlit_studio_emit(log_q, mode="rehearsal"),
+        stop_ev,
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -6839,7 +6898,7 @@ if fire_clicked:
         st.session_state.batch_gen_stop_event = _bgev
 
         threading.Thread(
-            target=_batch_gen_worker_guarded,
+            target=_streamlit_rehearsal_job,
             kwargs={
                 "log_q":        _bgq,
                 "stop_ev":      _bgev,
@@ -6891,7 +6950,7 @@ if _intel_fire:
         st.session_state.intel_queue = _intel_q
 
         threading.Thread(
-            target=_intel_worker,
+            target=_streamlit_intel_job,
             kwargs={
                 "log_q":        _intel_q,
                 "api_key":      _GEMINI_API_KEY,
