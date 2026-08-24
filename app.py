@@ -1489,8 +1489,8 @@ def _batch_gen_worker(
                 q_log(f"[AUTO-REFRESH] ⚠️ 봇 점유율 {_ar_bot_pct:.0%} — 사람 글 부족, 외부 데이터 의존 필요")
             if _ar_raw.get("titles"):
                 # ── 로컬 LLM 분석 타임아웃 래퍼 ──────────────────────────────────
-                # brain.analyze_trend()는 google.genai SDK를 동기 호출하며,
-                # 네트워크 지연 / Rate Limit 무응답 시 무한 대기(Hang)를 유발한다.
+                # brain.analyze_trend()는 동기 로컬 Ollama 호출이며,
+                # 서비스 지연 시 무한 대기(Hang)를 유발할 수 있다.
                 # → ThreadPoolExecutor + result(timeout=25)로 25초 이내로 제한.
                 # 타임아웃 초과 시 orphan 스레드가 남지만 워커는 즉시 폴백 진행.
                 _ar_result = None
