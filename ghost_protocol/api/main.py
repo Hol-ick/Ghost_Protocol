@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
 from ghost_protocol import database
@@ -217,6 +219,32 @@ def create_app(*, runtime=None) -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    web_dist = Path(__file__).resolve().parents[2] / "web" / "dist"
+    studio_index = web_dist / "index.html"
+    if studio_index.is_file():
+        assets_dir = web_dist / "assets"
+        if assets_dir.is_dir():
+            app.mount(
+                "/studio/assets",
+                StaticFiles(directory=str(assets_dir)),
+                name="studio-assets",
+            )
+
+        @app.get("/studio", include_in_schema=False)
+        def studio_home() -> FileResponse:
+            return FileResponse(studio_index)
+
+        @app.get("/studio/{asset_path:path}", include_in_schema=False)
+        def studio_spa(asset_path: str) -> FileResponse:
+            candidate = (web_dist / asset_path).resolve()
+            try:
+                candidate.relative_to(web_dist.resolve())
+            except ValueError:
+                return FileResponse(studio_index)
+            if candidate.is_file():
+                return FileResponse(candidate)
+            return FileResponse(studio_index)
 
     return app
 
