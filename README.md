@@ -36,6 +36,22 @@ Run the app.
 streamlit run app.py
 ```
 
+## Web Studio dev page
+
+The browser UI is published at
+`https://hol-ick.github.io/Ghost_Protocol/`. It is a static control surface; the
+worker, SQLite ledger, Playwright sessions, and Gemini environment stay on the
+same PC as the operator.
+
+Start the local control plane before opening the page:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/run_web_studio.ps1
+```
+
+The page connects to `http://127.0.0.1:8000` and does not receive API keys,
+account files, cookies, or session data.
+
 ## Project Shape
 
 ```text

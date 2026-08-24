@@ -7,6 +7,7 @@ import {
   normalizeRunEvent,
   normalizeRunSnapshot,
 } from "../types";
+import { DEFAULT_CONTROL_PLANE_ORIGIN } from "./runtime";
 
 export class StudioApiError extends Error {
   readonly status: number;
@@ -23,7 +24,8 @@ type RequestInitWithBody = Omit<RequestInit, "body"> & { body?: unknown };
 /** The browser client intentionally has no API-key or credential parameter. */
 function apiBaseUrl(): string {
   const configured = import.meta.env.VITE_API_BASE_URL;
-  return typeof configured === "string" ? configured.replace(/\/$/, "") : "";
+  if (typeof configured === "string" && configured.trim()) return configured.replace(/\/$/, "");
+  return import.meta.env.PROD ? DEFAULT_CONTROL_PLANE_ORIGIN : "";
 }
 
 async function request<T>(path: string, init: RequestInitWithBody = {}): Promise<T> {

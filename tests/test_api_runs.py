@@ -102,6 +102,15 @@ def test_run_endpoints_return_not_found_and_cors_is_loopback_only() -> None:
     )
     assert allowed.headers.get("access-control-allow-origin") == "http://localhost:5173"
 
+    pages_allowed = client.options(
+        "/health",
+        headers={
+            "Origin": "https://hol-ick.github.io",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+    assert pages_allowed.headers.get("access-control-allow-origin") == "https://hol-ick.github.io"
+
     denied = client.options(
         "/health",
         headers={
