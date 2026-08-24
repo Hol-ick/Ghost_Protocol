@@ -3,7 +3,6 @@ from ghost_protocol.application import run_config
 
 def test_draft_run_keeps_requested_count_and_appends_guidance():
     setup = run_config.build_batch_run_setup(
-        api_key="key",
         topic="briefing",
         guidance="write safely",
         requested_count=4,
@@ -31,7 +30,6 @@ def test_draft_run_keeps_requested_count_and_appends_guidance():
 
 def test_infinite_run_forces_ten_and_sets_loop_log():
     setup = run_config.build_batch_run_setup(
-        api_key="key",
         topic="topic",
         guidance="",
         requested_count=3,
@@ -55,7 +53,6 @@ def test_infinite_run_forces_ten_and_sets_loop_log():
 def test_rehearsal_run_forces_ten_and_carries_anchor_posts():
     raw_posts = [{"title": "one"}, {"title": "two"}, "bad"]
     setup = run_config.build_batch_run_setup(
-        api_key="key",
         topic="topic",
         guidance="guide",
         requested_count=2,

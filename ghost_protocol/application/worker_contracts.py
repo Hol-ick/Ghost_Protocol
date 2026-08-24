@@ -13,7 +13,6 @@ from typing import Any
 
 BATCH_GEN_PARAMS: frozenset[str] = frozenset(
     {
-        "api_key",
         "topic",
         "wave_count",
         "gallery_id",

@@ -45,7 +45,7 @@ Ghost Protocol은 **DC Inside 커뮤니티의 여론을 분석하고, AI를 이�
 │  STEP 2 · Deep Humanizer (brain.py)                     │
 │  DB(winner posts) → Few-shot Examples                   │
 │  DB(recent posts) → Gallery Mood Context                │
-│  Gemini 2.5 Flash → XML Tag Output → {title, content}  │
+│  Ollama/Qwen (local) → JSON Output → {title, content}  │
 └────────────────────────┬────────────────────────────────┘
                          │
                          ▼
@@ -63,7 +63,7 @@ Ghost Protocol은 **DC Inside 커뮤니티의 여론을 분석하고, AI를 이�
 |--------|------|------|
 | **UI** | Streamlit | 원페이지 웹 대시보드 |
 | **스크래핑 / 포스팅** | Playwright (async) | 헤드리스 브라우저 자동화 |
-| **AI 생성** | Google Gemini 2.5 Flash | LLM 텍스트 생성 |
+| **AI 생성** | Ollama `qwen2.5:3b` (local) | LLM 텍스트 생성 |
 | **데이터** | SQLite 3 (WAL 모드) | 게시글·댓글 영구 저장 |
 | **스트리밍 출력** | CSV + JSONL | 실시간 학습 데이터 축적 |
 | **비동기 처리** | asyncio + threading | 스크래퍼 백그라운드 실행 |
@@ -80,7 +80,7 @@ Echo Chamber/
 │   ├── config.py             # 전역 상수 (URL, UA, 딜레이, 서킷브레이커)
 │   ├── database.py           # SQLite + StreamWriter
 │   ├── scraper.py            # 병렬 비동기 스크래퍼 (v1.7)
-│   ├── brain.py              # Gemini LLM 생성기 (v5.0)
+│   ├── brain.py              # Ollama/Qwen LLM 생성기
 │   └── poster.py             # Playwright 자동 포스터 (v5.0)
 └── .streamlit/
     └── config.toml           # Warm Bento 테마 강제
@@ -140,7 +140,7 @@ Echo Chamber/
 
 ### 3.2 Deep Humanizer — AI 게시글 생성 (`brain.py`)
 
-**목적**: 실제 DC Inside 고인물이 쓴 것과 구별하기 어려운 게시글을 Gemini API로 생성한다.
+**목적**: 실제 DC Inside 고인물이 쓴 것과 구별하기 어려운 게시글을 로컬 Ollama/Qwen으로 생성한다.
 
 #### 생성 파이프라인
 
@@ -149,7 +149,7 @@ DB(winner posts, n=3)   → Few-shot Examples
 DB(recent posts, n=10)  → Gallery Mood Context
 Hot Keywords (Counter)  → 키워드 인젝션
                               ↓
-          Gemini 2.5 Flash (BLOCK_NONE)
+          Ollama qwen2.5:3b (loopback only)
                               ↓
         XML Tag Output <TITLE>...</TITLE><CONTENT>...</CONTENT>
                               ↓
@@ -334,7 +334,7 @@ Streamlit은 사용자 OS의 다크모드 설정을 자동 반영하는데, 이 
 ```
 ┌──────────────────────────────────────────────────────────┐
 │ Sidebar: 갤러리 ID / Tone / Length / Scan Range /        │
-│          Headless / Gemini API Key / Export CSV           │
+│          Headless / Ollama Loopback / Export CSV          │
 ├──────────────────────────────────────────────────────────┤
 │  [AI Generated Posts]  [AI Comments]  [AI Share %]       │
 │  ──────────── Progress Bar (스캔 중일 때) ─────────────  │
@@ -440,7 +440,7 @@ Zero-Width Space 워터마크는 이미 스크래퍼가 자동 탐지한다. 향
 | 증분 수집 (Incremental) | ✅ 완료 | 100% |
 | Bot Radar + 서킷 브레이커 | ✅ 완료 | 100% |
 | AI 워터마크 탐지 | ✅ 완료 | 100% |
-| LLM 게시글 생성 (Gemini 2.5 Flash) | ✅ 완료 | 100% |
+| LLM 게시글 생성 (Ollama qwen2.5:3b) | ✅ 완료 | 100% |
 | Deep Humanizer 페르소나 | ✅ 완료 | 95% |
 | 6가지 Tone + 3가지 Length | ✅ 완료 | 100% |
 | JSON 기반 주제 추천 | ✅ 완료 | 100% |

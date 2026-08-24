@@ -135,7 +135,7 @@ ghost_protocol/
 - `app/`: Streamlit 전용 코드
 - `application/`: 유스케이스 조합, 워커 실행, 상태 전이
 - `domain/`: 순수 로직과 정책
-- `infrastructure/`: Playwright, Gemini, SQLite, 파일, 프롬프트 I/O
+- `infrastructure/`: Playwright, local Ollama, SQLite, 파일, 프롬프트 I/O
 - `shared/`: 설정과 공용 유틸
 
 ## 5. 우선순위
@@ -262,7 +262,7 @@ ghost_protocol/
 
 완료 기준:
 
-- 유스케이스 코드가 Playwright/SQLite/Gemini 상세 구현에 덜 의존한다.
+- 유스케이스 코드가 Playwright/SQLite/Ollama 상세 구현에 덜 의존한다.
 - 모킹 가능한 경계가 생긴다.
 
 ### Phase 6. 관측성과 운영성 개선

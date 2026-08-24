@@ -11,7 +11,7 @@ The project combines a Streamlit control surface, prompt assets, board collectio
 - **Board intelligence workspace**: collect board snapshots, summarize active themes, preserve raw source context, and export review packages.
 - **Draft rehearsal loop**: run multi-cycle rehearsals, inspect how topics drift, and tune persona/prompt behavior before publishing.
 - **Operator-first UI**: three-panel layout with execution context, current work area, and long-form logs.
-- **Stability layer**: automatic stop recommendations for quota issues, empty source data, repeated bad generations, publish failures, and suspicious feedback signals.
+- **Stability layer**: automatic stop recommendations for local-runtime outages, empty source data, repeated bad generations, publish failures, and suspicious feedback signals.
 - **One-click reports**: copy board logs, briefing, generation logs, source posts, drafts, failed candidates, and diagnostics as Markdown.
 - **Tested modules**: focused domain and application tests for prompts, naturalness checks, board rhythm, throttling, observability, and stability policy.
 
@@ -24,10 +24,12 @@ pip install -r requirements.txt
 Copy-Item .env.example .env
 ```
 
-Add your Gemini key to `.env`.
+Configure the local Ollama runtime in `.env`. No API key or remote inference is used.
 
 ```dotenv
-GEMINI_API_KEY=your_key_here
+OLLAMA_BASE_URL=http://127.0.0.1:11434
+OLLAMA_MODEL=qwen2.5:3b
+OLLAMA_FALLBACK_MODELS=qwen2.5:7b
 ```
 
 Run the app.
@@ -43,7 +45,7 @@ ghost_protocol/
   application/      # Workers, exports, observability, stability policy
   domain/           # Draft guidance, naturalness, validation, board rhythm
   ui/               # Streamlit view helpers and session state
-  brain.py          # Gemini-facing orchestration
+  brain.py          # Ollama/Qwen-facing orchestration
   scraper.py        # Board collection utilities
   poster.py         # Publishing workflow automation
 prompts/            # Prompt assets, personas, gallery profiles
@@ -72,7 +74,7 @@ Ghost Protocol keeps runtime-sensitive data out of source control. Do not commit
 
 The app also includes operational guardrails:
 
-- Gemini quota and billing diagnostics.
+- Ollama health, model availability, and local LLM usage diagnostics.
 - Publish failure thresholds.
 - Infinite-run cycle caps.
 - Empty-source detection.

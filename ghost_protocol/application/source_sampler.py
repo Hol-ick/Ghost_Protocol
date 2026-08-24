@@ -1,6 +1,6 @@
 """Read-only multi-gallery sampling for prompt calibration.
 
-This module intentionally does not call Gemini and does not mutate the active
+This module intentionally does not call a remote LLM and does not mutate the active
 briefing/draft state.  It collects compact source snapshots from one or more
 gallery ids and formats them as a copy-friendly Markdown package.
 """

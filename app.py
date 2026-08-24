@@ -579,7 +579,6 @@ def _swarm_worker(
     log_q: queue.Queue,
     stop_ev: threading.Event,
     *,
-    api_key: str,
     topic: str,
     wave_count: int,
     gallery_id: str,
@@ -901,7 +900,6 @@ def _swarm_worker(
 def _intel_worker(
     log_q: queue.Queue,
     *,
-    api_key: str,
     gallery_id: str,
     gallery_type: str,
     pages: int,
@@ -1215,7 +1213,6 @@ def _batch_gen_worker(
     log_q: queue.Queue,
     stop_ev: threading.Event,
     *,
-    api_key: str,
     topic: str,
     wave_count: int,
     gallery_id: str,
@@ -6830,7 +6827,6 @@ if fire_clicked:
         st.error("⚠️ 글을 올릴 게시판이 비어 있습니다. 상단의 게시판 입력칸을 채워주세요.")
     else:
         _run_setup = run_config.build_batch_run_setup(
-            api_key="",
             topic=_topic,
             guidance=_guidance,
             requested_count=_w_count,
@@ -6969,7 +6965,6 @@ if _intel_fire:
             target=_intel_worker,
             kwargs={
                 "log_q":        _intel_q,
-                "api_key":      "",
                 "gallery_id":   _igid,
                 "gallery_type": _igtype_now,
                 "pages":        st.session_state.get("intel_pages", 3),

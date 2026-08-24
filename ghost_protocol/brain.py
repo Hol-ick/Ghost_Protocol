@@ -31,7 +31,7 @@ from .content_filter import (
     sanitize_user_drama_text,
     sensitive_generation_violations,
 )
-from .application import trend_cache
+from .application import llm_throttle, llm_usage, trend_cache
 from .application.llm_provider import LLMProvider, LLMRequest
 from .application.ollama_client import OllamaClient
 from .domain import gallery_purpose, gallery_style, naturalness, writing_enrichment
@@ -335,9 +335,20 @@ class GhostBrain:
             temperature=temperature,
             max_output_tokens=max_output_tokens,
         )
+        waited = llm_throttle.wait_before_call(label)
+        if waited:
+            _api_logger.debug("llm throttle wait %.2fs before %s", waited, label)
+        call_record = llm_usage.begin_call(
+            label=label,
+            model=self.model_name,
+            contents=request_prompt,
+        )
         try:
             response = self.provider.generate(request)
         except Exception as err:
+            llm_usage.record_error(call_record, err)
+            if self._is_rate_limit_error(err):
+                llm_throttle.note_rate_limit_pause(5.0)
             _api_logger.warning(
                 "ollama request failed label=%s model=%s detail=%s",
                 label,
@@ -345,6 +356,7 @@ class GhostBrain:
                 self._describe_exception(err),
             )
             raise
+        llm_usage.record_success(call_record, response)
         _api_logger.debug(
             "ollama response label=%s model=%s usage=%s",
             label,

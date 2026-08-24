@@ -14,7 +14,6 @@ from ghost_protocol.application.worker_contracts import (
 class WorkerContractsTest(unittest.TestCase):
     def test_batch_filter_removes_posting_only_keys(self):
         config = {
-            "api_key": "key",
             "topic": "topic",
             "headless": True,
             "wave_test_mode": True,
@@ -31,7 +30,6 @@ class WorkerContractsTest(unittest.TestCase):
         }
         filtered = filter_batch_gen_config(config)
         self.assertEqual(filtered, {
-            "api_key": "key",
             "topic": "topic",
             "gallery_type": "mgallery",
             "style_profile": {"allow_long_laugh": True},

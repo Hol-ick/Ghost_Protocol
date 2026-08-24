@@ -94,7 +94,7 @@ class RehearsalFlowTest(unittest.TestCase):
                 {"title": "목성 먼지대 사진 화질 좋아짐", "content": "캡처 잘 보임"},
                 {
                     "_failed": True,
-                    "_failure_reason": "Gemini API Rate Limit 초과 (429)",
+                    "_failure_reason": "Local LLM Rate Limit 초과 (429)",
                 },
             ],
             gallery_id="universe",
