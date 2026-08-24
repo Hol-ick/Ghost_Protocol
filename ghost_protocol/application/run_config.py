@@ -33,29 +33,6 @@ class BatchRunSetup:
     rehearsal_anchor_topic: str
 
 
-def build_studio_job_params(
-    setup: BatchRunSetup,
-    *,
-    mode: str | None = None,
-) -> dict[str, Any]:
-    """Return a worker-only parameter copy for a local Studio job.
-
-    ``BatchRunSetup.batch_config`` also contains UI and observability fields.
-    Studio adapters must receive only the existing worker kwargs, so this
-    helper provides one explicit boundary for API/runtime callers.  Rehearsal
-    mode is forced to its read-only worker settings here as a second safety
-    guard; it does not add any posting parameters or change the setup object.
-    """
-
-    params = dict(setup.worker_kwargs)
-    if mode == "rehearsal" or setup.run_mode == "rehearsal":
-        params["rehearsal"] = True
-        params["infinite"] = False
-        params.setdefault("rehearsal_cycle", 1)
-        params.setdefault("rehearsal_cycle_limit", setup.rehearsal_cycle_limit)
-    return params
-
-
 def _append_guidance(topic: str, guidance: str) -> str:
     topic_text = str(topic or "").strip()
     guidance_text = str(guidance or "").strip()

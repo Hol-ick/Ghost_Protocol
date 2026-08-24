@@ -48,7 +48,7 @@ ghost_protocol/
   poster.py         # Publishing workflow automation
 prompts/            # Prompt assets, personas, gallery profiles
 tests/              # Unit tests for extracted modules
-docs/               # GitHub Pages landing page
+docs/               # Project documentation
 ```
 
 ## Architecture
