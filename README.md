@@ -89,11 +89,3 @@ python -m pytest -q
 
 Run the command above before publishing or deploying changes. The suite is
 intentionally kept fast enough for routine local verification.
-
-## GitHub Pages
-
-The landing page lives in `docs/`. Enable GitHub Pages with the included workflow when the repository visibility and GitHub plan support Pages, or serve it locally by opening:
-
-```text
-docs/index.html
-```
