@@ -7,8 +7,12 @@ accidentally break daemon threads.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
+
+
+WorkerMessage = dict[str, Any]
+WorkerMessageEmitter = Callable[[WorkerMessage], None]
 
 
 BATCH_GEN_PARAMS: frozenset[str] = frozenset(
@@ -82,7 +86,7 @@ def build_batch_gen_worker_kwargs(
     }
 
 
-def worker_message(message_type: str, **payload: Any) -> dict[str, Any]:
+def worker_message(message_type: str, **payload: Any) -> WorkerMessage:
     """Build a queue message and fail fast for unknown message types."""
     if message_type not in KNOWN_MESSAGE_TYPES:
         raise ValueError(f"Unknown worker message type: {message_type}")
