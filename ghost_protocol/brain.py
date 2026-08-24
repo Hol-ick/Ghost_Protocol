@@ -1,16 +1,14 @@
-"""Ghost Protocol v5.0 — Gemini-powered post generation.
+"""Ghost Protocol v5.0 — local Ollama-powered post generation.
 
 Pipeline:
-  .env (GEMINI_API_KEY) → genai.Client(api_key=...)
+  local Ollama (Qwen) → provider-neutral LLM contract
   DB (winner posts)     → Few-shot examples (content ≤ 300 chars)
   DB (recent posts)     → Context injection ("gallery mood")
                               ↓
-  Gemini 2.5 Flash → XML tag output <TITLE>…</TITLE><CONTENT>…</CONTENT>
+  Qwen → structured JSON output {title, content, target_comments}
 
-Model: gemini-2.5-flash (무료 티어 최적)
-Safety: BLOCK_NONE (전 카테고리 검열 해제)
-Output: XML tag regex parsing (JSON 대비 에러 방지)
-SDK: google-genai (google.genai) — 신규 공식 SDK
+Model: qwen2.5:3b (GTX 1660 SUPER 기본값; 환경변수로 변경 가능)
+Output: Ollama JSON mode + robust JSON parsing
 """
 
 import json
@@ -22,8 +20,6 @@ from collections import Counter
 from pathlib import Path
 from typing import Optional
 
-from google import genai
-from google.genai import types
 from dotenv import load_dotenv
 
 from . import database
@@ -35,10 +31,12 @@ from .content_filter import (
     sanitize_user_drama_text,
     sensitive_generation_violations,
 )
-from .application import gemini_budget, gemini_throttle, trend_cache
+from .application import trend_cache
+from .application.llm_provider import LLMProvider, LLMRequest
+from .application.ollama_client import OllamaClient
 from .domain import gallery_purpose, gallery_style, naturalness, writing_enrichment
 
-# .env 에서 GEMINI_API_KEY 로딩
+# .env 에서 로컬 Ollama 설정 로딩
 load_dotenv()
 
 
@@ -69,7 +67,7 @@ if not _api_logger.handlers:                       # Streamlit 모듈 재로딩 
 # ══════════════════════════════════════════════
 
 def _parse_json_robust(text: str) -> dict:
-    """Gemini 응답 텍스트에서 JSON 오브젝트를 안전하게 추출한다.
+    """LLM 응답 텍스트에서 JSON 오브젝트를 안전하게 추출한다.
 
     처리 순서:
       1. 마크다운 코드펜스(```json ... ```) 내부 추출 시도
@@ -80,7 +78,7 @@ def _parse_json_robust(text: str) -> dict:
       · ```json\\n{...}\\n```   (표준 마크다운)
       · ```\\n{...}\\n```       (언어 태그 없음)
       · {... }                  (펜스 없음)
-      · 앞뒤 산문 + { ... }    (Gemini가 설명을 붙인 경우)
+      · 앞뒤 산문 + { ... }    (모델이 설명을 붙인 경우)
     """
     # 1단계: 마크다운 코드펜스 추출
     fence_match = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
@@ -94,16 +92,16 @@ def _parse_json_robust(text: str) -> dict:
     return json.loads(candidate)
 
 # ══════════════════════════════════════════════
-# 고정 모델 (무료 티어 최적화 — Fallback 없음)
+# 로컬 모델 기본값. 설치된 모델과 운영 목적에 맞게 .env에서 변경할 수 있다.
 # ══════════════════════════════════════════════
-MODEL_NAME = os.getenv("GEMINI_MODEL_NAME", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
+MODEL_NAME = os.getenv("OLLAMA_MODEL", "qwen2.5:3b").strip() or "qwen2.5:3b"
 FALLBACK_MODEL_NAMES = tuple(
     model
     for model in (
         item.strip()
         for item in os.getenv(
-            "GEMINI_FALLBACK_MODELS",
-            "gemini-2.5-flash-lite",
+            "OLLAMA_FALLBACK_MODELS",
+            "qwen2.5:7b",
         ).split(",")
     )
     if model and model != MODEL_NAME
@@ -111,12 +109,9 @@ FALLBACK_MODEL_NAMES = tuple(
 
 
 class RateLimitError(Exception):
-    """Gemini API Rate Limit (429) 또는 쿼터 초과 시 발생."""
+    """Provider가 일시적으로 요청을 처리하지 못했을 때의 호환 예외."""
 
 
-# ══════════════════════════════════════════════
-# Safety Settings: 전 카테고리 검열 해제
-# ══════════════════════════════════════════════
 def _shorten_log_value(value: object, *, limit: int = 800) -> str:
     """Return a compact, single-line representation for API diagnostics."""
 
@@ -128,12 +123,27 @@ def _shorten_log_value(value: object, *, limit: int = 800) -> str:
     return text[:limit]
 
 
-SAFETY_SETTINGS = [
-    types.SafetySetting(category="HARM_CATEGORY_HARASSMENT",        threshold="BLOCK_NONE"),
-    types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH",       threshold="BLOCK_NONE"),
-    types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="BLOCK_NONE"),
-    types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="BLOCK_NONE"),
-]
+def _env_float(name: str, default: float, *, lower: float = 0.0) -> float:
+    try:
+        value = float(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        value = default
+    return max(lower, value)
+
+
+def _env_int(name: str, default: int, *, lower: int = 1) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        value = default
+    return max(lower, value)
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 # ══════════════════════════════════════════════
 # System prompt → prompts/system_base.txt
@@ -154,31 +164,26 @@ _COMMENT_LENGTH_RULES: list[str] = [
 
 
 class GhostBrain:
-    """DC Inside 스타일 게시글 생성기 -- Gemini 2.5 Flash 고정."""
+    """DC Inside 스타일 게시글 생성기 -- local Ollama provider 기반."""
 
-    def __init__(self, api_key: Optional[str] = None):
-        """Gemini 클라이언트 초기화 (google.genai 신규 SDK).
-
-        Args:
-            api_key: Gemini API key (None이면 .env에서 GEMINI_API_KEY 로딩)
-        """
-        key = api_key or os.getenv("GEMINI_API_KEY", "")
-        if not key:
-            raise ValueError(
-                "Gemini API Key가 없습니다. "
-                ".env 파일에 GEMINI_API_KEY를 설정하거나 사이드바에 입력하세요."
-            )
-        try:
-            http_timeout_ms = int(os.getenv("GEMINI_HTTP_TIMEOUT_MS", "35000"))
-        except (TypeError, ValueError):
-            http_timeout_ms = 35000
-        http_timeout_ms = max(5000, min(120000, http_timeout_ms))
-        self._client = genai.Client(
-            api_key=key,
-            http_options=types.HttpOptions(timeout=http_timeout_ms),
+    def __init__(
+        self,
+        provider: LLMProvider | None = None,
+        *,
+        model_name: str | None = None,
+    ):
+        self.model_name = (model_name or MODEL_NAME).strip() or MODEL_NAME
+        self.fallback_model_names = tuple(
+            model for model in FALLBACK_MODEL_NAMES if model != self.model_name
         )
-        self.model_name = MODEL_NAME
-        self.fallback_model_names = FALLBACK_MODEL_NAMES
+        self.provider: LLMProvider = provider or OllamaClient(
+            base_url=os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434"),
+            model=self.model_name,
+            timeout_seconds=_env_float("OLLAMA_TIMEOUT_SEC", 120.0, lower=1.0),
+            num_ctx=_env_int("OLLAMA_NUM_CTX", 4096),
+            keep_alive=os.getenv("OLLAMA_KEEP_ALIVE", "10m").strip() or "10m",
+        )
+        self._provider = self.provider
 
     # ══════════════════════════════════════════════
     # 내부 헬퍼
@@ -275,14 +280,8 @@ class GhostBrain:
         )
 
     @staticmethod
-    def _is_billing_or_credit_error(err: Exception) -> bool:
-        """Billing/credit exhaustion should stop immediately, not fallback."""
-
-        return gemini_budget.is_billing_or_credit_error(err)
-
-    @staticmethod
     def _describe_exception(err: Exception) -> str:
-        """Extract useful SDK error details without crashing logging."""
+        """Extract useful provider error details without crashing logging."""
 
         parts: list[str] = []
         for attr in ("status_code", "code", "message", "details"):
@@ -309,76 +308,50 @@ class GhostBrain:
             parts.append(_shorten_log_value(err))
         return " | ".join(parts)
 
-    def _generate_content_paced(self, *, label: str, **kwargs):
-        """Call Gemini through the shared throttle, with model fallback on 429."""
+    def _generate_content_paced(
+        self,
+        *,
+        label: str,
+        prompt: str | None = None,
+        contents: str | None = None,
+        system: str = "",
+        json_schema: dict | None = None,
+        temperature: float = 0.2,
+        max_output_tokens: int = 1024,
+        **_legacy_kwargs,
+    ):
+        """Send one request through the provider-neutral local LLM contract.
 
-        requested_model = kwargs.get("model") or self.model_name
-        fallback_models = tuple(getattr(self, "fallback_model_names", ()) or ())
-        models_to_try = [requested_model]
-        models_to_try.extend(
-            model for model in fallback_models if model and model != requested_model
+        ``contents`` remains accepted as a short-lived compatibility alias so
+        test doubles and older callers can migrate without changing behavior.
+        No remote fallback is attempted: the worker must remain local.
+        """
+        request_prompt = prompt if prompt is not None else (contents or "")
+        request = LLMRequest(
+            task=label,
+            system=system,
+            prompt=request_prompt,
+            json_schema=json_schema,
+            temperature=temperature,
+            max_output_tokens=max_output_tokens,
         )
-
-        last_rate_limit: Exception | None = None
-        for index, model_name in enumerate(models_to_try):
-            call_kwargs = dict(kwargs)
-            call_kwargs["model"] = model_name
-            call_label = f"{label}:{model_name}"
-
-            waited = gemini_throttle.wait_before_call(call_label)
-            if waited >= 0.5:
-                _api_logger.debug(
-                    "gemini throttle wait %.2fs before %s",
-                    waited,
-                    call_label,
-                )
-            if index > 0:
-                _api_logger.warning(
-                    "gemini fallback model selected label=%s model=%s after=%s",
-                    label,
-                    model_name,
-                    requested_model,
-                )
-
-            call_record: dict | None = None
-            try:
-                call_record = gemini_budget.begin_call(
-                    label=label,
-                    model=model_name,
-                    contents=call_kwargs.get("contents"),
-                )
-                response = self._client.models.generate_content(**call_kwargs)
-                gemini_budget.record_success(call_record, response)
-                return response
-            except Exception as err:
-                gemini_budget.record_error(call_record, err)
-                if self._is_billing_or_credit_error(err):
-                    raise gemini_budget.GeminiBillingError(
-                        f"Gemini billing/credit exhausted: {self._describe_exception(err)}"
-                    ) from err
-                if not self._is_rate_limit_error(err):
-                    raise
-
-                last_rate_limit = err
-                _api_logger.warning(
-                    "gemini rate limit label=%s model=%s detail=%s repr=%s",
-                    label,
-                    model_name,
-                    self._describe_exception(err),
-                    _shorten_log_value(repr(err)),
-                )
-
-                if (
-                    index < len(models_to_try) - 1
-                    and gemini_budget.should_try_fallback_after_error(err)
-                ):
-                    gemini_throttle.note_rate_limit_pause(5.0)
-                    continue
-                gemini_throttle.note_rate_limit_pause(60.0)
-
-        if last_rate_limit is not None:
-            raise last_rate_limit
-        raise RuntimeError("No Gemini model configured")
+        try:
+            response = self.provider.generate(request)
+        except Exception as err:
+            _api_logger.warning(
+                "ollama request failed label=%s model=%s detail=%s",
+                label,
+                self.model_name,
+                self._describe_exception(err),
+            )
+            raise
+        _api_logger.debug(
+            "ollama response label=%s model=%s usage=%s",
+            label,
+            getattr(response, "model", self.model_name),
+            getattr(response, "usage", {}),
+        )
+        return response
 
     # ══════════════════════════════════════════════
     # 공개 API
@@ -422,18 +395,17 @@ class GhostBrain:
             )
 
         try:
-            _cfg = types.GenerateContentConfig(
-                system_instruction=pm.render("system_base.txt", gallery_id=gallery_id),
-                safety_settings=SAFETY_SETTINGS,
-                response_mime_type="application/json",  # Native JSON — 마크다운 펜스 원천 차단
-                temperature=0.9,
-                max_output_tokens=200,   # 50 → 200 (JSON 래퍼 + 한글 주제 잘림 방지)
-            )
             response = self._generate_content_paced(
                 label="suggest_topic",
-                model=MODEL_NAME,
-                contents=prompt,
-                config=_cfg,
+                prompt=prompt,
+                system=pm.render("system_base.txt", gallery_id=gallery_id),
+                json_schema={
+                    "type": "object",
+                    "properties": {"topic": {"type": "string"}},
+                    "required": ["topic"],
+                },
+                temperature=0.9,
+                max_output_tokens=200,
             )
             # 디버깅: 원시 응답 출력
             raw_text = response.text.strip()
@@ -662,11 +634,9 @@ class GhostBrain:
 
         prompt = "\n\n---\n\n".join(parts)
 
-        # ── Gemini API 호출 (GenerateContentConfig + 429 안전 처리) ──
-        # analyze_trend()와 동일한 방어벽:
-        #   response_mime_type="application/json" → 마크다운 펜스 원천 차단
-        #   response_schema                       → title/content 구조 고정, key 누락 불가
-        #   thinking_budget=0                     → thinking 토큰의 max_output_tokens 잠식 방지
+        # ── Ollama JSON 호출 ──
+        # provider가 stream=false + JSON mode를 강제하고, schema는 요청 계약으로
+        # 전달한다. 모델별 schema 지원 차이가 있어 robust parser도 유지한다.
         _POST_SCHEMA = {
             "type": "object",
             "properties": {
@@ -743,53 +713,38 @@ class GhostBrain:
             "required": ["_thought_process", "title", "content", "target_comments"],
             "propertyOrdering": ["_thought_process", "title", "content", "target_comments"],
         }
-        _cfg = types.GenerateContentConfig(
-            system_instruction=pm.render("system_base.txt", gallery_id=gallery_id),
-            safety_settings=SAFETY_SETTINGS,
-            response_mime_type="application/json",
-            response_schema=_POST_SCHEMA,
-            max_output_tokens=2048 if gemini_budget.cost_saver_enabled() else 3072,
-            temperature=0.78,
-            thinking_config=types.ThinkingConfig(thinking_budget=0),
-        )
-
         try:
             response = self._generate_content_paced(
                 label="generate_post",
-                model=MODEL_NAME,
-                contents=prompt,
-                config=_cfg,
+                prompt=prompt,
+                system=pm.render("system_base.txt", gallery_id=gallery_id),
+                json_schema=_POST_SCHEMA,
+                max_output_tokens=2048 if _env_bool("LLM_COST_SAVER_MODE") else 3072,
+                temperature=0.78,
             )
         except Exception as e:
-            if self._is_billing_or_credit_error(e) or isinstance(e, gemini_budget.GeminiBillingError):
-                raise
             if self._is_rate_limit_error(e):
-                # 에러 dict 반환 대신 명시적 예외 발생 — 호출자가 재시도 여부를 결정 (Flaw #2 수정)
                 detail = self._describe_exception(e)
                 raise RateLimitError(
-                    f"Gemini API Rate Limit 초과 (429): {detail}"
+                    f"로컬 Ollama 요청 제한 또는 일시 오류: {detail}"
                 ) from e
             raise  # 다른 에러는 그대로 상위로 전파
 
         # ── Debug: 중단 원인 로깅 ──
         try:
-            # 1=STOP(정상), 2=MAX_TOKENS(길이초과), 3=SAFETY(검열)
-            finish_reason = response.candidates[0].finish_reason
-            print(f"[DEBUG] Generation Finish Reason: {finish_reason}")
+            finish_reason = (getattr(response, "raw", {}) or {}).get("done_reason", "UNKNOWN")
+            _api_logger.debug("generate_post DONE REASON ▶ %s", finish_reason)
         except Exception:
             pass
 
         # ── JSON 전용 파서 (Native JSON Mode 강제 적용) ──────────────────────
-        # response_mime_type="application/json" 적용으로 마크다운 펜스 원천 차단.
+        # Ollama JSON mode 적용으로 마크다운 펜스를 억제한다.
         # 파싱 실패 = 구조적 이상 (빈 응답, 검열 등) → _parse_error Abort 신호 반환.
         # "무제" + 원본 텍스트 포스팅 버그 완전 제거.
         raw_text = response.text.strip()
 
         # ── 로그: Raw 응답 + finish_reason 기록 ──────────────────────────────
-        _finish_reason = (
-            str(response.candidates[0].finish_reason)
-            if response.candidates else "UNKNOWN"
-        )
+        _finish_reason = str((getattr(response, "raw", {}) or {}).get("done_reason", "UNKNOWN"))
         _api_logger.debug(
             "generate_post RESPONSE ▶ len=%d finish_reason=%s\n%s\n%s",
             len(raw_text), _finish_reason, "─" * 60, raw_text,
@@ -897,7 +852,7 @@ class GhostBrain:
           raw_data (titles + comments)
             → Counter 기반 Top-K 키워드 추출 (불용어 제거)
             → 대표 댓글 샘플 최대 15개 (각 50자 trim)
-            → 키워드 + 샘플만 Gemini 2.5 Flash 로 전달 (토큰 최소화)
+            → 키워드 + 샘플만 로컬 Qwen으로 전달 (토큰 최소화)
             → JSON 파싱 후 반환
 
         Args:
@@ -961,7 +916,7 @@ class GhostBrain:
         )[:top_k]
 
         # ── 4. Author Dominance 계산 ────────────────────────
-        # 작성자 점유율 Top 5 → "$author_stats" 변수로 Gemini에 전달
+        # 작성자 점유율 Top 5 → "$author_stats" 변수로 로컬 LLM에 전달
         # 예: "김사자(80%), ㅇㅇ(10%), 홍길동(5%), 익명(3%), 기타(2%)"
         author_stats = "데이터 없음"
         if authors:
@@ -975,7 +930,7 @@ class GhostBrain:
                 ]
                 author_stats = ", ".join(parts)
 
-        # ── 5. Gemini 전달용 경량 페이로드 조립 ────────────
+        # ── 5. 로컬 LLM 전달용 경량 페이로드 조립 ────────────
         # 제목 샘플: 최대 20개
         kw_text     = ", ".join(top_keywords[:20])
         titles_text = "\n".join(f"- {t}" for t in titles[:20])
@@ -1007,7 +962,7 @@ class GhostBrain:
             extra=str(raw_data.get("rehearsal_analysis_notes") or ""),
         )
 
-        # ── 6. Gemini API 호출 (분석용 — Native JSON Mode + Schema 강제) ──
+        # ── 6. 로컬 LLM 호출 (분석용 — JSON Mode + Schema 계약) ──
         # response_mime_type: API 레벨 순수 JSON 강제 → 마크다운 펜스 원천 차단
         # response_schema:    반환 구조·타입 고정 → key 누락·임의 구조 변경 불가
         # max_output_tokens:  2048 (hot_topics/summary 잘림 방지)
@@ -1047,18 +1002,6 @@ class GhostBrain:
             },
             "required": ["hot_topics", "sentiment", "memes", "summary", "ai_analysis", "generation_guidance"],
         }
-        cfg = types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_schema=_TREND_SCHEMA,
-            max_output_tokens=3072 if gemini_budget.cost_saver_enabled() else 4096,
-            temperature=0.3,                                     # 분석 태스크 → 낮은 온도 = 일관성 ↑
-            thinking_config=types.ThinkingConfig(thinking_budget=0),
-            # ↑ gemini-2.5-flash 기본 thinking 비활성화:
-            #   thinking 토큰이 max_output_tokens 예산을 잠식해
-            #   ~516chars 부근에서 응답이 잘리는 현상의 근본 원인.
-            #   이 태스크는 구조화된 JSON 추출 → 창의적 사고 불필요.
-        )
-
         raw_text = ""
         cached_result = trend_cache.get(cache_key)
         if cached_result:
@@ -1068,11 +1011,11 @@ class GhostBrain:
                 "analyze_trend CACHE HIT ▶ gallery=%s key=%s ttl=%s",
                 gallery_id,
                 cache_key[:12],
-                gemini_budget.trend_cache_ttl_seconds(),
+                os.getenv("LLM_TREND_CACHE_TTL_SEC", "900"),
             )
         else:
             try:
-                # ── 로그: Gemini에 보내는 프롬프트 전문 기록 ──────────────────
+                # ── 로그: 로컬 LLM에 보내는 프롬프트 전문 기록 ──────────────────
                 _api_logger.debug(
                     "analyze_trend PROMPT ▶ gallery=%s\n%s\n%s",
                     gallery_id, "─" * 60, prompt,
@@ -1080,23 +1023,21 @@ class GhostBrain:
 
                 response = self._generate_content_paced(
                     label="analyze_trend",
-                    model=MODEL_NAME,
-                    contents=prompt,
-                    config=cfg,
+                    prompt=prompt,
+                    json_schema=_TREND_SCHEMA,
+                    max_output_tokens=3072 if _env_bool("LLM_COST_SAVER_MODE") else 4096,
+                    temperature=0.3,
                 )
                 raw_text = response.text.strip()
 
-                # ── 로그: Gemini Raw 응답 + finish_reason 기록 ────────────────
-                _finish_reason = (
-                    str(response.candidates[0].finish_reason)
-                    if response.candidates else "UNKNOWN"
-                )
+                # ── 로그: Raw 응답 + 완료 사유 기록 ────────────────
+                _finish_reason = str((getattr(response, "raw", {}) or {}).get("done_reason", "UNKNOWN"))
                 _api_logger.debug(
                     "analyze_trend RESPONSE ▶ len=%d finish_reason=%s\n%s\n%s",
                     len(raw_text), _finish_reason, "─" * 60, raw_text,
                 )
                 # finish_reason != STOP → 잘림/안전필터 경고 (MAX_TOKENS 포함)
-                if _finish_reason != "FinishReason.STOP":
+                if _finish_reason not in {"UNKNOWN", "stop", "STOP"}:
                     _api_logger.warning(
                         "analyze_trend NON-STOP finish_reason=%s — 응답 잘림 또는 필터링 가능성",
                         _finish_reason,
@@ -1130,12 +1071,10 @@ class GhostBrain:
                     "_raw_response": raw_text,
                 }
             except Exception as e:
-                if self._is_billing_or_credit_error(e) or isinstance(e, gemini_budget.GeminiBillingError):
-                    raise
                 if self._is_rate_limit_error(e):
                     detail = self._describe_exception(e)
                     raise RateLimitError(
-                        f"Gemini API Rate Limit 초과 (429): {detail}"
+                        f"로컬 Ollama 요청 제한 또는 일시 오류: {detail}"
                     ) from e
                 raise
 
@@ -1282,19 +1221,21 @@ class GhostBrain:
 {{"pass": true}} 또는 {{"pass": false, "reason": "위반 사유 1줄"}}
 제목이 잘렸거나 물음표가 빠진 경우: {{"pass": true, "fixed_title": "수정된 제목"}}"""
 
-        cfg = types.GenerateContentConfig(
-            safety_settings=SAFETY_SETTINGS,
-            max_output_tokens=256,
-            temperature=0.0,
-            thinking_config=types.ThinkingConfig(thinking_budget=0),
-        )
-
         try:
             response = self._generate_content_paced(
                 label="judge_post",
-                model=MODEL_NAME,
-                contents=prompt,
-                config=cfg,
+                prompt=prompt,
+                json_schema={
+                    "type": "object",
+                    "properties": {
+                        "pass": {"type": "boolean"},
+                        "reason": {"type": "string"},
+                        "fixed_title": {"type": "string"},
+                    },
+                    "required": ["pass"],
+                },
+                max_output_tokens=256,
+                temperature=0.0,
             )
             raw = response.text.strip()
             _api_logger.debug("judge_post RESPONSE ▶ %s", raw)
@@ -1303,14 +1244,6 @@ class GhostBrain:
                 return {"pass": True}
             return result
         except Exception as e:
-            if isinstance(
-                e,
-                (
-                    gemini_budget.GeminiBillingError,
-                    gemini_budget.GeminiBudgetExceededError,
-                ),
-            ):
-                raise
             _api_logger.warning("judge_post FAILED: %s — 기본 통과 처리", e)
             # Judge 실패 시 기본 통과 (생성 자체를 막지 않음)
             return {"pass": True}
