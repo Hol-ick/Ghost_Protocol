@@ -254,6 +254,19 @@ h2 {
   color: var(--primary);
 }
 
+.local-note {
+  background:
+    linear-gradient(135deg, rgba(49, 93, 234, 0.1), rgba(109, 63, 242, 0.08)),
+    var(--surface);
+}
+
+.local-note .muted {
+  margin: 0;
+  color: var(--muted);
+  font-weight: 700;
+  line-height: 1.7;
+}
+
 @media (max-width: 860px) {
   .hero,
   .split,
@@ -270,4 +283,3 @@ h2 {
     transform: none;
   }
 }
-
