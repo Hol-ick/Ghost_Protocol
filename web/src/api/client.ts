@@ -89,7 +89,7 @@ export async function getEvents(runId: string, after = 0, limit = 200): Promise<
   );
   const values =
     Array.isArray(body) ? body : typeof body === "object" && body !== null && Array.isArray((body as { events?: unknown[] }).events) ? (body as { events: unknown[] }).events : [];
-  const events = values.filter(isRecord).map(normalizeRunEvent);
+  const events = values.filter(isRecord).map((event) => normalizeRunEvent({ ...event, run_id: event.run_id ?? runId }));
   const record = isRecord(body) ? body : {};
   return {
     events,

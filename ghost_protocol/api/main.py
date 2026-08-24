@@ -226,7 +226,7 @@ def create_app(*, runtime=None) -> FastAPI:
         assets_dir = web_dist / "assets"
         if assets_dir.is_dir():
             app.mount(
-                "/studio/assets",
+                "/assets",
                 StaticFiles(directory=str(assets_dir)),
                 name="studio-assets",
             )

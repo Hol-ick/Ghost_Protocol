@@ -70,16 +70,21 @@ export interface EventPage {
 
 export function normalizeRunSnapshot(input: Record<string, unknown>): RunSnapshot {
   const latest = input.latest_event ?? input.latestEvent;
+  const progressRecord = isRecord(input.progress) ? input.progress : {};
+  const completed = numberValueOptional(progressRecord.completed ?? progressRecord.current);
+  const total = numberValueOptional(input.total ?? progressRecord.total);
+  const explicitProgress = numberValueOptional(input.progress);
+  const progress = explicitProgress ?? (completed !== undefined && total ? (completed / total) * 100 : 0);
   return {
     runId: String(input.run_id ?? input.runId ?? ""),
     mode: asMode(input.mode),
     state: asState(input.state),
-    sequence: numberValue(input.sequence ?? input.last_sequence, 0),
-    progress: numberValue(input.progress, 0),
-    total: numberValueOptional(input.total),
-    headline: stringOptional(input.headline ?? input.title),
-    startedAt: stringOptional(input.started_at ?? input.startedAt),
-    endedAt: stringOptional(input.ended_at ?? input.endedAt),
+    sequence: numberValue(input.sequence ?? input.last_sequence ?? input.last_event_sequence, 0),
+    progress,
+    total,
+    headline: stringOptional(input.headline ?? input.title ?? progressRecord.headline ?? progressRecord.title),
+    startedAt: stringOptional(input.started_at ?? input.startedAt ?? input.created_at),
+    endedAt: stringOptional(input.ended_at ?? input.endedAt ?? input.updated_at),
     stopReason: stringOptional(input.stop_reason ?? input.stopReason),
     error: stringOptional(input.error),
     latestEvent: isRecord(latest) ? normalizeRunEvent(latest) : undefined,

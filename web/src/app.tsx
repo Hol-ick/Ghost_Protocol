@@ -10,6 +10,7 @@ import { ReviewQueue } from "./features/review/ReviewQueue";
 import { RunControlPanel } from "./features/run-control/RunControlPanel";
 import { RunTimeline } from "./features/run-monitor/RunTimeline";
 import type { RunEvent, RunMode, RunSnapshot } from "./types";
+import { STUDIO_PATH } from "./api/runtime";
 
 const ACTIVE_STATES = new Set(["queued", "running", "stopping"]);
 
@@ -150,7 +151,7 @@ export function App() {
   return (
     <div className="studio-shell">
       <header className="topbar">
-        <a className="brand" href="/studio" aria-label="Local Signal Room 홈"><span className="brand-mark"><span /></span><span><strong>LOCAL SIGNAL ROOM</strong><small>GHOST PROTOCOL / WEB STUDIO</small></span></a>
+        <a className="brand" href={STUDIO_PATH} aria-label="Local Signal Room 홈"><span className="brand-mark"><span /></span><span><strong>LOCAL SIGNAL ROOM</strong><small>GHOST PROTOCOL / WEB STUDIO</small></span></a>
         <div className="topbar-meta"><div className="clock"><Clock3 size={14} aria-hidden="true" /><span>LOCAL SESSION</span></div><ConnectionBadge status={connection} onReconnect={handleReconnect} /></div>
       </header>
       <main className="studio-main">

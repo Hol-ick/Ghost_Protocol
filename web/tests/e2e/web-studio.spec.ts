@@ -77,7 +77,8 @@ test("starts a fixture run, deduplicates the cursor events, and stops it", async
   await expect(page.getByText("3 events")).toBeVisible();
   await expect(page.locator('[aria-label="실행 이벤트 타임라인"] .timeline-item')).toHaveCount(3);
   await page.getByRole("button", { name: "중단" }).click();
-  await expect(page.getByText("중단 중")).toBeVisible();
+  // A fast local fixture may reach the terminal state before the next paint.
+  await expect(page.getByText(/중단 중|중단됨/)).toBeVisible();
   await expect(page.getByText("중단됨")).toBeVisible({ timeout: 3_000 });
   await expect(page.getByRole("button", { name: "중단" })).toBeDisabled();
 });
