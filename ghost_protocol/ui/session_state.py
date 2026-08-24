@@ -6,7 +6,7 @@ import time
 from collections.abc import MutableMapping
 from copy import deepcopy
 
-from ghost_protocol.application import gemini_budget
+from ghost_protocol.application import llm_usage
 from ghost_protocol.application import operator_settings
 from ghost_protocol.application import worker_contracts
 from ghost_protocol.ui import intel_cache
@@ -54,14 +54,14 @@ SESSION_DEFAULTS: dict = {
     "wave_interval_min": 1,
     "wave_interval_max": 3,
     "publish_interval_minutes": 3,
-    "gemini_call_min_interval_sec": 1.5,
-    "gemini_call_jitter_sec": 0.5,
-    "gemini_cost_saver_mode": True,
-    "gemini_max_calls_per_run": 120,
-    "gemini_judge_mode": "auto",
-    "gemini_judge_sample_rate": 0.35,
-    "gemini_trend_cache_ttl_sec": 900,
-    "gemini_max_refill_rounds": 2,
+    "llm_call_min_interval_sec": 1.5,
+    "llm_call_jitter_sec": 0.5,
+    "llm_cost_saver_mode": True,
+    "llm_max_calls_per_run": 120,
+    "llm_judge_mode": "auto",
+    "llm_judge_sample_rate": 0.35,
+    "llm_trend_cache_ttl_sec": 900,
+    "llm_max_refill_rounds": 2,
     "wave_test_mode": False,
     "rehearsal_cycle_limit": 3,
     "rehearsal_runs": [],
@@ -198,7 +198,7 @@ def apply_intel_message(
                 ts=message.get("ts"),
             )
     elif message_type == worker_contracts.MSG_INTEL_DONE:
-        gemini_budget.finalize_run()
+        llm_usage.finalize_run()
         session_state["intel_running"] = False
         session_state["intel_queue"] = None
         return True
@@ -218,7 +218,7 @@ def apply_swarm_message(session_state: MutableMapping, message: dict) -> bool:
         session_state["posts_success"] = session_state.get("posts_success", 0) + message.get("success", 0)
         session_state["posts_failed"] = session_state.get("posts_failed", 0) + message.get("fail", 0)
     elif message_type == worker_contracts.MSG_DONE:
-        gemini_budget.finalize_run()
+        llm_usage.finalize_run()
         session_state["swarm_running"] = False
         session_state["swarm_queue"] = None
         session_state["swarm_stop_event"] = None
@@ -242,7 +242,7 @@ def apply_batch_message(session_state: MutableMapping, message: dict) -> bool:
         if config and message.get("topic"):
             config["topic"] = message["topic"]
     elif message_type == worker_contracts.MSG_BATCH_DONE:
-        gemini_budget.finalize_run()
+        llm_usage.finalize_run()
         session_state["review_scripts"] = message["scripts"]
         session_state["_batch_fatal_error"] = message.get("fatal_error")
         session_state["batch_generating"] = False

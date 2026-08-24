@@ -14,7 +14,7 @@ from collections import Counter
 from collections.abc import MutableMapping, Sequence
 from typing import Any
 
-from ghost_protocol.application import gemini_budget
+from ghost_protocol.application import llm_usage
 from ghost_protocol.domain import gallery_purpose
 
 
@@ -315,8 +315,8 @@ def record_cycle(
     return record
 
 
-def classify_gemini_logs(logs: Sequence[Any] | None) -> list[dict[str, str]]:
-    """Extract actionable Gemini/API diagnostics from log text."""
+def classify_llm_logs(logs: Sequence[Any] | None) -> list[dict[str, str]]:
+    """Extract actionable local-LLM/Ollama diagnostics from log text."""
 
     joined = "\n".join(str(line) for line in (logs or []))
     lower = joined.lower()
@@ -341,28 +341,28 @@ def classify_gemini_logs(logs: Sequence[Any] | None) -> list[dict[str, str]]:
         add(
             "billing_depleted",
             "critical",
-            "Gemini billing credit depleted",
-            "Open AI Studio billing/project credits, then retry analysis only.",
+            "LLM cost or credit limit reached",
+            "Check the local provider configuration and retry analysis only.",
         )
     if "429" in lower or "rate limit" in lower or "toomanyrequests" in lower:
         add(
             "rate_limit",
             "warning",
-            "Gemini rate limit or quota response",
+            "LLM rate limit or quota response",
             "Keep collected data, wait for the suggested cooldown, then retry analysis.",
         )
-    if "gemini call budget exceeded" in lower or "gemini 호출 예산 초과" in lower:
+    if "llm call budget exceeded" in lower or "llm 호출 예산 초과" in lower:
         add(
             "budget_exceeded",
             "warning",
-            "Gemini run call budget exceeded",
+            "LLM run call budget exceeded",
             "Increase the run budget or reduce draft/rehearsal/refill count before retrying.",
         )
     if "503" in lower or "serviceunavailable" in lower or "unavailable" in lower:
         add(
             "service_unavailable",
             "warning",
-            "Gemini service unavailable",
+            "Local LLM service unavailable",
             "Retry with backoff; collected board data can be reused.",
         )
     model_not_found = bool(
@@ -370,14 +370,14 @@ def classify_gemini_logs(logs: Sequence[Any] | None) -> list[dict[str, str]]:
         or re.search(r"\bnot found\b.{0,80}\bmodel\b", lower)
         or "model not found" in lower
         or "notfound" in lower and "model" in lower
-        or "404" in lower and ("gemini" in lower or "model" in lower)
+        or "404" in lower and "model" in lower
     )
     if model_not_found:
         add(
             "model_not_found",
             "warning",
-            "Configured Gemini model was not found",
-            "Check model name and API project access.",
+            "Configured local model was not found",
+            "Check the Ollama model name and local model inventory.",
         )
     if "json" in lower and ("parse" in lower or "parsing" in lower):
         add(
@@ -470,9 +470,9 @@ def format_ops_markdown(
     )
     source = source_snapshot_health(intel_result)
     actor_summary = ((intel_result or {}).get("actor_briefing") or {}).get("summary") or {}
-    diagnostics = classify_gemini_logs(logs)
-    gemini_usage = gemini_budget.snapshot()
-    gemini_comparison = gemini_budget.usage_comparison()
+    diagnostics = classify_llm_logs(logs)
+    llm_usage_snapshot = llm_usage.snapshot()
+    llm_comparison = llm_usage.usage_comparison()
     lines = [
         "# Ghost Protocol 운영 리포트",
         "",
@@ -488,12 +488,12 @@ def format_ops_markdown(
             f"{int(actor_summary.get('skipped_comment_count') or 0)} comments skipped"
         ),
         (
-            "- Gemini: "
-            f"{gemini_usage['physical_calls']}"
-            f"/{gemini_usage['max_calls_per_run'] or '∞'} calls · "
-            f"labels {gemini_usage['by_label'] or {}} · "
-            f"prompt≈{gemini_usage['estimated_prompt_chars']} chars · "
-            f"response≈{gemini_usage['estimated_response_chars']} chars"
+            "- Local LLM: "
+            f"{llm_usage_snapshot['physical_calls']}"
+            f"/{llm_usage_snapshot['max_calls_per_run'] or '∞'} calls · "
+            f"labels {llm_usage_snapshot['by_label'] or {}} · "
+            f"prompt≈{llm_usage_snapshot['estimated_prompt_chars']} chars · "
+            f"response≈{llm_usage_snapshot['estimated_response_chars']} chars"
         ),
         "",
         "## Diagnostics",
@@ -509,13 +509,13 @@ def format_ops_markdown(
         for item in diagnostics:
             lines.append(f"- [{item['severity']}] {item['title']} — {item['action']}")
     else:
-        lines.append("- No critical Gemini/API diagnostic detected.")
+        lines.append("- No critical local LLM/Ollama diagnostic detected.")
 
     if stability_markdown:
         lines.extend(["", stability_markdown.strip()])
 
-    lines.extend(["", "## Gemini Usage Comparison"])
-    if gemini_comparison.get("has_baseline"):
+    lines.extend(["", "## Local LLM Usage Comparison"])
+    if llm_comparison.get("has_baseline"):
         def _fmt_number(value: object, *, digits: int = 1) -> str:
             try:
                 return f"{float(value):.{digits}f}"
@@ -535,32 +535,32 @@ def format_ops_markdown(
             [
                 (
                     "- Baseline: "
-                    f"최근 {gemini_comparison.get('baseline_count', 0)}개 "
-                    f"`{gemini_comparison.get('baseline_mode')}` Run 평균"
+                    f"최근 {llm_comparison.get('baseline_count', 0)}개 "
+                    f"`{llm_comparison.get('baseline_mode')}` Run 평균"
                 ),
                 (
                     "- Calls: "
-                    f"{gemini_usage['physical_calls']} now vs "
-                    f"{_fmt_number(gemini_comparison.get('baseline_avg_calls'))} avg "
-                    f"({_fmt_delta(gemini_comparison.get('call_delta_pct'))})"
+                    f"{llm_usage_snapshot['physical_calls']} now vs "
+                    f"{_fmt_number(llm_comparison.get('baseline_avg_calls'))} avg "
+                    f"({_fmt_delta(llm_comparison.get('call_delta_pct'))})"
                 ),
                 (
                     "- Prompt chars: "
-                    f"{gemini_usage['estimated_prompt_chars']} now vs "
-                    f"{_fmt_number(gemini_comparison.get('baseline_avg_prompt_chars'), digits=0)} avg "
-                    f"({_fmt_delta(gemini_comparison.get('prompt_delta_pct'))})"
+                    f"{llm_usage_snapshot['estimated_prompt_chars']} now vs "
+                    f"{_fmt_number(llm_comparison.get('baseline_avg_prompt_chars'), digits=0)} avg "
+                    f"({_fmt_delta(llm_comparison.get('prompt_delta_pct'))})"
                 ),
                 (
                     "- Response chars: "
-                    f"{gemini_usage['estimated_response_chars']} now vs "
-                    f"{_fmt_number(gemini_comparison.get('baseline_avg_response_chars'), digits=0)} avg "
-                    f"({_fmt_delta(gemini_comparison.get('response_delta_pct'))})"
+                    f"{llm_usage_snapshot['estimated_response_chars']} now vs "
+                    f"{_fmt_number(llm_comparison.get('baseline_avg_response_chars'), digits=0)} avg "
+                    f"({_fmt_delta(llm_comparison.get('response_delta_pct'))})"
                 ),
                 (
                     "- Judge calls: "
-                    f"{(gemini_usage.get('by_label') or {}).get('judge_post', 0)} now vs "
-                    f"{_fmt_number(gemini_comparison.get('baseline_avg_judge_calls'))} avg "
-                    f"({_fmt_delta(gemini_comparison.get('judge_delta_pct'))})"
+                    f"{(llm_usage_snapshot.get('by_label') or {}).get('judge_post', 0)} now vs "
+                    f"{_fmt_number(llm_comparison.get('baseline_avg_judge_calls'))} avg "
+                    f"({_fmt_delta(llm_comparison.get('judge_delta_pct'))})"
                 ),
             ]
         )

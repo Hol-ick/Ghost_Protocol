@@ -1,8 +1,8 @@
-"""Process-local pacing for Gemini API calls.
+"""Process-local pacing for local LLM calls.
 
-The Google dashboard can show plenty of remaining quota while the app still
-hits short-window 429s. This module keeps Gemini calls from piling up in the
-same second across Streamlit worker threads.
+Even a local Ollama process benefits from serialized calls when several
+Streamlit worker threads are active. This module keeps generation calls from
+piling up in the same second across worker threads.
 """
 
 from __future__ import annotations
@@ -37,10 +37,10 @@ def _env_seconds(name: str, *, default: float, upper: float) -> float:
 
 
 def configured_min_interval() -> float:
-    """Return the current minimum spacing between Gemini calls."""
+    """Return the current minimum spacing between local LLM calls."""
 
     return _env_seconds(
-        "GEMINI_CALL_MIN_INTERVAL_SEC",
+        "LLM_CALL_MIN_INTERVAL_SEC",
         default=DEFAULT_MIN_INTERVAL_SEC,
         upper=MAX_INTERVAL_SEC,
     )
@@ -50,7 +50,7 @@ def configured_jitter() -> float:
     """Return the current extra randomized delay applied before each call."""
 
     return _env_seconds(
-        "GEMINI_CALL_JITTER_SEC",
+        "LLM_CALL_JITTER_SEC",
         default=DEFAULT_JITTER_SEC,
         upper=MAX_JITTER_SEC,
     )

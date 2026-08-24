@@ -1,12 +1,12 @@
 import json
 from types import SimpleNamespace
 
-from ghost_protocol.application import gemini_budget, trend_cache
+from ghost_protocol.application import llm_usage, trend_cache
 from ghost_protocol.brain import GhostBrain
 
 
 def test_trend_cache_round_trip_uses_ttl(monkeypatch, tmp_path):
-    monkeypatch.setenv("GEMINI_TREND_CACHE_TTL_SEC", "3600")
+    monkeypatch.setenv("LLM_TREND_CACHE_TTL_SEC", "3600")
     monkeypatch.setattr(trend_cache, "_CACHE_PATH", tmp_path / "trend_cache.json")
 
     key = trend_cache.build_key(
@@ -23,11 +23,11 @@ def test_trend_cache_round_trip_uses_ttl(monkeypatch, tmp_path):
     assert cached == {"hot_topics": ["목성"], "sentiment": "장난"}
 
 
-def test_analyze_trend_reuses_cached_gemini_result(monkeypatch, tmp_path):
-    monkeypatch.setenv("GEMINI_TREND_CACHE_TTL_SEC", "3600")
-    monkeypatch.setenv("GEMINI_MAX_CALLS_PER_RUN", "0")
+def test_analyze_trend_reuses_cached_llm_result(monkeypatch, tmp_path):
+    monkeypatch.setenv("LLM_TREND_CACHE_TTL_SEC", "3600")
+    monkeypatch.setenv("LLM_MAX_CALLS_PER_RUN", "0")
     monkeypatch.setattr(trend_cache, "_CACHE_PATH", tmp_path / "trend_cache.json")
-    gemini_budget.reset_run("trend-cache-test")
+    llm_usage.reset_run("trend-cache-test")
 
     calls = {"count": 0}
 

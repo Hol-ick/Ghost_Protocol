@@ -1,8 +1,8 @@
-"""Lightweight Gemini usage accounting and budget guards.
+"""Lightweight local-LLM usage accounting and budget guards.
 
 This module is intentionally independent from Streamlit.  The UI writes the
 operator's cost controls into environment variables, while ``GhostBrain`` records
-actual SDK calls here.  Keeping the ledger process-local is enough for the
+actual provider calls here.  Keeping the ledger process-local is enough for the
 current threaded workbench and makes tests straightforward.
 """
 
@@ -23,12 +23,12 @@ DEFAULT_MAX_CALLS_PER_RUN = 0
 DEFAULT_JUDGE_SAMPLE_RATE = 0.35
 
 
-class GeminiBudgetExceededError(RuntimeError):
-    """Raised before a Gemini call when the configured run budget is exhausted."""
+class LLMBudgetExceededError(RuntimeError):
+    """Raised before an LLM call when the configured run budget is exhausted."""
 
 
-class GeminiBillingError(RuntimeError):
-    """Raised when Gemini reports exhausted billing/prepayment credits."""
+class LLMCostOrQuotaError(RuntimeError):
+    """Raised when a provider reports exhausted quota or credits."""
 
 
 _lock = threading.Lock()
@@ -45,7 +45,7 @@ _error_counts: Counter[str] = Counter()
 _estimated_prompt_chars = 0
 _estimated_response_chars = 0
 _usage_tokens: Counter[str] = Counter()
-_HISTORY_PATH = Path(__file__).resolve().parents[2] / "data" / "gemini_usage_history.json"
+_HISTORY_PATH = Path(__file__).resolve().parents[2] / "data" / "ollama_usage_history.json"
 _MAX_HISTORY = 80
 
 
@@ -73,24 +73,24 @@ def _env_float(name: str, default: float, *, lower: float = 0.0, upper: float = 
 
 
 def cost_saver_enabled() -> bool:
-    return _env_bool("GEMINI_COST_SAVER_MODE", default=False)
+    return _env_bool("LLM_COST_SAVER_MODE", default=False)
 
 
 def max_calls_per_run() -> int:
-    return _env_int("GEMINI_MAX_CALLS_PER_RUN", DEFAULT_MAX_CALLS_PER_RUN, lower=0)
+    return _env_int("LLM_MAX_CALLS_PER_RUN", DEFAULT_MAX_CALLS_PER_RUN, lower=0)
 
 
 def trend_cache_ttl_seconds() -> int:
-    return _env_int("GEMINI_TREND_CACHE_TTL_SEC", 900, lower=0, upper=86_400)
+    return _env_int("LLM_TREND_CACHE_TTL_SEC", 900, lower=0, upper=86_400)
 
 
 def judge_mode() -> str:
-    mode = (os.getenv("GEMINI_JUDGE_MODE") or "auto").strip().lower()
+    mode = (os.getenv("LLM_JUDGE_MODE") or "auto").strip().lower()
     return mode if mode in {"auto", "all", "sample", "off"} else "auto"
 
 
 def judge_sample_rate() -> float:
-    return _env_float("GEMINI_JUDGE_SAMPLE_RATE", DEFAULT_JUDGE_SAMPLE_RATE, lower=0.0, upper=1.0)
+    return _env_float("LLM_JUDGE_SAMPLE_RATE", DEFAULT_JUDGE_SAMPLE_RATE, lower=0.0, upper=1.0)
 
 
 def _run_mode_from_id(run_id: str) -> str:
@@ -268,7 +268,7 @@ def is_billing_or_credit_error(err: Exception) -> bool:
 
 
 def begin_call(*, label: str, model: str, contents: Any = None) -> dict[str, Any]:
-    """Register a planned physical Gemini call and enforce max-call budget."""
+    """Register a planned physical local-LLM call and enforce max-call budget."""
 
     global _next_call_id, _estimated_prompt_chars
     label_key = _compact_label(label)
@@ -277,8 +277,8 @@ def begin_call(*, label: str, model: str, contents: Any = None) -> dict[str, Any
         max_calls = max_calls_per_run()
         current = int(_totals["physical_calls"])
         if max_calls and current >= max_calls:
-            raise GeminiBudgetExceededError(
-                f"Gemini call budget exceeded: {current}/{max_calls} calls used"
+            raise LLMBudgetExceededError(
+                f"LLM call budget exceeded: {current}/{max_calls} calls used"
             )
         _next_call_id += 1
         call = {
@@ -302,7 +302,9 @@ def begin_call(*, label: str, model: str, contents: Any = None) -> dict[str, Any
 def record_success(call: dict[str, Any], response: Any) -> None:
     global _estimated_response_chars
     response_chars = _extract_response_chars(response)
-    metadata = getattr(response, "usage_metadata", None)
+    metadata = getattr(response, "usage", None)
+    if metadata is None:
+        metadata = getattr(response, "usage_metadata", None)
     with _lock:
         _totals["successful_calls"] += 1
         _estimated_response_chars += response_chars
@@ -310,6 +312,8 @@ def record_success(call: dict[str, Any], response: Any) -> None:
             ("prompt_token_count", "prompt_tokens"),
             ("candidates_token_count", "candidate_tokens"),
             ("total_token_count", "total_tokens"),
+            ("prompt_eval_count", "prompt_tokens"),
+            ("eval_count", "candidate_tokens"),
         ):
             value = _usage_value(metadata, source_name)
             if value:
@@ -335,7 +339,7 @@ def should_try_fallback_after_error(err: Exception) -> bool:
 
     if is_billing_or_credit_error(err):
         return False
-    if _env_bool("GEMINI_DISABLE_FALLBACK_ON_QUOTA", default=True):
+    if _env_bool("LLM_DISABLE_FALLBACK_ON_QUOTA", default=True):
         text = str(err).lower()
         if "quota" in text and "rate" not in text and "429" not in text:
             return False
@@ -439,7 +443,7 @@ def usage_comparison(*, history_limit: int = 10) -> dict[str, Any]:
 
 
 def resource_summary(*, history_limit: int = 10) -> dict[str, Any]:
-    """Return UI-ready Gemini resource counters and comparison hints."""
+    """Return UI-ready local-LLM resource counters and comparison hints."""
 
     current = snapshot()
     comparison = usage_comparison(history_limit=history_limit)
@@ -497,6 +501,6 @@ def format_short_status() -> str:
         f"{key}:{value}" for key, value in sorted(data["by_label"].items())
     ) or "-"
     return (
-        f"Gemini calls {budget_text} · labels {labels} · "
+        f"LLM calls {budget_text} · labels {labels} · "
         f"prompt≈{data['estimated_prompt_chars']} chars · response≈{data['estimated_response_chars']} chars"
     )
