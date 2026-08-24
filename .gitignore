@@ -40,7 +40,6 @@ build/
 *.pkg
 *.dmg
 error_screenshot_*.png
-pages-dist/
 
 # ── 📓 Jupyter ───────────────────────────────
 .ipynb_checkpoints/
