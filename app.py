@@ -48,6 +48,7 @@ from ghost_protocol import cycle_memory as _cm
 from ghost_protocol import database
 from ghost_protocol import prompt_manager as pm
 from ghost_protocol.application import ai_post_monitor
+from ghost_protocol.application import draft_generation
 from ghost_protocol.application import llm_usage
 from ghost_protocol.application import llm_throttle
 from ghost_protocol.application.ollama_client import OllamaClient
@@ -1995,6 +1996,13 @@ def _batch_gen_worker(
                         q_log(f"[BATCH] ❌ [{wave}] {reason} — 재시도 ({attempt+1}/3)")
                         continue
                     q_log(f"[BATCH] ❌ [{wave}] {reason} 3회 — 건너뜀")
+                    gen_title, gen_content, _tc_list = (
+                        draft_generation.invalidate_candidate_state(
+                            _last_candidate_title,
+                            _last_candidate_content,
+                            _last_candidate_comments,
+                        )
+                    )
                     break
 
                 # ── 슬롯 바인딩 하드락 ─────────────────────────────────────
@@ -2818,12 +2826,22 @@ def _batch_gen_worker(
                 q_log(f"[BATCH] ⏱️ [{wave}] 생성 타임아웃 (40s) — 이 대본 건너뜀")
                 _failure_reason = "생성 시간이 제한을 초과했습니다."
                 _failure_stage = "generation_timeout"
+                gen_title, gen_content, _tc_list = draft_generation.invalidate_candidate_state(
+                    _last_candidate_title,
+                    _last_candidate_content,
+                    _last_candidate_comments,
+                )
                 break  # 부분 실패 허용: 이 Wave만 스킵, 다음 Wave 계속
             except llm_usage.LLMBudgetExceededError as e:
                 q_log(f"[BATCH] ⛔ [{wave}] LLM 호출 예산 초과 — 배치 중단: {str(e)[:100]}")
                 _failure_reason = f"LLM 호출 예산 초과: {str(e)[:120]}"
                 _failure_stage = "llm_budget_exceeded"
                 _failure_detail = str(e)[:500]
+                gen_title, gen_content, _tc_list = draft_generation.invalidate_candidate_state(
+                    _last_candidate_title,
+                    _last_candidate_content,
+                    _last_candidate_comments,
+                )
                 stop_ev.set()
                 break
             except llm_usage.LLMCostOrQuotaError as e:
@@ -2831,6 +2849,11 @@ def _batch_gen_worker(
                 _failure_reason = "로컬 LLM 비용/쿼터 제한으로 생성을 중단했습니다."
                 _failure_stage = "llm_cost_or_quota"
                 _failure_detail = str(e)[:500]
+                gen_title, gen_content, _tc_list = draft_generation.invalidate_candidate_state(
+                    _last_candidate_title,
+                    _last_candidate_content,
+                    _last_candidate_comments,
+                )
                 stop_ev.set()
                 break
             except RateLimitError:
@@ -2842,12 +2865,120 @@ def _batch_gen_worker(
                 else:
                     q_log(f"[BATCH] ❌ [{wave}] Rate Limit 재시도 한도 초과")
                     _failure_reason = "API 호출 제한으로 생성을 완료하지 못했습니다."
+                    gen_title, gen_content, _tc_list = draft_generation.invalidate_candidate_state(
+                        _last_candidate_title,
+                        _last_candidate_content,
+                        _last_candidate_comments,
+                    )
             except Exception as e:
                 q_log(f"[BATCH] ❌ [{wave}] 생성 오류: {str(e)[:80]}")
                 _failure_reason = f"생성 오류: {str(e)[:120]}"
                 _failure_stage = "generation_exception"
                 _failure_detail = str(e)[:500]
+                gen_title, gen_content, _tc_list = draft_generation.invalidate_candidate_state(
+                    _last_candidate_title,
+                    _last_candidate_content,
+                    _last_candidate_comments,
+                )
                 break
+
+        # If every full prompt attempt failed at a slot/quality boundary,
+        # recover once with the compact purpose lane.  This is deliberately
+        # after the loop so slot drift, parse errors, timeouts, and provider
+        # exceptions all clear stale candidates before the recovery decision.
+        if (
+            gen_title is None
+            and not rehearsal
+            and not stop_ev.is_set()
+            and _failure_stage not in {"llm_budget_exceeded", "llm_cost_or_quota"}
+        ):
+            _compact_focuses = list(
+                gallery_purpose.purpose_candidates(
+                    gallery_id,
+                    _wave_targets or (),
+                    allow_fallback=True,
+                )
+            )
+            _compact_focus = ""
+            _compact_candidates = _compact_focuses or [gallery_id]
+            for _offset in range(len(_compact_candidates)):
+                _candidate = _compact_candidates[(wave - 1 + _offset) % len(_compact_candidates)]
+                _candidate_tokens = _topic_tokens_for_match(_candidate)
+                _conflicts = False
+                for _banned in _banned_topics:
+                    _banned_tokens = _topic_tokens_for_match(_banned)
+                    if _banned_tokens and len(_candidate_tokens & _banned_tokens) >= max(
+                        2,
+                        min(3, len(_banned_tokens)),
+                    ):
+                        _conflicts = True
+                        break
+                if not _conflicts:
+                    _compact_focus = _candidate
+                    break
+            if not _compact_focus:
+                _compact_focus = _compact_candidates[(wave - 1) % len(_compact_candidates)]
+            try:
+                _compact_result = _timed(
+                    brain.generate_post_compact,
+                    _timeout=40.0,
+                    topic=_attempt_topic,
+                    gallery_id=gallery_id,
+                    tone=_wave_tone,
+                    length=length,
+                    focus=_compact_focus,
+                    recent_posts=_wave_targets,
+                )
+            except Exception as _compact_exc:
+                _compact_result = {
+                    "title": "",
+                    "content": "",
+                    "target_comments": [],
+                    "_parse_error": True,
+                    "_raw_response": str(_compact_exc)[:500],
+                }
+            _compact_title = str(_compact_result.get("title") or "").strip()
+            _compact_content = str(_compact_result.get("content") or "").strip()
+            if (
+                not _compact_result.get("_parse_error")
+                and _compact_title
+                and _compact_content
+                and _title_key(_compact_title) not in _used_title_keys
+                and gallery_purpose.text_matches(
+                    gallery_id,
+                    _compact_title,
+                    _compact_content,
+                )
+            ):
+                gen_title = _compact_title
+                gen_content = _compact_content
+                _tc_list = []
+                _failure_reason = ""
+                _failure_stage = ""
+                _failure_detail = ""
+                _wave_plan = dict(_wave_plan)
+                _wave_plan["slot"] = "G"
+                _wave_plan["slot_text"] = _compact_focus
+                _used_titles.append(gen_title)
+                _used_title_keys.add(_title_key(gen_title))
+                _slot_success_counts["G"] = _slot_success_counts.get("G", 0) + 1
+                _successful_family = draft_guidance.topic_family_tokens(
+                    " ".join([_compact_focus, gen_title, gen_content])
+                )
+                if _successful_family:
+                    _successful_topic_families.append(_successful_family)
+                _fw = gen_content.split()[0] if gen_content.split() else ""
+                if _fw:
+                    _batch_first_words.append(_fw)
+                q_log(
+                    f"[BATCH] 🛟 [{wave}] compact Ollama fallback accepted — "
+                    f"'{gen_title[:30]}'"
+                )
+            else:
+                q_log(
+                    f"[BATCH] 🛟 [{wave}] compact Ollama fallback rejected — "
+                    f"focus='{_compact_focus[:40]}'"
+                )
 
         scripts.append({
             "wave":             wave,

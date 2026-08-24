@@ -849,6 +849,117 @@ class GhostBrain:
             "_thought_process": _json_out.get("_thought_process", {}),
         }
 
+    def generate_post_compact(
+        self,
+        *,
+        topic: str,
+        gallery_id: str,
+        tone: str = "neutral",
+        length: str = "짧게 (1~2문장)",
+        focus: str = "",
+        recent_posts: Optional[list[dict]] = None,
+    ) -> dict:
+        """Generate one small, purpose-anchored draft after a long retry fails.
+
+        The normal writer prompt intentionally carries many style and safety
+        blocks.  On a small local model that large context can cause malformed
+        JSON or topic drift.  This recovery path keeps only the durable board
+        purpose, one concrete focus, and the output contract; it never posts.
+        """
+
+        profile = gallery_purpose.get_profile(gallery_id)
+        topic_label = str(profile.get("topic_label") or "게시판 소재").strip()
+        focus_text = str(focus or "").strip()
+        if not focus_text:
+            candidates = gallery_purpose.purpose_candidates(
+                gallery_id,
+                recent_posts or (),
+                allow_fallback=True,
+            )
+            focus_text = candidates[0] if candidates else topic_label
+        prompt = (
+            "한국어 커뮤니티에 올릴 짧은 초안 1개를 만든다. 반드시 JSON 객체 하나만 출력한다.\n"
+            f"게시판 기본 분야: {topic_label}\n"
+            f"이번 글의 구체 초점: {focus_text}\n"
+            f"말투: {tone}; 분량: {length}\n"
+            "초점의 구체 명사나 장면을 제목 또는 본문에 반드시 한 번 넣는다. "
+            "사람·닉네임·논란·게임·정치·게시판 메타 평론은 쓰지 않는다. "
+            "새 사건을 만들지 말고 관측 가능한 장면 하나만 짧게 쓴다.\n"
+            '출력 형식: {"title":"짧은 제목","content":"한두 문장 본문","target_comments":[]} '
+            "target_comments는 항상 빈 배열이다."
+        )
+        response = self._generate_content_paced(
+            label="generate_post_compact",
+            prompt=prompt,
+            system=(
+                "너는 짧고 사실적인 한국어 커뮤니티 초안 작성기다. "
+                "설명·마크다운·추가 키는 출력하지 않는다."
+            ),
+            json_schema={
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "content": {"type": "string"},
+                    "target_comments": {"type": "array"},
+                },
+                "required": ["title", "content", "target_comments"],
+            },
+            temperature=0.25,
+            max_output_tokens=384,
+        )
+        raw_text = str(getattr(response, "text", "") or "").strip()
+        try:
+            data = _parse_json_robust(raw_text)
+            title = naturalness.ensure_question_punctuation(
+                str(data.get("title") or "").strip()
+            )
+            content = naturalness.ensure_question_punctuation_in_lines(
+                str(data.get("content") or "").strip()
+            )
+        except Exception as exc:
+            _api_logger.warning("generate_post_compact PARSE ERROR: %s", exc)
+            return {
+                "title": "",
+                "content": "",
+                "target_comments": [],
+                "_parse_error": True,
+                "_raw_response": raw_text,
+            }
+        if not title or not content:
+            return {
+                "title": "",
+                "content": "",
+                "target_comments": [],
+                "_parse_error": True,
+                "_raw_response": raw_text,
+            }
+        sensitive_hits = sensitive_generation_violations(
+            f"{title}\n{content}",
+            topic=topic,
+        )
+        if sensitive_hits:
+            return {
+                "title": "",
+                "content": "",
+                "target_comments": [],
+                "_parse_error": True,
+                "_safety_error": True,
+                "_safety_reasons": sensitive_hits,
+                "_rejected_title": title,
+                "_rejected_content": content,
+                "_raw_response": raw_text,
+            }
+        return {
+            "title": title,
+            "content": content,
+            "target_comments": [],
+            "_thought_process": {
+                "slot_used": "G",
+                "target_noun": focus_text,
+                "start_style": "compact_fallback",
+            },
+        }
+
     # ══════════════════════════════════════════════
     # INTEL 트렌드 분석 (Read-Only — 포스팅 없음)
     # ══════════════════════════════════════════════
