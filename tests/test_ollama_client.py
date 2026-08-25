@@ -69,6 +69,34 @@ def test_ollama_client_sends_local_json_chat_payload():
     assert fake_session.post.call_args.kwargs["timeout"] == 120.0
 
 
+def test_ollama_client_forwards_json_schema_to_format():
+    fake_session = MagicMock()
+    fake_session.post.return_value = _response(
+        {
+            "model": "qwen2.5:7b",
+            "message": {"role": "assistant", "content": '{"ok":true}'},
+        }
+    )
+    schema = {
+        "type": "object",
+        "properties": {"ok": {"type": "boolean"}},
+        "required": ["ok"],
+    }
+    client = OllamaClient(model="qwen2.5:7b", session=fake_session)
+
+    client.generate(
+        LLMRequest(
+            task="schema_test",
+            system="s",
+            prompt="p",
+            json_schema=schema,
+        )
+    )
+
+    payload = fake_session.post.call_args.kwargs["json"]
+    assert payload["format"] == schema
+
+
 def test_ollama_health_lists_models_without_auth_or_request_body():
     fake_session = MagicMock()
     fake_session.get.return_value = _response(

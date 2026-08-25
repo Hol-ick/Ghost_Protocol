@@ -161,7 +161,10 @@ class OllamaClient:
                 {"role": "user", "content": request.prompt},
             ],
             "stream": False,
-            "format": "json",
+            # Ollama accepts either the legacy JSON mode or a JSON-schema
+            # object.  Forward the shared contract instead of silently
+            # discarding it at the adapter boundary.
+            "format": request.json_schema or "json",
             "options": {
                 "temperature": request.temperature,
                 "num_predict": request.max_output_tokens,

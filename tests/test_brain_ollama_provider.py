@@ -59,12 +59,7 @@ def test_ghost_brain_injects_provider_and_keeps_public_methods(monkeypatch):
         "judge_post",
     ]
     assert provider.requests[0].json_schema["required"] == ["topic"]
-    assert provider.requests[1].json_schema["required"] == [
-        "_thought_process",
-        "title",
-        "content",
-        "target_comments",
-    ]
+    assert provider.requests[1].json_schema is None
 
 
 def test_ghost_brain_default_provider_is_loopback_ollama(monkeypatch):

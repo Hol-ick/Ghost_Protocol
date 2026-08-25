@@ -34,6 +34,7 @@ from .content_filter import (
 from .application import llm_throttle, llm_usage, trend_cache
 from .application.llm_provider import LLMProvider, LLMRequest
 from .application.ollama_client import OllamaClient
+from .application.prompt_compiler import compile_post_prompt
 from .domain import gallery_purpose, gallery_style, naturalness, writing_enrichment
 
 # .env 에서 로컬 Ollama 설정 로딩
@@ -145,6 +146,13 @@ def _env_bool(name: str, default: bool = False) -> bool:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
+
+def _model_prefers_full_prompt(model_name: str) -> bool:
+    """Return whether a model has enough capacity for the quality-first path."""
+
+    value = str(model_name or "").strip().lower()
+    return any(marker in value for marker in (":7b", ":8b", ":9b", ":14b", ":32b"))
+
 # ══════════════════════════════════════════════
 # System prompt → prompts/system_base.txt
 # pm.load("system_base.txt") 로 동적 주입
@@ -180,7 +188,12 @@ class GhostBrain:
             base_url=os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434"),
             model=self.model_name,
             timeout_seconds=_env_float("OLLAMA_TIMEOUT_SEC", 120.0, lower=1.0),
-            num_ctx=_env_int("OLLAMA_NUM_CTX", 4096),
+            # The full writing prompt is retained for 7B-class models.  An
+            # explicit OLLAMA_NUM_CTX still wins, so small-GPU users can cap it.
+            num_ctx=_env_int(
+                "OLLAMA_NUM_CTX",
+                8192 if _model_prefers_full_prompt(self.model_name) else 4096,
+            ),
             keep_alive=os.getenv("OLLAMA_KEEP_ALIVE", "10m").strip() or "10m",
         )
         self._provider = self.provider
@@ -223,7 +236,14 @@ class GhostBrain:
                     ctx = val
                     break
 
-        # 3차: default 폴백
+        # Registered purpose domains already receive their durable identity
+        # from gallery_purpose.py.  Do not inject the generic/default few-shot
+        # here: for universe that default block contains shopping/game wording
+        # and can pull a 7B writer off-topic.
+        if ctx is None and gallery_purpose.get_profile(gallery_id):
+            return ""
+
+        # 3차: default 폴백 for genuinely unknown galleries
         if ctx is None:
             ctx = ctx_db.get("default", {})
 
@@ -453,6 +473,7 @@ class GhostBrain:
         keywords: Optional[list[str]] = None,
         recent_posts: Optional[list[dict]] = None,
         composition_profile: Optional[dict] = None,
+        expected_slot: str = "",
     ) -> dict:
         """DC Inside 스타일 게시글 생성 + 소셜 인터랙션 댓글 콤보.
 
@@ -466,6 +487,8 @@ class GhostBrain:
             recent_posts: 댓글 타겟 후보 목록 (봇 게시글 제외).
                           각 dict: {"post_no": str, "title": str}
                           None이면 댓글 타겟 없이 포스팅만 생성.
+            expected_slot: 앱이 선택한 소재 슬롯. 모델이 생성하지 않고
+                           결과 메타데이터에 앱이 주입한다.
 
         Returns:
             {
@@ -626,113 +649,62 @@ class GhostBrain:
         # ── 작문 지시 — prompts/generate_post.txt 에서 로드 ──────────────────
         # 하드코딩 제로: 분량·톤·키워드·교차지시를 템플릿 변수로 주입.
         # 사용자는 generate_post.txt 만 수정하면 작문 스타일 전체를 튜닝 가능.
-        parts.append(
-            pm.render(
-                "generate_post.txt",
-                gallery_id=gallery_id,
-                topic=topic,
-                tone_instruction=tone_instruction,
-                length_instruction=length_instruction,
-                naturalness_policy=naturalness.generation_policy_block(),
-                naturalness_final_check=naturalness.final_check_block(),
-                cross_instruction=cross_instruction,
-                kw_inject=kw_inject,
-                recent_posts_context=recent_posts_context,
-                composition_profile_block=composition_profile_block,
-                comment_enrichment_block=comment_enrichment_block,
-                shared_writing_contract=shared_writing_contract,
-            )
+        rendered_master_prompt = pm.render(
+            "generate_post.txt",
+            gallery_id=gallery_id,
+            topic=topic,
+            tone_instruction=tone_instruction,
+            length_instruction=length_instruction,
+            naturalness_policy=naturalness.generation_policy_block(),
+            naturalness_final_check=naturalness.final_check_block(),
+            cross_instruction=cross_instruction,
+            kw_inject=kw_inject,
+            recent_posts_context=recent_posts_context,
+            composition_profile_block=composition_profile_block,
+            comment_enrichment_block=comment_enrichment_block,
+            shared_writing_contract=shared_writing_contract,
         )
-
-        prompt = "\n\n---\n\n".join(parts)
+        _prompt_mode = os.getenv("LLM_PROMPT_MODE", "auto").strip().lower()
+        if _prompt_mode == "auto":
+            _prompt_mode = "full" if _model_prefers_full_prompt(self.model_name) else "focused"
+        compiled_master_prompt = compile_post_prompt(
+            rendered_master_prompt,
+            include_comments=bool(recent_posts),
+            slot=expected_slot,
+            mode=_prompt_mode,
+        )
+        prompt = "\n\n---\n\n".join([*parts, compiled_master_prompt])
 
         # ── Ollama JSON 호출 ──
-        # provider가 stream=false + JSON mode를 강제하고, schema는 요청 계약으로
-        # 전달한다. 모델별 schema 지원 차이가 있어 robust parser도 유지한다.
+        # 모델은 게시글 필드만 생성한다. 슬롯·페르소나·QC 메타데이터는
+        # 호출자가 결정해 모델이 내부 지시를 본문으로 복사하지 않게 한다.
         _POST_SCHEMA = {
             "type": "object",
             "properties": {
-                "_thought_process": {
-                    "type": "object",
-                    "description": "대사 생성 전 필수 사전 계획. title/content보다 반드시 먼저 채워라.",
-                    "properties": {
-                        "target_noun": {
-                            "type": "string",
-                            "description": "브리핑에서 고른 구체 소재 1개. 안전 치환어가 있으면 사람 이름이 아니라 표현·장면·사건·숫자·물건을 고른다.",
-                        },
-                        "persona_metaphor": {
-                            "type": "string",
-                            "description": "페르소나의 발화 행동을 내부 메모로 설명한다. 이 문장을 title/content에 복사하지 않는다.",
-                        },
-                        "start_style": {  # <-- 여기 변경
-                            "type": "string",
-                            "description": "본문을 시작하는 호흡. 같은 접속사나 첫 단어를 반복하지 않는다. 예: 장면 직격, 구체 행동, 짧은 판단, 경험 회상, 낮은 반박 등. 질문형은 예외적으로만 쓴다.",
-                        },
-                        "slot_used": {
-                            "type": "string",
-                            "description": "target_noun의 출처 슬롯. A/B/C/R/G/context 중 정확히 하나.",
-                        },
-                    },
-                    "required": ["target_noun", "persona_metaphor", "start_style", "slot_used"], # <-- 여기 변경
-                },
-                "title": {
-                    "type": "string",
-                    "description": "갤러리 게시글 제목. 한 가지 장면이나 판단을 자연스러운 길이로 쓴다. 질문형·빈도 불평형 제목은 드물게만 쓰고 마침표는 붙이지 않는다.",
-                },
-                "content": {
-                    "type": "string",
-                    "description": "갤러리 게시글 본문. This Draft Variation의 길이 레인을 따른다. 짧은 레인은 0~1줄, medium/fuller 레인은 2~5줄까지 가능하다. 제목을 다시 말하지 말고 구체 장면·근거·반응 중 하나를 더한다. 마침표는 붙이지 않는다.",
-                },
-                "target_comments": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "_thought_process": {
-                                "type": "object",
-                                "description": "댓글 생성 전 필수 사전 계획. comment보다 반드시 먼저 채워라.",
-                                "properties": {
-                                    "target_noun": {
-                                        "type": "string",
-                                        "description": "게시글에서 꼬투리 잡을 구체적 명사 1개",
-                                    },
-                                    "reused_word": {
-                                        "type": "string",
-                                        "description": "기존 댓글에 이미 쓰인 핵심 단어. 이 단어를 comment에 그대로 쓰지 않는다",
-                                    },
-                                    "start_style": { # <-- 여기 변경
-                                        "type": "string",
-                                        "description": "댓글을 시작하는 호흡. 타겟 글에 반응하되 같은 접속사와 같은 첫 단어를 반복하지 않는다.",
-                                    },
-                                },
-                                "required": ["target_noun", "reused_word", "start_style"], # <-- 여기 변경
-                            },
-                            "post_no": {
-                                "type": "string",
-                                "description": "댓글을 달 DC Inside 게시글 번호 (숫자 문자열)",
-                            },
-                            "comment": {
-                                "type": "string",
-                                "description": "작성할 댓글 내용 (길이 룰에 따라 변동). 시작은 _thought_process.start_style 방식을 따라야 한다. 마침표 금지.", # <-- 여기 변경
-                            },
-                        },
-                        "required": ["_thought_process", "post_no", "comment"],
-                        "propertyOrdering": ["_thought_process", "post_no", "comment"],
-                    },
-                    "description": "댓글 타겟 목록 — 서로 다른 게시글 최대 2개. 같은 post_no는 반드시 1번만 등장. 타겟 없으면 빈 배열.",
-                },
+                "title": {"type": "string"},
+                "content": {"type": "string"},
+                # Keep the grammar small enough for a 6GB GPU.  The application
+                # parser performs the detailed post_no/comment validation.
+                "target_comments": {"type": "array"},
             },
-            "required": ["_thought_process", "title", "content", "target_comments"],
-            "propertyOrdering": ["_thought_process", "title", "content", "target_comments"],
+            "required": ["title", "content", "target_comments"],
         }
+        # Ollama's detailed grammar can consume most of a 4K context on
+        # Korean 7B runs.  Keep native JSON mode as the default and retain the
+        # detailed schema as an explicit opt-in; the application parser still
+        # validates every returned field and target comment.
+        _post_schema = _POST_SCHEMA if _env_bool("LLM_JSON_SCHEMA_MODE") else None
         try:
             response = self._generate_content_paced(
                 label="generate_post",
                 prompt=prompt,
                 system=pm.render("system_base.txt", gallery_id=gallery_id),
-                json_schema=_POST_SCHEMA,
+                json_schema=_post_schema,
                 max_output_tokens=2048 if _env_bool("LLM_COST_SAVER_MODE") else 3072,
-                temperature=0.78,
+                # Lower variance keeps a local 7B model anchored to the
+                # supplied source while persona variation comes from the
+                # selected profile and wave plan.
+                temperature=_env_float("LLM_GENERATION_TEMPERATURE", 0.4, lower=0.1),
             )
         except Exception as e:
             if self._is_rate_limit_error(e):
@@ -761,7 +733,7 @@ class GhostBrain:
             "generate_post RESPONSE ▶ len=%d finish_reason=%s\n%s\n%s",
             len(raw_text), _finish_reason, "─" * 60, raw_text,
         )
-        if _finish_reason != "FinishReason.STOP":
+        if _finish_reason not in {"UNKNOWN", "stop", "STOP", "FinishReason.STOP"}:
             _api_logger.warning(
                 "generate_post NON-STOP finish_reason=%s — 응답 잘림 또는 필터링 가능성",
                 _finish_reason,
@@ -842,11 +814,14 @@ class GhostBrain:
             )
             return {"title": "", "content": "", "target_comments": [], "_parse_error": True, "_raw_response": raw_text}
 
+        _thought_process = {
+            "slot_used": str(expected_slot or "").strip().upper(),
+        }
         return {
             "title":           title,
             "content":         content,
             "target_comments": target_comments,
-            "_thought_process": _json_out.get("_thought_process", {}),
+            "_thought_process": _thought_process,
         }
 
     def generate_post_compact(
@@ -870,6 +845,15 @@ class GhostBrain:
         profile = gallery_purpose.get_profile(gallery_id)
         topic_label = str(profile.get("topic_label") or "게시판 소재").strip()
         focus_text = str(focus or "").strip()
+        persona_instruction = ""
+        persona_profiles = pm.load_json("persona_profiles.json")
+        persona_profile = persona_profiles.get(tone) if isinstance(persona_profiles, dict) else None
+        if isinstance(persona_profile, dict):
+            persona_instruction = (
+                f"페르소나 행동: {persona_profile.get('vocab_style', '')}. "
+                f"좋은 동작: {' / '.join(persona_profile.get('good_moves', []))}. "
+                f"피할 동작: {' / '.join(persona_profile.get('bad_moves', []))}."
+            )
         if not focus_text:
             candidates = gallery_purpose.purpose_candidates(
                 gallery_id,
@@ -882,6 +866,7 @@ class GhostBrain:
             f"게시판 기본 분야: {topic_label}\n"
             f"이번 글의 구체 초점: {focus_text}\n"
             f"말투: {tone}; 분량: {length}\n"
+            f"{persona_instruction}\n"
             "초점의 구체 명사나 장면을 제목 또는 본문에 반드시 한 번 넣는다. "
             "사람·닉네임·논란·게임·정치·게시판 메타 평론은 쓰지 않는다. "
             "새 사건을 만들지 말고 관측 가능한 장면 하나만 짧게 쓴다.\n"

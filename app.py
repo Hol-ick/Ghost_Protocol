@@ -34,7 +34,16 @@ _OLLAMA_FALLBACK_MODELS: tuple[str, ...] = tuple(
     if item.strip()
 )
 _OLLAMA_TIMEOUT_SEC: float = max(1.0, float(os.getenv("OLLAMA_TIMEOUT_SEC", "120") or 120))
-_OLLAMA_NUM_CTX: int = max(1, int(os.getenv("OLLAMA_NUM_CTX", "4096") or 4096))
+_OLLAMA_NUM_CTX: int = max(
+    1,
+    int(
+        os.getenv(
+            "OLLAMA_NUM_CTX",
+            "8192" if any(marker in _OLLAMA_MODEL.lower() for marker in (":7b", ":8b", ":9b", ":14b", ":32b")) else "4096",
+        )
+        or 4096
+    ),
+)
 _OLLAMA_KEEP_ALIVE: str = os.getenv("OLLAMA_KEEP_ALIVE", "10m").strip() or "10m"
 
 if sys.platform.startswith("win"):
@@ -1967,6 +1976,7 @@ def _batch_gen_worker(
                     length=length,
                     recent_posts=_wave_targets,
                     composition_profile=composition_profile,
+                    expected_slot=str(_wave_plan.get("slot") or ""),
                 )
                 if result.get("_parse_error") or not result.get("title") or not result.get("content"):
                     reason = "안전 필터" if result.get("_safety_error") else "파싱/빈 응답"

@@ -160,10 +160,7 @@ $cross_instruction
 - 페르소나 이름이나 내부 지시가 노출되지 않았는가?
 
 [JSON 필드]
-- _thought_process.target_noun: 고른 구체 대상
-- _thought_process.slot_used: [A], [B], [C], [R], [G], [context] 중 하나
-- _thought_process.persona_metaphor: 이번 글이 보태는 대화 행동
-- _thought_process.start_style: 제목의 시작 방식
 - title: 게시글 제목
 - content: 게시글 본문
 - target_comments: 적합한 댓글 초안 배열
+- target_comments 항목은 post_no와 comment만 포함한다. 내부 사고 과정이나 페르소나 메타데이터는 출력하지 않는다.
