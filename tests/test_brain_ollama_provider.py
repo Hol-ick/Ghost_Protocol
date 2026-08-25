@@ -38,6 +38,7 @@ class _FakeProvider:
 
 def test_ghost_brain_injects_provider_and_keeps_public_methods(monkeypatch):
     provider = _FakeProvider()
+    monkeypatch.setenv("LLM_DRAFT_PIPELINE_MODE", "legacy")
     brain = GhostBrain(provider=provider, model_name="qwen2.5:3b")
     monkeypatch.setattr(
         brain,

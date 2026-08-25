@@ -32,6 +32,12 @@ from .content_filter import (
     sensitive_generation_violations,
 )
 from .application import llm_throttle, llm_usage, trend_cache
+from .application.draft_pipeline import (
+    DraftCard,
+    build_draft_card,
+    build_source_brief,
+    validate_draft,
+)
 from .application.llm_provider import LLMProvider, LLMRequest
 from .application.ollama_client import OllamaClient
 from .application.prompt_compiler import compile_post_prompt
@@ -640,40 +646,57 @@ class GhostBrain:
 
         # ── 갤러리 고유 언어 컨텍스트 — Dynamic Routing ──────────────────────
         # gallery_contexts.json에서 gallery_id로 조회한 문법 룰 + 퓨샷 블록.
-        # 주입 위치: generate_post.txt 바로 앞 → LLM 어텐션 최근접 보장.
-        # 토큰 예산: 룰 3개 + 퓨샷 2개 = 최대 ~250 토큰 (generate_post.txt의 ~15%)
+        # 레거시 경로에서만 마스터 프롬프트 앞에 붙인다. 구조화 경로는
+        # 소스 브리프와 Draft Card에 필요한 사실만 다시 압축한다.
         _gal_ctx = self._get_gallery_context(gallery_id)
         if _gal_ctx:
             parts.append(_gal_ctx)
 
-        # ── 작문 지시 — prompts/generate_post.txt 에서 로드 ──────────────────
-        # 하드코딩 제로: 분량·톤·키워드·교차지시를 템플릿 변수로 주입.
-        # 사용자는 generate_post.txt 만 수정하면 작문 스타일 전체를 튜닝 가능.
-        rendered_master_prompt = pm.render(
-            "generate_post.txt",
-            gallery_id=gallery_id,
-            topic=topic,
-            tone_instruction=tone_instruction,
-            length_instruction=length_instruction,
-            naturalness_policy=naturalness.generation_policy_block(),
-            naturalness_final_check=naturalness.final_check_block(),
-            cross_instruction=cross_instruction,
-            kw_inject=kw_inject,
-            recent_posts_context=recent_posts_context,
-            composition_profile_block=composition_profile_block,
-            comment_enrichment_block=comment_enrichment_block,
-            shared_writing_contract=shared_writing_contract,
-        )
-        _prompt_mode = os.getenv("LLM_PROMPT_MODE", "auto").strip().lower()
-        if _prompt_mode == "auto":
-            _prompt_mode = "full" if _model_prefers_full_prompt(self.model_name) else "focused"
-        compiled_master_prompt = compile_post_prompt(
-            rendered_master_prompt,
-            include_comments=bool(recent_posts),
-            slot=expected_slot,
-            mode=_prompt_mode,
-        )
-        prompt = "\n\n---\n\n".join([*parts, compiled_master_prompt])
+        # ── 최종 작성 터널 선택 ─────────────────────────────────────────────
+        # 기본은 구조화 카드다. 긴 원본 프롬프트를 그대로 쓰는 경로는
+        # 진단·비교용으로만 LLM_DRAFT_PIPELINE_MODE=legacy로 보존한다.
+        _pipeline_mode = os.getenv("LLM_DRAFT_PIPELINE_MODE", "structured").strip().lower()
+        _draft_card: DraftCard | None = None
+        if _pipeline_mode in {"structured", "card"}:
+            _source_brief = build_source_brief(topic, gallery_id, expected_slot)
+            _draft_card = build_draft_card(
+                _source_brief,
+                tone=tone,
+                length=length,
+                tone_description=tone_instruction,
+                persona_profile=_prof if isinstance(_prof, dict) else {},
+                has_comment_targets=bool(recent_posts),
+            )
+            prompt = _draft_card.writer_prompt()
+            _pipeline_mode = "structured_card"
+        else:
+            # ── 레거시 작문 지시 — prompts/generate_post.txt에서 로드 ───────
+            # 하드코딩 제로: 분량·톤·키워드·교차지시를 템플릿 변수로 주입.
+            rendered_master_prompt = pm.render(
+                "generate_post.txt",
+                gallery_id=gallery_id,
+                topic=topic,
+                tone_instruction=tone_instruction,
+                length_instruction=length_instruction,
+                naturalness_policy=naturalness.generation_policy_block(),
+                naturalness_final_check=naturalness.final_check_block(),
+                cross_instruction=cross_instruction,
+                kw_inject=kw_inject,
+                recent_posts_context=recent_posts_context,
+                composition_profile_block=composition_profile_block,
+                comment_enrichment_block=comment_enrichment_block,
+                shared_writing_contract=shared_writing_contract,
+            )
+            _prompt_mode = os.getenv("LLM_PROMPT_MODE", "auto").strip().lower()
+            if _prompt_mode == "auto":
+                _prompt_mode = "full" if _model_prefers_full_prompt(self.model_name) else "focused"
+            compiled_master_prompt = compile_post_prompt(
+                rendered_master_prompt,
+                include_comments=bool(recent_posts),
+                slot=expected_slot,
+                mode=_prompt_mode,
+            )
+            prompt = "\n\n---\n\n".join([*parts, compiled_master_prompt])
 
         # ── Ollama JSON 호출 ──
         # 모델은 게시글 필드만 생성한다. 슬롯·페르소나·QC 메타데이터는
@@ -814,9 +837,79 @@ class GhostBrain:
             )
             return {"title": "", "content": "", "target_comments": [], "_parse_error": True, "_raw_response": raw_text}
 
+        # ── 구조화 카드 검수 터널 ────────────────────────────────────────────
+        # 모델이 카드의 앵커를 버리거나, 타겟 글이 없는데 댓글을 만들어내면
+        # 게시 후보로 통과시키지 않는다. 실패한 경우에만 짧은 compact
+        # writer를 한 번 호출해 비용을 제한한다.
+        if _draft_card is not None:
+            _validation_errors = validate_draft(
+                _draft_card,
+                title,
+                content,
+                target_comments,
+            )
+            if _validation_errors:
+                _api_logger.warning(
+                    "generate_post CARD VALIDATION ▶ errors=%s title=%r",
+                    _validation_errors,
+                    title,
+                )
+                try:
+                    _compact_result = self.generate_post_compact(
+                        topic=topic,
+                        gallery_id=gallery_id,
+                        tone=tone,
+                        length=length,
+                        focus=_draft_card.brief.focus,
+                        recent_posts=recent_posts,
+                    )
+                except Exception as _compact_exc:
+                    _compact_result = {
+                        "title": "",
+                        "content": "",
+                        "target_comments": [],
+                        "_parse_error": True,
+                        "_raw_response": _shorten_log_value(_compact_exc),
+                    }
+                if not _compact_result.get("_parse_error"):
+                    _compact_errors = validate_draft(
+                        _draft_card,
+                        _compact_result.get("title", ""),
+                        _compact_result.get("content", ""),
+                        _compact_result.get("target_comments", []),
+                    )
+                    if not _compact_errors:
+                        _compact_result["_thought_process"] = {
+                            **dict(_compact_result.get("_thought_process") or {}),
+                            "pipeline": "structured_card_retry",
+                            "validation_errors": list(_validation_errors),
+                            "focus": _draft_card.brief.focus,
+                            "anchors": list(_draft_card.brief.anchors),
+                        }
+                        return _compact_result
+                return {
+                    "title": "",
+                    "content": "",
+                    "target_comments": [],
+                    "_parse_error": True,
+                    "_raw_response": raw_text,
+                    "_validation_errors": list(_validation_errors),
+                    "_rejected_title": title,
+                    "_rejected_content": content,
+                    "_rejected_comments": target_comments,
+                }
+
         _thought_process = {
             "slot_used": str(expected_slot or "").strip().upper(),
         }
+        if _draft_card is not None:
+            _thought_process.update(
+                {
+                    "pipeline": "structured_card",
+                    "focus": _draft_card.brief.focus,
+                    "anchors": list(_draft_card.brief.anchors),
+                }
+            )
         return {
             "title":           title,
             "content":         content,
