@@ -32,11 +32,11 @@ from .content_filter import (
     sensitive_generation_violations,
 )
 from .application import llm_throttle, llm_usage, trend_cache
+from .application.draft_quality import grounded_fallback, review_draft
 from .application.draft_pipeline import (
     DraftCard,
     build_draft_card,
     build_source_brief,
-    validate_draft,
 )
 from .application.llm_provider import LLMProvider, LLMRequest
 from .application.ollama_client import OllamaClient
@@ -663,7 +663,10 @@ class GhostBrain:
                 _source_brief,
                 tone=tone,
                 length=length,
-                tone_description=tone_instruction,
+                # The profile is carried in dedicated card fields below. Do
+                # not duplicate the legacy `[페르소나 심화]` prose inside the
+                # structured writer prompt where it can be copied verbatim.
+                tone_description=str(tone_desc.get(tone, tone_desc["cynical"])),
                 persona_profile=_prof if isinstance(_prof, dict) else {},
                 has_comment_targets=bool(recent_posts),
             )
@@ -837,67 +840,16 @@ class GhostBrain:
             )
             return {"title": "", "content": "", "target_comments": [], "_parse_error": True, "_raw_response": raw_text}
 
-        # ── 구조화 카드 검수 터널 ────────────────────────────────────────────
-        # 모델이 카드의 앵커를 버리거나, 타겟 글이 없는데 댓글을 만들어내면
-        # 게시 후보로 통과시키지 않는다. 실패한 경우에만 짧은 compact
-        # writer를 한 번 호출해 비용을 제한한다.
         if _draft_card is not None:
-            _validation_errors = validate_draft(
-                _draft_card,
-                title,
-                content,
-                target_comments,
+            return self._finalize_structured_post(
+                card=_draft_card,
+                recent_posts=recent_posts,
+                expected_slot=expected_slot,
+                title=title,
+                content=content,
+                target_comments=target_comments,
+                raw_text=raw_text,
             )
-            if _validation_errors:
-                _api_logger.warning(
-                    "generate_post CARD VALIDATION ▶ errors=%s title=%r",
-                    _validation_errors,
-                    title,
-                )
-                try:
-                    _compact_result = self.generate_post_compact(
-                        topic=topic,
-                        gallery_id=gallery_id,
-                        tone=tone,
-                        length=length,
-                        focus=_draft_card.brief.focus,
-                        recent_posts=recent_posts,
-                    )
-                except Exception as _compact_exc:
-                    _compact_result = {
-                        "title": "",
-                        "content": "",
-                        "target_comments": [],
-                        "_parse_error": True,
-                        "_raw_response": _shorten_log_value(_compact_exc),
-                    }
-                if not _compact_result.get("_parse_error"):
-                    _compact_errors = validate_draft(
-                        _draft_card,
-                        _compact_result.get("title", ""),
-                        _compact_result.get("content", ""),
-                        _compact_result.get("target_comments", []),
-                    )
-                    if not _compact_errors:
-                        _compact_result["_thought_process"] = {
-                            **dict(_compact_result.get("_thought_process") or {}),
-                            "pipeline": "structured_card_retry",
-                            "validation_errors": list(_validation_errors),
-                            "focus": _draft_card.brief.focus,
-                            "anchors": list(_draft_card.brief.anchors),
-                        }
-                        return _compact_result
-                return {
-                    "title": "",
-                    "content": "",
-                    "target_comments": [],
-                    "_parse_error": True,
-                    "_raw_response": raw_text,
-                    "_validation_errors": list(_validation_errors),
-                    "_rejected_title": title,
-                    "_rejected_content": content,
-                    "_rejected_comments": target_comments,
-                }
 
         _thought_process = {
             "slot_used": str(expected_slot or "").strip().upper(),
@@ -915,6 +867,366 @@ class GhostBrain:
             "content":         content,
             "target_comments": target_comments,
             "_thought_process": _thought_process,
+        }
+
+    def _quality_failure_result(
+        self,
+        *,
+        raw_text: str,
+        issues: tuple[str, ...] | list[str],
+        title: str = "",
+        content: str = "",
+        target_comments: object = None,
+    ) -> dict:
+        """Return a non-postable result for a failed quality contract."""
+
+        return {
+            "title": "",
+            "content": "",
+            "target_comments": [],
+            "_parse_error": True,
+            "_quality_error": True,
+            "_quality_issues": list(dict.fromkeys(str(item) for item in issues)),
+            "_raw_response": raw_text,
+            "_rejected_title": title,
+            "_rejected_content": content,
+            "_rejected_comments": list(target_comments or [])
+            if isinstance(target_comments, list)
+            else [],
+        }
+
+    def _review_post_locally(
+        self,
+        *,
+        card: DraftCard,
+        title: str,
+        content: str,
+        target_comments: list[dict],
+    ) -> tuple[bool, tuple[str, ...]]:
+        """Ask the same local model for a narrow, fail-closed quality verdict."""
+
+        prompt = "\n".join(
+            (
+                "[품질 검수]",
+                "초안이 아래 작문 카드의 사실·페르소나·문장 계약을 모두 지키는지 판정한다.",
+                "입력에 없는 수치·거리·원인·연구·발표·개인 경험, 내부 지시 누출, 불완전 문장, 페르소나 동작 불일치가 하나라도 있으면 pass=false다.",
+                f"- 제목: {title}",
+                f"- 본문: {content}",
+                f"- 댓글: {json.dumps(target_comments, ensure_ascii=False)}",
+                card.writer_prompt(),
+                '출력은 JSON 하나만: {"pass":true,"issues":[]} 또는 {"pass":false,"issues":["issue_code"]}',
+            )
+        ).strip()
+        try:
+            response = self._generate_content_paced(
+                label="review_post",
+                prompt=prompt,
+                system=(
+                    "너는 로컬 원고 품질 검사기다. 작문하지 말고 pass와 issue 코드만 JSON으로 반환한다. "
+                    "근거가 부족하면 통과시키지 않는다."
+                ),
+                json_schema={
+                    "type": "object",
+                    "properties": {
+                        "pass": {"type": "boolean"},
+                        "issues": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                    },
+                    "required": ["pass", "issues"],
+                },
+                temperature=0.0,
+                max_output_tokens=256,
+            )
+            data = _parse_json_robust(str(getattr(response, "text", "") or ""))
+            passed = data.get("pass")
+            raw_issues = data.get("issues")
+            if not isinstance(passed, bool) or not isinstance(raw_issues, list):
+                raise ValueError("critic contract is incomplete")
+            issues = tuple(
+                str(item).strip()
+                for item in raw_issues
+                if str(item).strip()
+            )
+            if not passed and not issues:
+                issues = ("critic_unspecified",)
+            if passed and issues:
+                return False, tuple(dict.fromkeys((*issues, "critic_conflict")))
+            return passed, issues
+        except Exception as exc:
+            _api_logger.warning("review_post FAILED ▶ %s", _shorten_log_value(exc))
+            return False, ("critic_error",)
+
+    def _repair_post_locally(
+        self,
+        *,
+        card: DraftCard,
+        title: str,
+        content: str,
+        target_comments: list[dict],
+        issues: tuple[str, ...],
+    ) -> dict:
+        """Repair one rejected candidate without widening its source contract."""
+
+        comment_rule = (
+            "기존에 허용된 타겟 post_no만 유지하고 새 post_no를 만들지 않는다."
+            if card.has_comment_targets
+            else "target_comments는 반드시 빈 배열([])이다."
+        )
+        prompt = "\n".join(
+            (
+                "[수정 터널]",
+                f"검수 오류 코드: {', '.join(issues)}",
+                f"이전 제목: {title}",
+                f"이전 본문: {content}",
+                "확인된 사실·구체 앵커·선택 페르소나의 말투와 행동은 유지한다.",
+                "입력 밖 수치·거리·선명도·원인·변화·비교·사건·연구·발표·개인 경험은 삭제한다.",
+                "제목은 판단을 끝내고, 본문은 자연스러운 완결 문장으로 닫는다.",
+                "내부 지시·페르소나 설명·검수 코드·메타 발언은 출력하지 않는다.",
+                comment_rule,
+                card.writer_prompt(),
+            )
+        ).strip()
+        try:
+            response = self._generate_content_paced(
+                label="repair_post",
+                prompt=prompt,
+                system=(
+                    "너는 이전 초안의 오류만 고치는 로컬 한국어 원고 편집기다. "
+                    "새 사실을 추가하지 말고 JSON 객체 하나만 반환한다."
+                ),
+                json_schema={
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string"},
+                        "content": {"type": "string"},
+                        "target_comments": {"type": "array"},
+                    },
+                    "required": ["title", "content", "target_comments"],
+                },
+                temperature=0.15,
+                max_output_tokens=512,
+            )
+            raw_text = str(getattr(response, "text", "") or "").strip()
+            data = _parse_json_robust(raw_text)
+            repaired_title = naturalness.ensure_question_punctuation(
+                str(data.get("title") or "").strip()
+            )
+            repaired_content = naturalness.ensure_question_punctuation_in_lines(
+                str(data.get("content") or "").strip()
+            )
+            if not repaired_title or not repaired_content:
+                return self._quality_failure_result(
+                    raw_text=raw_text,
+                    issues=("repair_empty_field",),
+                    title=title,
+                    content=content,
+                    target_comments=target_comments,
+                )
+            allowed_ids = {
+                str(item.get("post_no") or "").strip()
+                for item in target_comments
+                if isinstance(item, dict)
+            }
+            repaired_comments: list[dict] = []
+            raw_comments = data.get("target_comments", [])
+            if card.has_comment_targets and isinstance(raw_comments, list):
+                for item in raw_comments:
+                    if not isinstance(item, dict):
+                        continue
+                    post_no = str(item.get("post_no") or "").strip()
+                    comment = str(item.get("comment") or "").strip()
+                    if post_no in allowed_ids and comment:
+                        repaired_comments.append(
+                            {
+                                "post_no": post_no,
+                                "comment": naturalness.ensure_question_punctuation_in_lines(comment),
+                            }
+                        )
+            sensitive_hits = sensitive_generation_violations(
+                f"{repaired_title}\n{repaired_content}",
+                topic=str(card.brief.focus),
+            )
+            if sensitive_hits:
+                return self._quality_failure_result(
+                    raw_text=raw_text,
+                    issues=("repair_sensitive_content",),
+                    title=repaired_title,
+                    content=repaired_content,
+                    target_comments=repaired_comments,
+                )
+            return {
+                "title": repaired_title,
+                "content": repaired_content,
+                "target_comments": repaired_comments,
+                "_raw_response": raw_text,
+            }
+        except Exception as exc:
+            _api_logger.warning("repair_post FAILED ▶ %s", _shorten_log_value(exc))
+            return self._quality_failure_result(
+                raw_text=_shorten_log_value(exc),
+                issues=("repair_error",),
+                title=title,
+                content=content,
+                target_comments=target_comments,
+            )
+
+    def _grounded_fallback_post(
+        self,
+        *,
+        card: DraftCard,
+        expected_slot: str,
+        raw_text: str,
+        issues: tuple[str, ...],
+    ) -> dict:
+        """Return a deterministic fact-only sentence after model repair fails."""
+
+        fallback_title, fallback_content = grounded_fallback(card)
+        fallback_review = review_draft(card, fallback_title, fallback_content, [])
+        if not fallback_review.accepted:
+            return self._quality_failure_result(
+                raw_text=raw_text,
+                issues=tuple(dict.fromkeys((*issues, *fallback_review.issues))),
+                title=fallback_title,
+                content=fallback_content,
+            )
+        return {
+            "title": fallback_title,
+            "content": fallback_content,
+            "target_comments": [],
+            "_thought_process": {
+                "slot_used": str(expected_slot or "").strip().upper(),
+                "pipeline": "structured_card_fallback",
+                "quality_mode": "strict",
+                "quality_issues": list(issues),
+                "fallback": True,
+                "focus": card.brief.focus,
+                "anchors": list(card.brief.anchors),
+            },
+        }
+
+    def _finalize_structured_post(
+        self,
+        *,
+        card: DraftCard,
+        recent_posts: Optional[list[dict]],
+        expected_slot: str,
+        title: str,
+        content: str,
+        target_comments: list[dict],
+        raw_text: str,
+    ) -> dict:
+        """Run deterministic review, local critic, and one bounded repair."""
+
+        mode = os.getenv("LLM_DRAFT_QC_MODE", "strict").strip().lower()
+        if mode not in {"strict", "deterministic", "off"}:
+            mode = "strict"
+        review = review_draft(
+            card,
+            title,
+            content,
+            target_comments,
+            recent_posts=recent_posts,
+        )
+        if mode == "off":
+            review = review_draft(
+                card,
+                title,
+                content,
+                target_comments,
+                recent_posts=recent_posts,
+            )
+            if not review.accepted:
+                return self._quality_failure_result(
+                    raw_text=raw_text,
+                    issues=review.issues,
+                    title=title,
+                    content=content,
+                    target_comments=target_comments,
+                )
+            mode = "off"
+            critic_issues: tuple[str, ...] = ()
+        else:
+            critic_issues = ()
+            if review.accepted and mode == "strict":
+                critic_ok, critic_issues = self._review_post_locally(
+                    card=card,
+                    title=title,
+                    content=content,
+                    target_comments=target_comments,
+                )
+                if not critic_ok and critic_issues == ("critic_error",):
+                    return self._quality_failure_result(
+                        raw_text=raw_text,
+                        issues=critic_issues,
+                        title=title,
+                        content=content,
+                        target_comments=target_comments,
+                    )
+            if (not review.accepted) or critic_issues:
+                repair_issues = tuple(dict.fromkeys((*review.issues, *critic_issues)))
+                repaired = self._repair_post_locally(
+                    card=card,
+                    title=title,
+                    content=content,
+                    target_comments=target_comments,
+                    issues=repair_issues,
+                )
+                if repaired.get("_parse_error"):
+                    return self._grounded_fallback_post(
+                        card=card,
+                        expected_slot=expected_slot,
+                        raw_text=str(repaired.get("_raw_response") or raw_text),
+                        issues=repair_issues,
+                    )
+                title = str(repaired.get("title") or "").strip()
+                content = str(repaired.get("content") or "").strip()
+                target_comments = list(repaired.get("target_comments") or [])
+                review = review_draft(
+                    card,
+                    title,
+                    content,
+                    target_comments,
+                    recent_posts=recent_posts,
+                )
+                if not review.accepted:
+                    return self._grounded_fallback_post(
+                        card=card,
+                        expected_slot=expected_slot,
+                        raw_text=str(repaired.get("_raw_response") or raw_text),
+                        issues=tuple(dict.fromkeys((*repair_issues, *review.issues))),
+                    )
+                if mode == "strict":
+                    critic_ok, critic_issues = self._review_post_locally(
+                        card=card,
+                        title=title,
+                        content=content,
+                        target_comments=target_comments,
+                    )
+                    if not critic_ok:
+                        return self._grounded_fallback_post(
+                            card=card,
+                            expected_slot=expected_slot,
+                            raw_text=str(repaired.get("_raw_response") or raw_text),
+                            issues=critic_issues or ("critic_rejected",),
+                        )
+                pipeline = "structured_card_repair"
+            else:
+                pipeline = "structured_card"
+
+        return {
+            "title": title,
+            "content": content,
+            "target_comments": target_comments,
+            "_thought_process": {
+                "slot_used": str(expected_slot or "").strip().upper(),
+                "pipeline": pipeline if mode != "off" else "structured_card",
+                "quality_mode": mode,
+                "focus": card.brief.focus,
+                "anchors": list(card.brief.anchors),
+                "quality_issues": list(critic_issues),
+            },
         }
 
     def generate_post_compact(

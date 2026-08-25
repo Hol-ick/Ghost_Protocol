@@ -10,13 +10,17 @@ class _WriterProvider:
 
     def generate(self, request):
         self.requests.append(request)
+        if request.task == "review_post":
+            payload = {"pass": True, "issues": []}
+        else:
+            payload = {
+                "title": "먼지 원반 사진 한 장",
+                "content": "고리처럼 보이는 구조가 먼저 눈에 들어오네",
+                "target_comments": [],
+            }
         return LLMResponse(
             text=json.dumps(
-                {
-                    "title": "먼지 원반 사진 한 장",
-                    "content": "고리처럼 보이는 구조가 먼저 눈에 들어오네",
-                    "target_comments": [],
-                },
+                payload,
                 ensure_ascii=False,
             ),
             model="qwen2.5:7b",
@@ -96,6 +100,8 @@ class _CardRetryProvider:
                 "content": "그냥 올라왔네",
                 "target_comments": [{"post_no": "1", "comment": "좋다"}],
             }
+        elif request.task == "review_post":
+            payload = {"pass": True, "issues": []}
         else:
             payload = {
                 "title": "먼지 원반 사진",
@@ -125,8 +131,103 @@ def test_structured_pipeline_retries_only_when_card_validation_fails():
 
     assert result["title"] == "먼지 원반 사진"
     assert result["target_comments"] == []
-    assert result["_thought_process"]["pipeline"] == "structured_card_retry"
+    assert result["_thought_process"]["pipeline"] == "structured_card_repair"
     assert [request.task for request in provider.requests] == [
         "generate_post",
-        "generate_post_compact",
+        "repair_post",
+        "review_post",
     ]
+
+
+class _StrictRepairProvider:
+    def __init__(self) -> None:
+        self.requests = []
+        self.review_count = 0
+
+    def generate(self, request):
+        self.requests.append(request)
+        if request.task == "generate_post":
+            payload = {
+                "title": "토성의 고리와 그림자",
+                "content": "허블 사진에서 토성의 고리와 어두운 그림자가 함께 보이네.",
+                "target_comments": [],
+            }
+        elif request.task == "review_post":
+            self.review_count += 1
+            payload = (
+                {"pass": False, "issues": ["persona_mismatch"]}
+                if self.review_count == 1
+                else {"pass": True, "issues": []}
+            )
+        else:
+            payload = {
+                "title": "토성의 고리와 그림자",
+                "content": "허블 사진에서 토성의 고리와 어두운 그림자가 함께 보이네. 이 장면이 눈에 남네.",
+                "target_comments": [],
+            }
+        return LLMResponse(
+            text=json.dumps(payload, ensure_ascii=False),
+            model="qwen2.5:7b",
+            usage={"eval_count": 1},
+            raw={"done_reason": "stop"},
+        )
+
+
+def test_strict_pipeline_critic_repairs_persona_mismatch(monkeypatch):
+    provider = _StrictRepairProvider()
+    monkeypatch.setenv("LLM_DRAFT_QC_MODE", "strict")
+    brain = GhostBrain(provider=provider, model_name="qwen2.5:7b")
+
+    result = brain.generate_post(
+        "[G: 갤러리 본래 주제]\n- 이번 초점: 허블 사진에 보이는 토성의 고리와 행성 그림자\n- 입력에 적힌 사실: 사진 안에 토성의 고리와 어두운 행성 그림자가 함께 보임",
+        "universe",
+        tone="scene_noticer",
+        context_hours=None,
+        length="짧게 (1~2문장)",
+        expected_slot="G",
+    )
+
+    assert result["title"] == "토성의 고리와 그림자"
+    assert result["_thought_process"]["pipeline"] == "structured_card_repair"
+    assert [request.task for request in provider.requests] == [
+        "generate_post",
+        "review_post",
+        "repair_post",
+        "review_post",
+    ]
+    assert "검수" in provider.requests[1].prompt
+
+
+class _AlwaysRejectProvider(_StrictRepairProvider):
+    def generate(self, request):
+        if request.task == "review_post":
+            self.requests.append(request)
+            return LLMResponse(
+                text=json.dumps(
+                    {"pass": False, "issues": ["critic_rejected"]},
+                    ensure_ascii=False,
+                ),
+                model="qwen2.5:7b",
+                usage={"eval_count": 1},
+                raw={"done_reason": "stop"},
+            )
+        return super().generate(request)
+
+
+def test_strict_pipeline_uses_grounded_fallback_after_repair_is_rejected(monkeypatch):
+    provider = _AlwaysRejectProvider()
+    monkeypatch.setenv("LLM_DRAFT_QC_MODE", "strict")
+    brain = GhostBrain(provider=provider, model_name="qwen2.5:7b")
+
+    result = brain.generate_post(
+        "[G: 갤러리 본래 주제]\n- 이번 초점: 허블 사진에 보이는 토성의 고리와 행성 그림자\n- 입력에 적힌 사실: 사진 안에 토성의 고리와 어두운 행성 그림자가 함께 보임",
+        "universe",
+        tone="neutral",
+        context_hours=None,
+        length="짧게 (1~2문장)",
+        expected_slot="G",
+    )
+
+    assert result["_thought_process"]["pipeline"] == "structured_card_fallback"
+    assert result.get("_quality_error") is not True
+    assert result["target_comments"] == []

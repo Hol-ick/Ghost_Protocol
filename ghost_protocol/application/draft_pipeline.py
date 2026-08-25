@@ -118,6 +118,8 @@ class DraftCard:
     brief: SourceBrief
     tone: str
     tone_description: str
+    persona_domains: tuple[str, ...]
+    vocab_style: str
     persona_moves: tuple[str, ...]
     persona_avoids: tuple[str, ...]
     never_say: tuple[str, ...]
@@ -127,6 +129,8 @@ class DraftCard:
     def writer_prompt(self) -> str:
         facts = "\n".join(f"- {fact}" for fact in self.brief.facts[:4])
         anchors = ", ".join(self.brief.anchors[:6]) or self.brief.focus
+        domains = ", ".join(self.persona_domains[:4]) or "구체 장면"
+        vocab = self.vocab_style or "짧고 자연스럽게 반응한다."
         moves = " / ".join(self.persona_moves[:2]) or "구체 장면 하나에 짧게 반응한다"
         avoids = " / ".join(self.persona_avoids[:3]) or "설명문·평론·입력 밖 사실"
         never = ", ".join(self.never_say[:4]) or "입력에 없는 수치·경험"
@@ -142,6 +146,8 @@ class DraftCard:
                 "- 확인된 사실:",
                 facts,
                 f"- 구체 앵커: {anchors}",
+                f"- 관심 장면: {domains}",
+                f"- 어휘 스타일: {vocab}",
                 f"- 발화 행동: {moves}",
                 f"- 말투: {self.tone_description or '짧고 자연스럽게 반응한다.'}",
                 f"- 분량: {self.length}",
@@ -225,6 +231,8 @@ def build_draft_card(
         brief=brief,
         tone=_clean(tone, limit=60),
         tone_description=_clean(tone_description, limit=260),
+        persona_domains=_items("domain_affinity", 4),
+        vocab_style=_clean(profile.get("vocab_style", ""), limit=260),
         persona_moves=_items("good_moves", 2),
         persona_avoids=_items("bad_moves", 3),
         never_say=_items("never_say", 4),
