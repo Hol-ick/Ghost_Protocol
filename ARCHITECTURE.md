@@ -9,7 +9,7 @@ Ghost Protocol은 DC Inside 갤러리의 여론 흐름을 분석하고, AI 기�
 | Step | Module | 역할 |
 |------|--------|------|
 | 1. Scan | `scraper.py` | DC Inside 갤러리 병렬 크롤링 + 데이터 수집 |
-| 2. Generate | `brain.py` | Gemini 2.5 Flash 기반 게시글 생성 |
+| 2. Generate | `brain.py` | 로컬 Ollama/Qwen 기반 게시글 생성 |
 | 3. Post | `poster.py` | Playwright 기반 자동 로그인 + 글쓰기 |
 
 **Dashboard**: Streamlit Warm Bento UI (`app.py`)
@@ -22,7 +22,7 @@ Ghost Protocol은 DC Inside 갤러리의 여론 흐름을 분석하고, AI 기�
 Echo Chamber/
 ├── app.py                      # Streamlit 대시보드 (메인 엔트리포인트)
 ├── accounts.json               # DC Inside 계정 목록 (gitignore 대상)
-├── .env                        # GEMINI_API_KEY (gitignore 대상)
+├── .env                        # OLLAMA_* / LLM_* (gitignore 대상)
 ├── ARCHITECTURE.md             # 이 문서
 │
 ├── .streamlit/
@@ -32,7 +32,7 @@ Echo Chamber/
 │   ├── __init__.py             # __version__ = "4.3.0"
 │   ├── config.py               # 상수, URL 패턴, 타이밍, 불용어
 │   ├── scraper.py              # 병렬 비동기 크롤러 (Playwright)
-│   ├── brain.py                # Gemini AI 글 생성기
+│   ├── brain.py                # Ollama/Qwen AI 글 생성기
 │   ├── poster.py               # 자동 포스터 (Playwright)
 │   └── database.py             # SQLite + CSV/JSONL 스트림 저장
 │
@@ -75,13 +75,13 @@ BrowserContext (1) ─── 15 Workers ─── asyncio.gather()
                            DB + CSV + JSONL (thread-safe)
 ```
 
-### 2. `brain.py` — Gemini AI Post Generator (v4.3)
+### 2. `brain.py` — Local Ollama/Qwen Post Generator
 
-Gemini 2.5 Flash를 이용한 DC 스타일 게시글 생성기.
+로컬 Ollama의 Qwen 모델을 이용한 DC 스타일 게시글 생성기.
 
-**Model**: `gemini-2.5-flash` (고정, Fallback 없음)
-**Safety**: 전 카테고리 `BLOCK_NONE`
-**Output**: XML 태그 파싱 (`<TITLE>`, `<CONTENT>`)
+**Model**: `OLLAMA_MODEL` (기본 `qwen2.5:3b`, 선택적 로컬 fallback `qwen2.5:7b`)
+**Runtime**: `http://127.0.0.1:11434` loopback Ollama only
+**Output**: Native JSON mode with schema validation
 
 **프롬프트 구조**:
 1. System Prompt (`SYSTEM_PROMPT_BASE`): 톤별 규칙, 제목 규칙, AI 냄새 제거, 비문 강제
@@ -191,13 +191,13 @@ Warm Bento UI 대시보드. `.streamlit/config.toml` + Nuclear CSS 이중 방어
          │                 │                 │
          ▼                 ▼                 ▼
    ┌───────────┐     ┌───────────┐     ┌───────────┐
-   │  SQLite   │     │  Gemini   │     │ DC Inside │
+   │  SQLite   │     │  Ollama  │     │ DC Inside │
    │  CSV/JSONL│     │ 2.5 Flash │     │  (Write)  │
    └───────────┘     └───────────┘     └───────────┘
 ```
 
 1. **SCAN**: Playwright로 DC Inside 크롤링 → SQLite + CSV + JSONL 저장
-2. **GENERATE**: 수집 데이터 기반 핫 키워드 추출 → Gemini로 게시글 생성 (XML 파싱) → 워터마크 삽입
+2. **GENERATE**: 수집 데이터 기반 핫 키워드 추출 → Ollama/Qwen으로 게시글 생성 (JSON 파싱) → 워터마크 삽입
 3. **POST**: 랜덤 계정 선택 → 자동 로그인 → WAF 우회 → 글 등록 → 결과 확인
 
 ---

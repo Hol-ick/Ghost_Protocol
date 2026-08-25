@@ -1,4 +1,4 @@
-"""Small disk cache for Gemini trend-analysis JSON payloads."""
+"""Small disk cache for local-LLM trend-analysis JSON payloads."""
 
 from __future__ import annotations
 
@@ -8,10 +8,10 @@ import time
 from pathlib import Path
 from typing import Any
 
-from ghost_protocol.application import gemini_budget
+from ghost_protocol.application import llm_usage
 
 
-_CACHE_PATH = Path(__file__).resolve().parents[2] / "data" / "gemini_trend_cache.json"
+_CACHE_PATH = Path(__file__).resolve().parents[2] / "data" / "ollama_trend_cache.json"
 _MAX_ENTRIES = 80
 
 
@@ -59,7 +59,7 @@ def build_key(
 
 
 def get(key: str, *, ttl_seconds: int | None = None) -> dict[str, Any] | None:
-    ttl = gemini_budget.trend_cache_ttl_seconds() if ttl_seconds is None else int(ttl_seconds)
+    ttl = llm_usage.trend_cache_ttl_seconds() if ttl_seconds is None else int(ttl_seconds)
     if ttl <= 0 or not key:
         return None
     data = _read_cache()
@@ -76,7 +76,7 @@ def get(key: str, *, ttl_seconds: int | None = None) -> dict[str, Any] | None:
 
 
 def set(key: str, result: dict[str, Any]) -> None:
-    if gemini_budget.trend_cache_ttl_seconds() <= 0 or not key or not isinstance(result, dict):
+    if llm_usage.trend_cache_ttl_seconds() <= 0 or not key or not isinstance(result, dict):
         return
     data = _read_cache()
     data[key] = {

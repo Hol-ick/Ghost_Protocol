@@ -96,7 +96,7 @@ class SessionStateDefaultsTest(unittest.TestCase):
         )
         self.assertEqual(state["posts_success"], 1)
         self.assertEqual(state["posts_failed"], 1)
-        with patch("ghost_protocol.ui.session_state.gemini_budget.finalize_run") as finalize:
+        with patch("ghost_protocol.ui.session_state.llm_usage.finalize_run") as finalize:
             self.assertTrue(apply_swarm_message(state, worker_contracts.worker_message(worker_contracts.MSG_DONE)))
             finalize.assert_called_once_with()
         self.assertFalse(state["swarm_running"])
@@ -118,7 +118,7 @@ class SessionStateDefaultsTest(unittest.TestCase):
         )
         self.assertEqual(state["intel_result"], {"ok": True})
         self.assertEqual(state["intel_cache"]["abc::mgallery"]["ts"], 10.0)
-        with patch("ghost_protocol.ui.session_state.gemini_budget.finalize_run") as finalize:
+        with patch("ghost_protocol.ui.session_state.llm_usage.finalize_run") as finalize:
             self.assertTrue(apply_intel_message(state, worker_contracts.worker_message(worker_contracts.MSG_INTEL_DONE)))
             finalize.assert_called_once_with()
         self.assertFalse(state["intel_running"])
@@ -148,7 +148,7 @@ class SessionStateDefaultsTest(unittest.TestCase):
         )
         self.assertEqual(state["_batch_gen_config"]["topic"], "new")
         self.assertEqual(state["intel_result"], {"sentiment": "neutral"})
-        with patch("ghost_protocol.ui.session_state.gemini_budget.finalize_run") as finalize:
+        with patch("ghost_protocol.ui.session_state.llm_usage.finalize_run") as finalize:
             self.assertTrue(
                 apply_batch_message(
                     state,
@@ -167,7 +167,7 @@ class SessionStateDefaultsTest(unittest.TestCase):
             "batch_generating": True,
             "batch_gen_queue": "queue",
         }
-        with patch("ghost_protocol.ui.session_state.gemini_budget.finalize_run"):
+        with patch("ghost_protocol.ui.session_state.llm_usage.finalize_run"):
             self.assertTrue(
                 apply_batch_message(
                     state,

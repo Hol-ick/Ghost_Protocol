@@ -147,7 +147,7 @@ def evaluate_stability(
     thresholds = thresholds or thresholds_from_state(state)
     mode = str(state.get("run_mode") or "idle")
     phase = infer_run_phase(state)
-    diagnostics = observability.classify_gemini_logs(logs)
+    diagnostics = observability.classify_llm_logs(logs)
     source = observability.source_snapshot_health(
         intel_result,
         requested_pages=int(state.get("intel_pages") or 0),
@@ -195,7 +195,7 @@ def evaluate_stability(
         add(
             "billing_stop",
             "critical",
-            "Gemini 결제/크레딧 문제",
+            "LLM 비용/크레딧 문제",
             "수집 데이터는 유지하고 무한 실행을 멈춘 뒤 결제 상태를 확인하세요.",
             stop=True,
         )
@@ -203,7 +203,7 @@ def evaluate_stability(
         add(
             "rate_limit_backoff",
             "warning",
-            "Gemini 호출 제한",
+            "LLM 호출 제한",
             "분석/생성 단계만 백오프 후 재시도하세요.",
         )
 

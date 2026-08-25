@@ -1,17 +1,17 @@
 import unittest
 
-from ghost_protocol.application import gemini_budget, observability
+from ghost_protocol.application import llm_usage, observability
 
 
 class ObservabilityTest(unittest.TestCase):
     def test_classifies_billing_and_rate_limit_logs(self):
         logs = [
-            "⚠️ Rate Limit (429) — Gemini API Rate Limit 초과",
+            "⚠️ Rate Limit (429) — Ollama API Rate Limit 초과",
             "message=Your prepayment credits are depleted.",
-            "Gemini 호출 예산 초과 — 분석 중단",
+            "LLM 호출 예산 초과 — 분석 중단",
         ]
 
-        diagnostics = observability.classify_gemini_logs(logs)
+        diagnostics = observability.classify_llm_logs(logs)
         codes = {item["code"] for item in diagnostics}
 
         self.assertIn("billing_depleted", codes)
@@ -24,7 +24,7 @@ class ObservabilityTest(unittest.TestCase):
             "source body was not found in the snapshot.",
         ]
 
-        diagnostics = observability.classify_gemini_logs(logs)
+        diagnostics = observability.classify_llm_logs(logs)
         codes = {item["code"] for item in diagnostics}
 
         self.assertNotIn("model_not_found", codes)
@@ -209,7 +209,7 @@ class ObservabilityTest(unittest.TestCase):
 
         self.assertIn("- Comment candidates: 1 public · 1 rehearsal-only", text)
 
-    def test_ops_markdown_includes_gemini_usage_comparison(self):
+    def test_ops_markdown_includes_llm_usage_comparison(self):
         state = {}
         observability.start_run(
             state,
@@ -226,7 +226,7 @@ class ObservabilityTest(unittest.TestCase):
             intel_result={},
         )
 
-        self.assertIn("## Gemini Usage Comparison", text)
+        self.assertIn("## Local LLM Usage Comparison", text)
         self.assertIn("Baseline", text)
 
     def test_ops_markdown_includes_actor_summary(self):

@@ -80,7 +80,7 @@ def test_failure_pattern_label_separates_style_sameness():
 
 def test_failure_pattern_label_separates_runtime_and_empty_analysis():
     assert (
-        rehearsal_policy.failure_pattern_label("Gemini API Rate Limit 초과 (429)")
+        rehearsal_policy.failure_pattern_label("Local LLM Rate Limit 초과 (429)")
         == "api_limit"
     )
     assert rehearsal_policy.failure_pattern_label("생성 시간이 제한을 초과했습니다") == "timeout"

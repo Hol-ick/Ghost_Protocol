@@ -58,7 +58,6 @@ def _mode_labels(*, infinite: bool, rehearsal: bool) -> list[str]:
 
 def build_batch_run_setup(
     *,
-    api_key: str,
     topic: str,
     guidance: str,
     requested_count: int,
@@ -96,7 +95,6 @@ def build_batch_run_setup(
     run_mode = "rehearsal" if is_rehearsal else ("infinite" if is_infinite else "draft")
 
     batch_config = {
-        "api_key": api_key,
         "topic": worker_topic,
         "briefing": str(topic or "").strip(),
         "guidance": str(guidance or "").strip(),
@@ -126,7 +124,6 @@ def build_batch_run_setup(
     }
 
     worker_kwargs = {
-        "api_key": api_key,
         "topic": worker_topic,
         "wave_count": actual_count,
         "gallery_id": str(gallery_id or "").strip(),

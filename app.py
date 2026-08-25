@@ -25,8 +25,26 @@ from dotenv import load_dotenv
 
 load_dotenv()  # .env 파일을 환경변수로 주입 (없어도 무해)
 
-# ── API Key: .env → 환경변수에서 한 번만 읽어 모듈 상수로 고정 ──────────
-_GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "").strip()
+# ── Local Ollama configuration: environment is the single source of truth ──
+_OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").strip()
+_OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "qwen2.5:3b").strip() or "qwen2.5:3b"
+_OLLAMA_FALLBACK_MODELS: tuple[str, ...] = tuple(
+    item.strip()
+    for item in os.getenv("OLLAMA_FALLBACK_MODELS", "qwen2.5:7b").split(",")
+    if item.strip()
+)
+_OLLAMA_TIMEOUT_SEC: float = max(1.0, float(os.getenv("OLLAMA_TIMEOUT_SEC", "120") or 120))
+_OLLAMA_NUM_CTX: int = max(
+    1,
+    int(
+        os.getenv(
+            "OLLAMA_NUM_CTX",
+            "8192" if any(marker in _OLLAMA_MODEL.lower() for marker in (":7b", ":8b", ":9b", ":14b", ":32b")) else "4096",
+        )
+        or 4096
+    ),
+)
+_OLLAMA_KEEP_ALIVE: str = os.getenv("OLLAMA_KEEP_ALIVE", "10m").strip() or "10m"
 
 if sys.platform.startswith("win"):
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
@@ -39,8 +57,15 @@ from ghost_protocol import cycle_memory as _cm
 from ghost_protocol import database
 from ghost_protocol import prompt_manager as pm
 from ghost_protocol.application import ai_post_monitor
-from ghost_protocol.application import gemini_budget
-from ghost_protocol.application import gemini_throttle
+from ghost_protocol.application import draft_generation
+from ghost_protocol.application import llm_usage
+from ghost_protocol.application import llm_throttle
+from ghost_protocol.application.ollama_client import OllamaClient
+from ghost_protocol.application.llm_provider import (
+    LLMModelNotFoundError,
+    LLMTimeoutError,
+    LLMUnavailableError,
+)
 from ghost_protocol.application import operator_settings
 from ghost_protocol.application import observability
 from ghost_protocol.application import rehearsal as rehearsal_flow
@@ -482,66 +507,66 @@ st.session_state["ai_comment_watch_limit"] = operator_settings.normalize_ai_comm
         "ai_comment_watch_limit", operator_settings.DEFAULT_AI_COMMENT_WATCH_LIMIT
     )
 )
-st.session_state["gemini_call_min_interval_sec"] = gemini_throttle.normalize_seconds(
+st.session_state["llm_call_min_interval_sec"] = llm_throttle.normalize_seconds(
     st.session_state.get(
-        "gemini_call_min_interval_sec",
-        gemini_throttle.DEFAULT_MIN_INTERVAL_SEC,
+        "llm_call_min_interval_sec",
+        llm_throttle.DEFAULT_MIN_INTERVAL_SEC,
     ),
-    default=gemini_throttle.DEFAULT_MIN_INTERVAL_SEC,
-    upper=gemini_throttle.MAX_INTERVAL_SEC,
+    default=llm_throttle.DEFAULT_MIN_INTERVAL_SEC,
+    upper=llm_throttle.MAX_INTERVAL_SEC,
 )
-st.session_state["gemini_call_jitter_sec"] = gemini_throttle.normalize_seconds(
+st.session_state["llm_call_jitter_sec"] = llm_throttle.normalize_seconds(
     st.session_state.get(
-        "gemini_call_jitter_sec",
-        gemini_throttle.DEFAULT_JITTER_SEC,
+        "llm_call_jitter_sec",
+        llm_throttle.DEFAULT_JITTER_SEC,
     ),
-    default=gemini_throttle.DEFAULT_JITTER_SEC,
-    upper=gemini_throttle.MAX_JITTER_SEC,
+    default=llm_throttle.DEFAULT_JITTER_SEC,
+    upper=llm_throttle.MAX_JITTER_SEC,
 )
-st.session_state["gemini_cost_saver_mode"] = bool(
-    st.session_state.get("gemini_cost_saver_mode", True)
+st.session_state["llm_cost_saver_mode"] = bool(
+    st.session_state.get("llm_cost_saver_mode", True)
 )
-st.session_state["gemini_max_calls_per_run"] = max(
+st.session_state["llm_max_calls_per_run"] = max(
     0,
-    min(1000, int(st.session_state.get("gemini_max_calls_per_run", 120) or 0)),
+    min(1000, int(st.session_state.get("llm_max_calls_per_run", 120) or 0)),
 )
-_judge_mode_value = str(st.session_state.get("gemini_judge_mode", "auto") or "auto").lower()
-st.session_state["gemini_judge_mode"] = (
+_judge_mode_value = str(st.session_state.get("llm_judge_mode", "auto") or "auto").lower()
+st.session_state["llm_judge_mode"] = (
     _judge_mode_value if _judge_mode_value in {"auto", "sample", "all", "off"} else "auto"
 )
-st.session_state["gemini_judge_sample_rate"] = max(
+st.session_state["llm_judge_sample_rate"] = max(
     0.0,
-    min(1.0, float(st.session_state.get("gemini_judge_sample_rate", 0.35) or 0.0)),
+    min(1.0, float(st.session_state.get("llm_judge_sample_rate", 0.35) or 0.0)),
 )
-st.session_state["gemini_trend_cache_ttl_sec"] = max(
+st.session_state["llm_trend_cache_ttl_sec"] = max(
     0,
-    min(86400, int(st.session_state.get("gemini_trend_cache_ttl_sec", 900) or 0)),
+    min(86400, int(st.session_state.get("llm_trend_cache_ttl_sec", 900) or 0)),
 )
-st.session_state["gemini_max_refill_rounds"] = max(
+st.session_state["llm_max_refill_rounds"] = max(
     0,
-    min(10, int(st.session_state.get("gemini_max_refill_rounds", 2) or 0)),
+    min(10, int(st.session_state.get("llm_max_refill_rounds", 2) or 0)),
 )
-os.environ["GEMINI_CALL_MIN_INTERVAL_SEC"] = str(
-    st.session_state["gemini_call_min_interval_sec"]
+os.environ["LLM_CALL_MIN_INTERVAL_SEC"] = str(
+    st.session_state["llm_call_min_interval_sec"]
 )
-os.environ["GEMINI_CALL_JITTER_SEC"] = str(
-    st.session_state["gemini_call_jitter_sec"]
+os.environ["LLM_CALL_JITTER_SEC"] = str(
+    st.session_state["llm_call_jitter_sec"]
 )
-os.environ["GEMINI_COST_SAVER_MODE"] = (
-    "1" if st.session_state["gemini_cost_saver_mode"] else "0"
+os.environ["LLM_COST_SAVER_MODE"] = (
+    "1" if st.session_state["llm_cost_saver_mode"] else "0"
 )
-os.environ["GEMINI_MAX_CALLS_PER_RUN"] = str(
-    st.session_state["gemini_max_calls_per_run"]
+os.environ["LLM_MAX_CALLS_PER_RUN"] = str(
+    st.session_state["llm_max_calls_per_run"]
 )
-os.environ["GEMINI_JUDGE_MODE"] = st.session_state["gemini_judge_mode"]
-os.environ["GEMINI_JUDGE_SAMPLE_RATE"] = str(
-    st.session_state["gemini_judge_sample_rate"]
+os.environ["LLM_JUDGE_MODE"] = st.session_state["llm_judge_mode"]
+os.environ["LLM_JUDGE_SAMPLE_RATE"] = str(
+    st.session_state["llm_judge_sample_rate"]
 )
-os.environ["GEMINI_TREND_CACHE_TTL_SEC"] = str(
-    st.session_state["gemini_trend_cache_ttl_sec"]
+os.environ["LLM_TREND_CACHE_TTL_SEC"] = str(
+    st.session_state["llm_trend_cache_ttl_sec"]
 )
-os.environ["GEMINI_MAX_REFILL_ROUNDS"] = str(
-    st.session_state["gemini_max_refill_rounds"]
+os.environ["LLM_MAX_REFILL_ROUNDS"] = str(
+    st.session_state["llm_max_refill_rounds"]
 )
 
 apply_pending_ai_briefing_topic(st.session_state)
@@ -564,7 +589,6 @@ def _swarm_worker(
     log_q: queue.Queue,
     stop_ev: threading.Event,
     *,
-    api_key: str,
     topic: str,
     wave_count: int,
     gallery_id: str,
@@ -600,7 +624,7 @@ def _swarm_worker(
         ))
 
     try:
-        brain = GhostBrain(api_key=api_key or None)
+        brain = GhostBrain()
         database.init_db()
     except Exception as e:
         q_log(f"❌ Brain 초기화 실패: {str(e)[:120]}")
@@ -886,7 +910,6 @@ def _swarm_worker(
 def _intel_worker(
     log_q: queue.Queue,
     *,
-    api_key: str,
     gallery_id: str,
     gallery_type: str,
     pages: int,
@@ -899,9 +922,9 @@ def _intel_worker(
         log_q.put(worker_contracts.worker_message(worker_contracts.MSG_INTEL_LOG, data=msg))
 
     try:
-        brain = GhostBrain(api_key=api_key or None)
+        brain = GhostBrain()
     except Exception as e:
-        _log(f"❌ Gemini 초기화 실패: {str(e)[:100]}")
+        _log(f"❌ 로컬 LLM 초기화 실패: {str(e)[:100]}")
         log_q.put(worker_contracts.worker_message(worker_contracts.MSG_INTEL_DONE))
         return
 
@@ -940,18 +963,18 @@ def _intel_worker(
         log_q.put(worker_contracts.worker_message(worker_contracts.MSG_INTEL_DONE))
         return
 
-    _log("🧠 Gemini 트렌드 분석 중...")
+    _log("🧠 Ollama 트렌드 분석 중...")
     result = None
     for attempt in range(3):
         try:
             result = brain.analyze_trend(raw_data)
             break
-        except gemini_budget.GeminiBillingError as exc:
+        except llm_usage.LLMCostOrQuotaError as exc:
             detail = re.sub(r"\s+", " ", str(exc)).strip()[:220]
-            _log(f"⛔ Gemini 결제/크레딧 고갈 — 분석 중단: {detail}")
+            _log(f"⛔ 로컬 LLM 비용/쿼터 제한 — 분석 중단: {detail}")
             break
-        except gemini_budget.GeminiBudgetExceededError as exc:
-            _log(f"⛔ Gemini 호출 예산 초과 — 분석 중단: {str(exc)[:180]}")
+        except llm_usage.LLMBudgetExceededError as exc:
+            _log(f"⛔ LLM 호출 예산 초과 — 분석 중단: {str(exc)[:180]}")
             break
         except RateLimitError as exc:
             if attempt < 2:
@@ -963,7 +986,7 @@ def _intel_worker(
                     f"({attempt + 1}/3)"
                 )
                 time.sleep(backoff)
-                _log("🧠 Gemini 트렌드 분석 재시도 중...")
+                _log("🧠 Ollama 트렌드 분석 재시도 중...")
                 continue
             detail = re.sub(r"\s+", " ", str(exc)).strip()[:220]
             _log(f"❌ Rate Limit (429) — 분석 재시도 한도 초과: {detail}")
@@ -1200,7 +1223,6 @@ def _batch_gen_worker(
     log_q: queue.Queue,
     stop_ev: threading.Event,
     *,
-    api_key: str,
     topic: str,
     wave_count: int,
     gallery_id: str,
@@ -1246,7 +1268,7 @@ def _batch_gen_worker(
     actual_count = 10 if infinite or rehearsal else wave_count
 
     try:
-        brain = GhostBrain(api_key=api_key or None)
+        brain = GhostBrain()
         database.init_db()
     except Exception as e:
         q_log(f"❌ Brain 초기화 실패: {str(e)[:120]}")
@@ -1473,9 +1495,9 @@ def _batch_gen_worker(
             if _ar_bot_pct > 0.5:
                 q_log(f"[AUTO-REFRESH] ⚠️ 봇 점유율 {_ar_bot_pct:.0%} — 사람 글 부족, 외부 데이터 의존 필요")
             if _ar_raw.get("titles"):
-                # ── Gemini 분석 타임아웃 래퍼 ─────────────────────────────────────
-                # brain.analyze_trend()는 google.genai SDK를 동기 호출하며,
-                # 네트워크 지연 / Rate Limit 무응답 시 무한 대기(Hang)를 유발한다.
+                # ── 로컬 LLM 분석 타임아웃 래퍼 ──────────────────────────────────
+                # brain.analyze_trend()는 동기 로컬 Ollama 호출이며,
+                # 서비스 지연 시 무한 대기(Hang)를 유발할 수 있다.
                 # → ThreadPoolExecutor + result(timeout=25)로 25초 이내로 제한.
                 # 타임아웃 초과 시 orphan 스레드가 남지만 워커는 즉시 폴백 진행.
                 _ar_result = None
@@ -1954,6 +1976,7 @@ def _batch_gen_worker(
                     length=length,
                     recent_posts=_wave_targets,
                     composition_profile=composition_profile,
+                    expected_slot=str(_wave_plan.get("slot") or ""),
                 )
                 if result.get("_parse_error") or not result.get("title") or not result.get("content"):
                     reason = "안전 필터" if result.get("_safety_error") else "파싱/빈 응답"
@@ -1983,6 +2006,13 @@ def _batch_gen_worker(
                         q_log(f"[BATCH] ❌ [{wave}] {reason} — 재시도 ({attempt+1}/3)")
                         continue
                     q_log(f"[BATCH] ❌ [{wave}] {reason} 3회 — 건너뜀")
+                    gen_title, gen_content, _tc_list = (
+                        draft_generation.invalidate_candidate_state(
+                            _last_candidate_title,
+                            _last_candidate_content,
+                            _last_candidate_comments,
+                        )
+                    )
                     break
 
                 # ── 슬롯 바인딩 하드락 ─────────────────────────────────────
@@ -2651,7 +2681,7 @@ def _batch_gen_worker(
                 # Flash 모델, ~200토큰, 금지화제 변형/메타 표현/배치 중복을 잡음.
                 # 정규식 9단계 + Judge 2단계 = 총 11단계 검증.
                 _judge_passed = True
-                _run_llm_judge = gemini_budget.should_run_llm_judge(
+                _run_llm_judge = llm_usage.should_run_llm_judge(
                     wave=wave,
                     attempt=attempt,
                     has_banned_topics=bool(_banned_topics),
@@ -2659,7 +2689,7 @@ def _batch_gen_worker(
                 if not _run_llm_judge:
                     q_log(
                         f"[BATCH] 🧠 [{wave}] Judge 생략 — "
-                        f"절약 모드({gemini_budget.judge_mode()})"
+                        f"절약 모드({llm_usage.judge_mode()})"
                     )
                 if _run_llm_judge:
                     try:
@@ -2806,19 +2836,34 @@ def _batch_gen_worker(
                 q_log(f"[BATCH] ⏱️ [{wave}] 생성 타임아웃 (40s) — 이 대본 건너뜀")
                 _failure_reason = "생성 시간이 제한을 초과했습니다."
                 _failure_stage = "generation_timeout"
+                gen_title, gen_content, _tc_list = draft_generation.invalidate_candidate_state(
+                    _last_candidate_title,
+                    _last_candidate_content,
+                    _last_candidate_comments,
+                )
                 break  # 부분 실패 허용: 이 Wave만 스킵, 다음 Wave 계속
-            except gemini_budget.GeminiBudgetExceededError as e:
-                q_log(f"[BATCH] ⛔ [{wave}] Gemini 호출 예산 초과 — 배치 중단: {str(e)[:100]}")
-                _failure_reason = f"Gemini 호출 예산 초과: {str(e)[:120]}"
-                _failure_stage = "gemini_budget_exceeded"
+            except llm_usage.LLMBudgetExceededError as e:
+                q_log(f"[BATCH] ⛔ [{wave}] LLM 호출 예산 초과 — 배치 중단: {str(e)[:100]}")
+                _failure_reason = f"LLM 호출 예산 초과: {str(e)[:120]}"
+                _failure_stage = "llm_budget_exceeded"
                 _failure_detail = str(e)[:500]
+                gen_title, gen_content, _tc_list = draft_generation.invalidate_candidate_state(
+                    _last_candidate_title,
+                    _last_candidate_content,
+                    _last_candidate_comments,
+                )
                 stop_ev.set()
                 break
-            except gemini_budget.GeminiBillingError as e:
-                q_log(f"[BATCH] ⛔ [{wave}] Gemini 결제/크레딧 고갈 — 배치 중단: {str(e)[:120]}")
-                _failure_reason = "Gemini 결제/크레딧 고갈로 생성을 중단했습니다."
-                _failure_stage = "gemini_billing_depleted"
+            except llm_usage.LLMCostOrQuotaError as e:
+                q_log(f"[BATCH] ⛔ [{wave}] 로컬 LLM 비용/쿼터 제한 — 배치 중단: {str(e)[:120]}")
+                _failure_reason = "로컬 LLM 비용/쿼터 제한으로 생성을 중단했습니다."
+                _failure_stage = "llm_cost_or_quota"
                 _failure_detail = str(e)[:500]
+                gen_title, gen_content, _tc_list = draft_generation.invalidate_candidate_state(
+                    _last_candidate_title,
+                    _last_candidate_content,
+                    _last_candidate_comments,
+                )
                 stop_ev.set()
                 break
             except RateLimitError:
@@ -2830,12 +2875,120 @@ def _batch_gen_worker(
                 else:
                     q_log(f"[BATCH] ❌ [{wave}] Rate Limit 재시도 한도 초과")
                     _failure_reason = "API 호출 제한으로 생성을 완료하지 못했습니다."
+                    gen_title, gen_content, _tc_list = draft_generation.invalidate_candidate_state(
+                        _last_candidate_title,
+                        _last_candidate_content,
+                        _last_candidate_comments,
+                    )
             except Exception as e:
                 q_log(f"[BATCH] ❌ [{wave}] 생성 오류: {str(e)[:80]}")
                 _failure_reason = f"생성 오류: {str(e)[:120]}"
                 _failure_stage = "generation_exception"
                 _failure_detail = str(e)[:500]
+                gen_title, gen_content, _tc_list = draft_generation.invalidate_candidate_state(
+                    _last_candidate_title,
+                    _last_candidate_content,
+                    _last_candidate_comments,
+                )
                 break
+
+        # If every full prompt attempt failed at a slot/quality boundary,
+        # recover once with the compact purpose lane.  This is deliberately
+        # after the loop so slot drift, parse errors, timeouts, and provider
+        # exceptions all clear stale candidates before the recovery decision.
+        if (
+            gen_title is None
+            and not rehearsal
+            and not stop_ev.is_set()
+            and _failure_stage not in {"llm_budget_exceeded", "llm_cost_or_quota"}
+        ):
+            _compact_focuses = list(
+                gallery_purpose.purpose_candidates(
+                    gallery_id,
+                    _wave_targets or (),
+                    allow_fallback=True,
+                )
+            )
+            _compact_focus = ""
+            _compact_candidates = _compact_focuses or [gallery_id]
+            for _offset in range(len(_compact_candidates)):
+                _candidate = _compact_candidates[(wave - 1 + _offset) % len(_compact_candidates)]
+                _candidate_tokens = _topic_tokens_for_match(_candidate)
+                _conflicts = False
+                for _banned in _banned_topics:
+                    _banned_tokens = _topic_tokens_for_match(_banned)
+                    if _banned_tokens and len(_candidate_tokens & _banned_tokens) >= max(
+                        2,
+                        min(3, len(_banned_tokens)),
+                    ):
+                        _conflicts = True
+                        break
+                if not _conflicts:
+                    _compact_focus = _candidate
+                    break
+            if not _compact_focus:
+                _compact_focus = _compact_candidates[(wave - 1) % len(_compact_candidates)]
+            try:
+                _compact_result = _timed(
+                    brain.generate_post_compact,
+                    _timeout=40.0,
+                    topic=_attempt_topic,
+                    gallery_id=gallery_id,
+                    tone=_wave_tone,
+                    length=length,
+                    focus=_compact_focus,
+                    recent_posts=_wave_targets,
+                )
+            except Exception as _compact_exc:
+                _compact_result = {
+                    "title": "",
+                    "content": "",
+                    "target_comments": [],
+                    "_parse_error": True,
+                    "_raw_response": str(_compact_exc)[:500],
+                }
+            _compact_title = str(_compact_result.get("title") or "").strip()
+            _compact_content = str(_compact_result.get("content") or "").strip()
+            if (
+                not _compact_result.get("_parse_error")
+                and _compact_title
+                and _compact_content
+                and _title_key(_compact_title) not in _used_title_keys
+                and gallery_purpose.text_matches(
+                    gallery_id,
+                    _compact_title,
+                    _compact_content,
+                )
+            ):
+                gen_title = _compact_title
+                gen_content = _compact_content
+                _tc_list = []
+                _failure_reason = ""
+                _failure_stage = ""
+                _failure_detail = ""
+                _wave_plan = dict(_wave_plan)
+                _wave_plan["slot"] = "G"
+                _wave_plan["slot_text"] = _compact_focus
+                _used_titles.append(gen_title)
+                _used_title_keys.add(_title_key(gen_title))
+                _slot_success_counts["G"] = _slot_success_counts.get("G", 0) + 1
+                _successful_family = draft_guidance.topic_family_tokens(
+                    " ".join([_compact_focus, gen_title, gen_content])
+                )
+                if _successful_family:
+                    _successful_topic_families.append(_successful_family)
+                _fw = gen_content.split()[0] if gen_content.split() else ""
+                if _fw:
+                    _batch_first_words.append(_fw)
+                q_log(
+                    f"[BATCH] 🛟 [{wave}] compact Ollama fallback accepted — "
+                    f"'{gen_title[:30]}'"
+                )
+            else:
+                q_log(
+                    f"[BATCH] 🛟 [{wave}] compact Ollama fallback rejected — "
+                    f"focus='{_compact_focus[:40]}'"
+                )
 
         scripts.append({
             "wave":             wave,
@@ -3835,8 +3988,8 @@ def _handle_infinite_batch_done(
             min(
                 10,
                 int(
-                    ss.get("gemini_max_refill_rounds")
-                    or os.getenv("GEMINI_MAX_REFILL_ROUNDS", "2")
+                    ss.get("llm_max_refill_rounds")
+                    or os.getenv("LLM_MAX_REFILL_ROUNDS", "2")
                     or 0
                 ),
             ),
@@ -4508,7 +4661,7 @@ def _render_ops_summary_card() -> str:
         st.session_state.get("intel_result"),
         requested_pages=int(st.session_state.get("intel_pages", 0) or 0),
     )
-    diagnostics = observability.classify_gemini_logs(_collect_ops_logs())
+    diagnostics = observability.classify_llm_logs(_collect_ops_logs())
     stability_report = _evaluate_ops_stability()
     diag_status = stability_report.get("status") or (
         "good" if not diagnostics else diagnostics[0].get("severity", "warn")
@@ -4541,7 +4694,7 @@ def _render_ops_summary_card() -> str:
 
 
 def _render_ops_resource_card() -> str:
-    summary = gemini_budget.resource_summary(history_limit=8)
+    summary = llm_usage.resource_summary(history_limit=8)
     comparison = summary.get("comparison") or {}
 
     def compact_int(value: object) -> str:
@@ -4594,7 +4747,7 @@ def _render_ops_resource_card() -> str:
         + '<div class="ops-head"><b>운영 리소스</b>'
         + f'<span class="ops-pill {_ops_status_class(status)}">{_html.escape(_ops_status_word(status))}</span></div>'
         + '<div class="ops-grid">'
-        + f'<div class="ops-metric"><span>Gemini</span><b>{_html.escape(budget_label)}</b><em>{_html.escape(ratio_label)}</em></div>'
+        + f'<div class="ops-metric"><span>Ollama LLM</span><b>{_html.escape(budget_label)}</b><em>{_html.escape(ratio_label)}</em></div>'
         + f'<div class="ops-metric"><span>작문/Judge</span><b>{int(summary.get("generate_calls") or 0)}/{int(summary.get("judge_calls") or 0)}</b><em>분석 {int(summary.get("analyze_calls") or 0)}</em></div>'
         + f'<div class="ops-metric"><span>{_html.escape(usage_label)}</span><b>{_html.escape(usage_main)}</b><em>{_html.escape(usage_sub)}</em></div>'
         + '</div>'
@@ -4618,7 +4771,7 @@ def _render_ops_diagnostics_panel() -> str:
         st.session_state.get("intel_result"),
         requested_pages=int(st.session_state.get("intel_pages", 0) or 0),
     )
-    diagnostics = observability.classify_gemini_logs(_collect_ops_logs())
+    diagnostics = observability.classify_llm_logs(_collect_ops_logs())
     stability_report = _evaluate_ops_stability()
     events = list(st.session_state.get("run_timeline", []) or [])[-6:]
     rows: list[str] = []
@@ -4640,7 +4793,7 @@ def _render_ops_diagnostics_panel() -> str:
     elif not findings:
         rows.append(
             '<div class="ops-row is-good"><i class="ops-dot"></i>'
-            '<p><b>Gemini/API 진단 이상 없음</b><small>로그 기준으로 치명 오류는 보이지 않습니다.</small></p></div>'
+            '<p><b>Ollama/LLM 진단 이상 없음</b><small>로컬 로그 기준으로 치명 오류는 보이지 않습니다.</small></p></div>'
         )
     feedback = stability_report.get("feedback") or {}
     if int(feedback.get("total") or 0):
@@ -5355,10 +5508,56 @@ def _review_board_fragment() -> None:
 # ══════════════════════════════════════════════
 
 # ── 공통 변수 계산 ────────────────────────────────────────────────────────────
-has_any_key = bool(_GEMINI_API_KEY)  # .env에서 로드된 키만 사용
+def _read_ollama_health() -> dict:
+    """Read local Ollama service/model readiness without any remote fallback."""
+
+    try:
+        client = OllamaClient(
+            base_url=_OLLAMA_BASE_URL,
+            model=_OLLAMA_MODEL,
+            timeout_seconds=min(_OLLAMA_TIMEOUT_SEC, 5.0),
+            num_ctx=_OLLAMA_NUM_CTX,
+            keep_alive=_OLLAMA_KEEP_ALIVE,
+        )
+        return client.health()
+    except (LLMUnavailableError, LLMTimeoutError, LLMModelNotFoundError) as exc:
+        return {
+            "ok": False,
+            "model": _OLLAMA_MODEL,
+            "models": [],
+            "model_available": False,
+            "error": str(exc),
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "model": _OLLAMA_MODEL,
+            "models": [],
+            "model_available": False,
+            "error": str(exc),
+        }
+
+
+_OLLAMA_HEALTH = _read_ollama_health()
+_OLLAMA_SERVICE_READY = bool(_OLLAMA_HEALTH.get("ok"))
+_OLLAMA_MODEL_READY = bool(_OLLAMA_HEALTH.get("model_available"))
+has_llm = _OLLAMA_SERVICE_READY and _OLLAMA_MODEL_READY
 
 # ── API Key 누락 시 전역 경고 배너 ─────────────────────────────────────────
-if not _GEMINI_API_KEY:
+if not has_llm:
+    _ollama_error = str(_OLLAMA_HEALTH.get("error") or "")
+    if not _OLLAMA_SERVICE_READY:
+        _ollama_message = (
+            "Ollama가 실행 중인지 확인하세요. 앱은 로컬 127.0.0.1 연결만 사용합니다."
+            + (f" ({_ollama_error[:120]})" if _ollama_error else "")
+        )
+        _ollama_title = "OLLAMA 연결 안 됨 — 실행 불가"
+    else:
+        _ollama_message = (
+            f"설치된 모델에서 <code>{_html.escape(_OLLAMA_MODEL)}</code>을 찾지 못했습니다. "
+            "Ollama에서 해당 모델을 먼저 설치하세요."
+        )
+        _ollama_title = "OLLAMA 모델 없음 — 실행 불가"
     st.markdown(
         '<div style="background:rgba(255,75,75,0.08);border:1px solid rgba(255,75,75,0.35);'
         'border-left:4px solid #FF4B4B;border-radius:12px;padding:16px 22px;margin-bottom:18px;'
@@ -5366,13 +5565,11 @@ if not _GEMINI_API_KEY:
         '<span style="font-size:1.5rem">🔑</span>'
         '<div>'
         '<div style="font-weight:800;font-size:0.8rem;letter-spacing:2px;'
-        'text-transform:uppercase;color:#FF4B4B;margin-bottom:4px">GEMINI API KEY 없음 — 실행 불가</div>'
+        f'text-transform:uppercase;color:#FF4B4B;margin-bottom:4px">{_ollama_title}</div>'
         '<div style="font-size:0.82rem;color:#AAAAAA;line-height:1.6">'
-        '프로젝트 루트에 <code style="background:#1A1A1A;padding:1px 6px;border-radius:4px;'
-        'color:#00F0FF">.env</code> 파일을 생성하고 '
-        '<code style="background:#1A1A1A;padding:1px 6px;border-radius:4px;color:#00F0FF">'
-        'GEMINI_API_KEY=AIza...</code> 를 추가한 뒤 앱을 재시작하세요.<br>'
-        '<span style="color:#666;font-size:0.75rem">참고: <code>.env.example</code> 파일을 복사해서 사용하세요.</span>'
+        f'{_ollama_message}<br>'
+        '<span style="color:#666;font-size:0.75rem">설정: <code>.env.example</code>의 '
+        'OLLAMA_BASE_URL / OLLAMA_MODEL 항목을 확인하세요.</span>'
         '</div></div></div>',
         unsafe_allow_html=True,
     )
@@ -5380,8 +5577,12 @@ if not _GEMINI_API_KEY:
 # ══════════════════════════════════════════════
 # TOP STATUS — keep the chrome quiet so the composer stays first.
 # ══════════════════════════════════════════════
-_api_status_label = "API 연결됨" if _GEMINI_API_KEY else "API 키 필요"
-_api_status_class = "is-ready" if _GEMINI_API_KEY else "is-missing"
+_api_status_label = (
+    f"Ollama 연결됨 · {_OLLAMA_MODEL}"
+    if has_llm
+    else ("Ollama 연결됨 · 모델 없음" if _OLLAMA_SERVICE_READY else "Ollama 연결 필요")
+)
+_api_status_class = "is-ready" if has_llm else "is-missing"
 
 # ══════════════════════════════════════════════════════════════════════════════
 # MAIN COMPOSER — primary work surface
@@ -5629,72 +5830,84 @@ def _render_recent_manage_panel() -> None:
             key="ai_comment_watch_limit",
             help="발행 후 최근 AI 작성글 몇 개의 댓글을 재확인할지 정합니다.",
         )
-        gemini_wait_cols = st.columns([1, 1], gap="small")
-        with gemini_wait_cols[0]:
+        st.caption(
+            f"Ollama · {_OLLAMA_BASE_URL} · 기본 모델 {_OLLAMA_MODEL} · "
+            f"fallback {', '.join(_OLLAMA_FALLBACK_MODELS) or '없음'} · "
+            f"timeout {_OLLAMA_TIMEOUT_SEC:g}s · context {_OLLAMA_NUM_CTX} · "
+            f"keep-alive {_OLLAMA_KEEP_ALIVE}"
+        )
+        _installed_ollama_models = ", ".join(
+            str(item) for item in (_OLLAMA_HEALTH.get("models") or [])
+        ) or "확인 불가"
+        st.caption(
+            f"상태: {_api_status_label} · 설치 모델: {_installed_ollama_models}"
+        )
+        ollama_wait_cols = st.columns([1, 1], gap="small")
+        with ollama_wait_cols[0]:
             st.number_input(
-                "Gemini 간격(초)",
+                "로컬 LLM 간격(초)",
                 min_value=0.0,
                 max_value=30.0,
                 step=0.5,
-                key="gemini_call_min_interval_sec",
-                help="Gemini API 호출 사이에 최소로 띄울 시간입니다. 429가 보이면 3~5초로 올려보세요.",
+                key="llm_call_min_interval_sec",
+                help="Ollama 로컬 호출 사이에 최소로 띄울 시간입니다.",
             )
-        with gemini_wait_cols[1]:
+        with ollama_wait_cols[1]:
             st.number_input(
-                "Gemini 지터(초)",
+                "로컬 LLM 지터(초)",
                 min_value=0.0,
                 max_value=10.0,
                 step=0.25,
-                key="gemini_call_jitter_sec",
+                key="llm_call_jitter_sec",
                 help="동시에 몰리는 호출을 흩어놓기 위한 추가 랜덤 대기입니다.",
             )
         st.toggle(
-            "Gemini 절약 모드",
-            key="gemini_cost_saver_mode",
+            "로컬 LLM 절약 모드",
+            key="llm_cost_saver_mode",
             help="출력 토큰 상한을 낮추고 LLM Judge를 샘플링해 호출량을 줄입니다.",
         )
-        gemini_budget_cols = st.columns([1, 1], gap="small")
-        with gemini_budget_cols[0]:
+        llm_budget_cols = st.columns([1, 1], gap="small")
+        with llm_budget_cols[0]:
             st.number_input(
                 "Run 호출 예산",
                 min_value=0,
                 max_value=1000,
                 step=10,
-                key="gemini_max_calls_per_run",
-                help="0이면 제한 없음. 초과 시 현재 실행의 Gemini 호출을 중단합니다.",
+                key="llm_max_calls_per_run",
+                help="0이면 제한 없음. 초과 시 현재 실행의 로컬 LLM 호출을 중단합니다.",
             )
-        with gemini_budget_cols[1]:
+        with llm_budget_cols[1]:
             st.number_input(
                 "분석 캐시(초)",
                 min_value=0,
                 max_value=86400,
                 step=60,
-                key="gemini_trend_cache_ttl_sec",
-                help="같은 게시판 스냅샷의 Gemini 분위기 분석을 재사용합니다. 0이면 비활성화.",
+                key="llm_trend_cache_ttl_sec",
+                help="같은 게시판 스냅샷의 로컬 LLM 분석을 재사용합니다. 0이면 비활성화.",
             )
         st.number_input(
             "무한 보충 라운드",
             min_value=0,
             max_value=10,
             step=1,
-            key="gemini_max_refill_rounds",
+            key="llm_max_refill_rounds",
             help="무한 모드에서 실패 원고를 몇 번까지 보충할지 정합니다. 낮을수록 호출량이 안정됩니다.",
         )
-        gemini_judge_cols = st.columns([1, 1], gap="small")
-        with gemini_judge_cols[0]:
+        llm_judge_cols = st.columns([1, 1], gap="small")
+        with llm_judge_cols[0]:
             st.selectbox(
                 "Judge 방식",
                 options=["auto", "sample", "all", "off"],
-                key="gemini_judge_mode",
+                key="llm_judge_mode",
                 help="auto: 절약 모드에서는 샘플링, 일반 모드에서는 전수. off는 LLM Judge를 끕니다.",
             )
-        with gemini_judge_cols[1]:
+        with llm_judge_cols[1]:
             st.number_input(
                 "Judge 샘플 비율",
                 min_value=0.0,
                 max_value=1.0,
                 step=0.05,
-                key="gemini_judge_sample_rate",
+                key="llm_judge_sample_rate",
                 help="sample/auto 절약 모드에서 몇 개 후보를 LLM Judge에 보낼지 정합니다.",
             )
         adv_wait_cols = st.columns([1, 1], gap="small")
@@ -5784,9 +5997,9 @@ _workbench_gallery_id = (
     or st.session_state.get("intel_gallery_id", "")
 ).strip()
 _workbench_topic_val = st.session_state.get("swarm_topic_input", "").strip()
-_workbench_intel_disabled = not has_any_key or not _workbench_gallery_id or _intel_is_running
+_workbench_intel_disabled = not has_llm or not _workbench_gallery_id or _intel_is_running
 _workbench_fire_disabled = (
-    not has_any_key
+    not has_llm
     or not _workbench_gallery_id
     or not _workbench_topic_val
     or _any_busy
@@ -5805,8 +6018,8 @@ else:
     else:
         _workbench_draft_label = "원고 만들기"
 
-if not has_any_key:
-    _workbench_state_text = "API 키 필요"
+if not has_llm:
+    _workbench_state_text = "Ollama 준비 필요"
     _workbench_state_cls = "is-blocked"
 elif not _workbench_gallery_id:
     _workbench_state_text = "게시판 필요"
@@ -6382,7 +6595,7 @@ def _render_ops_stability_controls() -> None:
             help="발행 ID 기준 감시 댓글에서 경고가 누적되면 멈춥니다. 0이면 비활성화합니다.",
         )
         st.checkbox(
-            "Gemini 결제 문제 시 정지",
+            "LLM 비용/쿼터 문제 시 정지",
             key="ops_stop_on_billing_issue",
             help="크레딧/결제 오류가 감지되면 수집 결과를 보존하고 무한 실행을 멈춥니다.",
         )
@@ -6672,8 +6885,8 @@ _iv_min = st.session_state.get("wave_interval_min", 1)
 _iv_max = st.session_state.get("wave_interval_max", 3)
 _test_mode = st.session_state.get("wave_test_mode", False)
 _interval_str = f"{_iv_min}~{_iv_max}초" if _test_mode else f"{_iv_min}~{_iv_max}분"
-_intel_btn_disabled = not has_any_key or not _gallery_id or _intel_is_running
-_fire_disabled = not has_any_key or not _gallery_id or not _topic_val or _any_busy
+_intel_btn_disabled = not has_llm or not _gallery_id or _intel_is_running
+_fire_disabled = not has_llm or not _gallery_id or not _topic_val or _any_busy
 
 _ick = intel_cache.cache_key(_gallery_id, _gallery_type_label)
 _icached = st.session_state.intel_cache.get(_ick)
@@ -6747,15 +6960,14 @@ if fire_clicked:
     _style_profile = (st.session_state.get("intel_result") or {}).get("style_profile")
     _composition_profile = (st.session_state.get("intel_result") or {}).get("composition_profile")
 
-    if not has_any_key:
-        st.error("⚠️ GEMINI_API_KEY가 설정되지 않았습니다. 프로젝트 루트의 .env 파일을 확인하고 앱을 재시작하세요.")
+    if not has_llm:
+        st.error("⚠️ Ollama가 준비되지 않았습니다. Ollama 서비스와 OLLAMA_MODEL 설치 상태를 확인하세요.")
     elif not _topic:
         st.error("⚠️ 주제를 입력하세요.")
     elif not _gallery_id:
         st.error("⚠️ 글을 올릴 게시판이 비어 있습니다. 상단의 게시판 입력칸을 채워주세요.")
     else:
         _run_setup = run_config.build_batch_run_setup(
-            api_key=_GEMINI_API_KEY,
             topic=_topic,
             guidance=_guidance,
             requested_count=_w_count,
@@ -6790,7 +7002,7 @@ if fire_clicked:
             reset=True,
             detail=_run_setup.run_detail,
         )
-        gemini_budget.reset_run(
+        llm_usage.reset_run(
             _run_id,
             mode=_run_mode,
             target_count=_actual_count,
@@ -6859,8 +7071,8 @@ if _intel_fire:
     _igtype_label = st.session_state.get("intel_type_label", _gallery_type_label)
     _igtype_now = ui_options.gallery_type_for_label(_igtype_label)
 
-    if not has_any_key:
-        st.error("⚠️ GEMINI_API_KEY가 설정되지 않았습니다. 프로젝트 루트의 .env 파일을 확인하고 앱을 재시작하세요.")
+    if not has_llm:
+        st.error("⚠️ Ollama가 준비되지 않았습니다. Ollama 서비스와 OLLAMA_MODEL 설치 상태를 확인하세요.")
     elif not _igid:
         st.error("⚠️ 갤러리 ID를 입력하세요.")
     elif _icache_valid and _icached:
@@ -6881,7 +7093,7 @@ if _intel_fire:
             reset=True,
             detail=f"type={_igtype_now} pages={st.session_state.get('intel_pages', 3)}",
         )
-        gemini_budget.reset_run(
+        llm_usage.reset_run(
             _read_run_id,
             mode="read",
             target_count=int(st.session_state.get("intel_pages", 3) or 3),
@@ -6894,7 +7106,6 @@ if _intel_fire:
             target=_intel_worker,
             kwargs={
                 "log_q":        _intel_q,
-                "api_key":      _GEMINI_API_KEY,
                 "gallery_id":   _igid,
                 "gallery_type": _igtype_now,
                 "pages":        st.session_state.get("intel_pages", 3),
