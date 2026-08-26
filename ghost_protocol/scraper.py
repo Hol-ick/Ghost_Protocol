@@ -31,15 +31,7 @@ from typing import Optional, Callable, Awaitable
 
 from playwright.async_api import async_playwright, Browser, Page, BrowserContext
 
-# ══════════════════════════════════════════════
-# TrendScraper 경량 HTTP 의존성 (Playwright 불필요)
-# ══════════════════════════════════════════════
-try:
-    import requests as _requests
-    from bs4 import BeautifulSoup as _BeautifulSoup
-    _HAS_REQUESTS = True
-except ImportError:
-    _HAS_REQUESTS = False
+from bs4 import BeautifulSoup as _BeautifulSoup
 
 
 # ══════════════════════════════════════════════
@@ -88,6 +80,7 @@ from . import database
 from .content_filter import classify_noise_text, summarize_noise_decisions
 from .database import StreamWriter
 from .domain import board_rhythm
+from .application.board_access import GuardedBoardAccess
 
 
 # ══════════════════════════════════════════════
@@ -1233,21 +1226,15 @@ class GalleryScraper:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TrendScraper — AJAX 기반 경량 Read-Only 트렌드 수집기 (v1.0)
-#
-# Architecture:
-#   requests.Session ──→ 목록 페이지 HTML (BeautifulSoup 파싱)
-#                    ──→ AJAX 댓글 API (POST /board/comment/ → JSON)
-#   collect_trending() ─ 위 두 메서드 조합, progress_callback 지원
-#
-# Playwright 없이 동작 — 가볍고 빠름, 차단 위험↓
+# TrendScraper — Browser-backed, budgeted Read-Only trend collector
 # ══════════════════════════════════════════════════════════════════════════════
 
 class TrendScraper:
-    """DC Inside 경량 Read-Only 트렌드 수집기.
+    """DC Inside 브라우저 기반 Read-Only 트렌드 수집기.
 
-    Playwright 없이 requests + BeautifulSoup으로 목록 페이지를 파싱하고,
-    댓글은 DC Inside 내부 AJAX API를 직접 호출하여 수집한다.
+    ``GuardedBoardAccess``가 익명 브라우저 컨텍스트, 요청 간격, 예산,
+    빈 200 응답 중단과 원장을 소유한다. 이 클래스는 HTML/JSON 파싱과
+    수집 결과 조립만 맡으며 poster의 저장 세션을 읽지 않는다.
 
     Usage:
         scraper = TrendScraper()
@@ -1270,19 +1257,40 @@ class TrendScraper:
         r"|\[.*?\]"                   # [이미지], [동영상] 등 태그
     )
 
-    def __init__(self) -> None:
-        if not _HAS_REQUESTS:
-            raise ImportError(
-                "TrendScraper에는 'requests'와 'beautifulsoup4' 패키지가 필요합니다. "
-                "pip install requests beautifulsoup4 로 설치하세요."
-            )
-        self._session = _requests.Session()
-        self._session.headers.update({
-            "User-Agent": random.choice(USER_AGENTS),
-            "Referer":    "https://gall.dcinside.com/",
-            "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        })
+    MAX_SOURCE_DETAILS = 6
+    MAX_SOURCE_COMMENTS_PER_POST = 3
+
+    def __init__(
+        self,
+        *,
+        access: GuardedBoardAccess | None = None,
+        purpose: str = "trend",
+    ) -> None:
+        self._access = access or GuardedBoardAccess(purpose=purpose)
+
+    def close(self) -> None:
+        """Release the anonymous browser context used by this read unit."""
+
+        access = getattr(self, "_access", None)
+        if access is not None:
+            access.close()
+
+    def __enter__(self) -> "TrendScraper":
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        self.close()
+
+    def _source_access_report(self) -> dict:
+        access = getattr(self, "_access", None)
+        if access is None:
+            return {"status": "ok", "reason": "", "request_count": 0, "events": []}
+        return access.report()
+
+    def source_access_report(self) -> dict:
+        """Return the sanitized diagnostic for the current read unit."""
+
+        return self._source_access_report()
 
     # ──────────────────────────────────────────
     # 내부 헬퍼
@@ -1313,13 +1321,12 @@ class TrendScraper:
         Returns:
             [{"post_no": str, "title": str, "views": int, "recommends": int,
               "author": str}, ...]
-            에러 발생 시 빈 리스트 반환 (caller가 처리).
+            접근 중단 또는 파싱 불일치 시 빈 리스트 반환. 상세 원인은
+            ``collect_trending()['source_access']``에 보존된다.
         """
         url = self._list_url(gallery_type, gallery_id, page)
-        try:
-            resp = self._session.get(url, timeout=12)
-            resp.raise_for_status()
-        except _requests.RequestException:
+        response = self._access.get_html(url, kind="list")
+        if response.blocked:
             return []
 
         # ── 로컬 원장 로드 (페이지 단위 1회) ─────────────────────────────────
@@ -1331,7 +1338,7 @@ class TrendScraper:
         except Exception:
             _bot_nos = set()
 
-        soup = _BeautifulSoup(resp.text, "html.parser")
+        soup = _BeautifulSoup(response.body, "html.parser")
         posts: list[dict] = []
 
         for tr in soup.select("tr.ub-content"):
@@ -1412,6 +1419,11 @@ class TrendScraper:
             except Exception:  # noqa: BLE001 — 개별 행 파싱 실패는 무시
                 continue
 
+        if not posts:
+            # A real list page always has at least one post row.  Continuing
+            # after a selector mismatch/blank shell only increases pressure
+            # while hiding the original server response.
+            self._access.stop("selector_empty", kind="list_parse")
         return posts
 
     def fetch_comments_ajax(
@@ -1427,24 +1439,11 @@ class TrendScraper:
             댓글 순수 텍스트 리스트.  실패 시 빈 리스트.
         """
         api_url = self._COMMENT_APIS.get(gallery_type, self._COMMENT_APIS["mgallery"])
-
-        from .config import POST_URL_PATTERNS
-        view_pattern = POST_URL_PATTERNS.get(gallery_type, POST_URL_PATTERNS["mgallery"])
-        referer = view_pattern.format(gallery_id=gallery_id, post_id=post_no)
-
-        headers = {
-            "X-Requested-With": "XMLHttpRequest",
-            "Content-Type":     "application/x-www-form-urlencoded; charset=UTF-8",
-            "Referer":          referer,
-        }
         token = str(e_s_n_o or "").strip()
         if not token:
-            try:
-                view_resp = self._session.get(referer, timeout=8)
-                view_resp.raise_for_status()
-                token = self._extract_esno(_BeautifulSoup(view_resp.text, "html.parser"))
-            except _requests.RequestException:
-                token = ""
+            # Do not issue a hidden detail-page retry only to recover a token.
+            # Detail sampling obtains it in the preceding browser request.
+            return []
 
         payload = {
             "id":      gallery_id,
@@ -1456,13 +1455,18 @@ class TrendScraper:
             "sort": "D",
         }
 
+        response = self._access.post_form(
+            api_url,
+            payload,
+            {"X-Requested-With": "XMLHttpRequest"},
+            kind="comment",
+        )
+        if response.blocked:
+            return []
         try:
-            resp = self._session.post(
-                api_url, data=payload, headers=headers, timeout=8
-            )
-            resp.raise_for_status()
-            data = resp.json()
-        except (_requests.RequestException, ValueError):
+            data = json.loads(response.body)
+        except (TypeError, ValueError):
+            self._access.stop("comment_json_invalid", kind="comment_parse")
             return []
 
         comment_list = []
@@ -1532,13 +1536,11 @@ class TrendScraper:
 
         view_pattern = POST_URL_PATTERNS.get(gallery_type, POST_URL_PATTERNS["mgallery"])
         url = view_pattern.format(gallery_id=gallery_id, post_id=post_no)
-        try:
-            resp = self._session.get(url, timeout=8)
-            resp.raise_for_status()
-        except _requests.RequestException:
+        response = self._access.get_html(url, kind="detail")
+        if response.blocked:
             return {}
 
-        soup = _BeautifulSoup(resp.text, "html.parser")
+        soup = _BeautifulSoup(response.body, "html.parser")
 
         title = ""
         title_el = soup.select_one(".title_subject") or soup.select_one(".gallview_head .title")
@@ -1575,22 +1577,32 @@ class TrendScraper:
             "snapshot_ok": bool(title or content),
         }
 
-    def collect_trending(
+    def collect_trending(self, *args, **kwargs) -> dict:
+        """Collect one bounded source unit and always release its browser context."""
+
+        try:
+            return self._collect_trending(*args, **kwargs)
+        finally:
+            self.close()
+
+    def _collect_trending(
         self,
         gallery_id: str,
         gallery_type: str = "mgallery",
         pages: int = 3,
-        max_comments_per_post: int = 5,
-        top_posts_per_page: int = 5,
+        max_comments_per_post: int = 3,
+        top_posts_per_page: int = 0,
         source_detail_limit: int = 0,
         source_comments_per_post: int = 5,
         progress_callback: Optional[Callable[[str], None]] = None,
     ) -> dict:
         """트렌드 수집 오케스트레이터.
 
-        1. pages 개 목록 페이지에서 게시글 제목·메타 수집
-        2. 추천수 상위 top_posts_per_page 개 글마다 AJAX로 댓글 수집
-        3. 제목 최대 100개, 댓글 최대 100개 상한선 (메모리 보호)
+        1. 최대 3개 목록 페이지에서 게시글 제목·메타를 수집한다.
+        2. 원문 스냅샷은 최대 6개이며, 댓글은 해당 스냅샷에서 받은
+           토큰이 있을 때만 글당 최대 3개를 읽는다.
+        3. 접근 모듈이 빈 응답·차단·예산 초과를 감지하면 즉시 멈추고
+           ``source_access``에 진단을 반환한다.
 
         Returns:
             {
@@ -1616,11 +1628,18 @@ class TrendScraper:
         noise_comment_decisions = []
         noise_post_samples: list[dict] = []
 
-        source_detail_limit = max(0, int(source_detail_limit or 0))
-        source_comments_per_post = max(0, int(source_comments_per_post or 0))
-        TITLE_CAP   = 300   # 100→300: 최대 20페이지 스캔 시 봇 필터 후에도 충분한 사람 글 확보
-        COMMENT_CAP = 300 if source_detail_limit else 150
-        AUTHOR_CAP  = 300   # 200→300: 더 넓은 작성자 풀
+        pages = max(1, min(int(pages or 1), 3))
+        source_detail_limit = min(
+            self.MAX_SOURCE_DETAILS,
+            max(0, int(source_detail_limit or 0)),
+        )
+        source_comments_per_post = min(
+            self.MAX_SOURCE_COMMENTS_PER_POST,
+            max(0, int(source_comments_per_post or 0)),
+        )
+        TITLE_CAP = 120
+        COMMENT_CAP = source_detail_limit * self.MAX_SOURCE_COMMENTS_PER_POST
+        AUTHOR_CAP = 120
 
         # 봇 제목 DB 로드 — 스크래핑된 제목과 유사도 비교하여 봇 글 2차 필터링
         try:
@@ -1636,8 +1655,10 @@ class TrendScraper:
 
             posts = self.fetch_post_list(gallery_id, gallery_type, page_no)
             if not posts:
-                _log(f"⚠️ {page_no} 페이지 수집 실패 — 건너뜀")
-                continue
+                report = self._source_access_report()
+                reason = str(report.get("reason") or "empty_list")
+                _log(f"⛔ {page_no} 페이지 수집 중단 — {reason}; 추가 요청 없음")
+                break
 
             for p in posts:
                 p["page"] = page_no
@@ -1686,7 +1707,7 @@ class TrendScraper:
                 if len(all_authors) < AUTHOR_CAP and p.get("author"):
                     all_authors.append(p["author"])
 
-            if not source_detail_limit:
+            if not source_detail_limit and top_posts_per_page > 0:
                 # 추천수 Top N 글의 댓글 수집 (자동 갱신 등 경량 모드)
                 top = sorted(posts, key=lambda x: x.get("recommends", 0), reverse=True)
                 top = top[:top_posts_per_page]
@@ -1722,10 +1743,15 @@ class TrendScraper:
             ][:source_detail_limit]
             detail_ok = 0
             comment_ok = 0
+            detail_attempted = 0
             for idx, p in enumerate(detail_targets, 1):
+                if getattr(self, "_access", None) is not None and self._access.stopped:
+                    _log("⛔ 원본 세트 수집 중단 — 추가 요청 없음")
+                    break
                 post_no = str(p.get("post_no", "")).strip()
                 if not post_no:
                     continue
+                detail_attempted += 1
                 list_created_at = str(p.get("created_at") or "").strip()
                 snapshot = self.fetch_post_snapshot(gallery_id, post_no, gallery_type)
                 if snapshot:
@@ -1776,7 +1802,7 @@ class TrendScraper:
                 if idx < len(detail_targets):
                     _time.sleep(random.uniform(0.08, 0.18))
             _log(
-                f"🗂️ 원본 글 스냅샷 저장 — 제목 {len(detail_targets)}개 / "
+                f"🗂️ 원본 글 스냅샷 저장 — 제목 {detail_attempted}개 / "
                 f"본문 {detail_ok}개 / 댓글 세트 {comment_ok}개"
             )
 
@@ -1819,4 +1845,5 @@ class TrendScraper:
             "ai_post_count":    ai_post_count,    # ledger 기반 봇 게시글 수
             "total_post_count": total_post_count, # 전체 수집 게시글 수
             "raw_posts":        all_posts,        # 원본 게시글 목록 (디버깅용)
+            "source_access":    self._source_access_report(),
         }

@@ -203,15 +203,23 @@ def _watch_ai_post_comments_once(
         database.init_db()
         from ghost_protocol.scraper import TrendScraper
 
-        scraper = TrendScraper()
-        snapshot = scraper.fetch_post_snapshot(gallery_id, post_no, gallery_type) or {}
-        comments = list(snapshot.get("comments") or [])
-        ajax_comments = scraper.fetch_comments_ajax(
-            gallery_id,
-            post_no,
-            gallery_type,
-            e_s_n_o=str(snapshot.get("e_s_n_o") or ""),
-        )
+        with TrendScraper(purpose="published_comment_watch") as scraper:
+            snapshot = scraper.fetch_post_snapshot(gallery_id, post_no, gallery_type) or {}
+            comments = list(snapshot.get("comments") or [])
+            ajax_comments = scraper.fetch_comments_ajax(
+                gallery_id,
+                post_no,
+                gallery_type,
+                e_s_n_o=str(snapshot.get("e_s_n_o") or ""),
+            )
+            source_access = scraper.source_access_report()
+        if source_access.get("status") != "ok":
+            if log_callback:
+                log_callback(
+                    f"[WATCH] ⛔ #{post_no} 수집 접근 중단 — "
+                    f"{source_access.get('reason') or 'unknown'}"
+                )
+            return 0
         comments = _unique_comment_texts(comments + list(ajax_comments or []))
         inserted = ai_post_monitor.record_comment_batch(
             gallery_id=gallery_id,
@@ -647,46 +655,48 @@ def _swarm_worker(
     _enriched_pool: list[dict] = []
     try:
         from ghost_protocol.scraper import TrendScraper as _TS
-        _ts = _TS()
-        _raw_list = _ts.fetch_post_list(gallery_id, gallery_type, page=1)
-        try:
-            _known_ai_posts = database.get_ai_post_nos(gallery_id)
-        except Exception:
-            _known_ai_posts = set()
-        _candidates = comment_targets.select_comment_target_rows(
-            _raw_list,
-            known_ai_posts=_known_ai_posts,
-            limit=15,
-            ai_limit=3,
-            include_ai=True,
-        )
-        for _c in _candidates:
-            _snapshot: dict = {}
-            _cmts: list[str] = []
+        with _TS(purpose="publish_context") as _ts:
+            _raw_list = _ts.fetch_post_list(gallery_id, gallery_type, page=1)
             try:
-                _snapshot = _ts.fetch_post_snapshot(gallery_id, _c["post_no"], gallery_type)
-                _cmts = _ts.fetch_comments_ajax(
-                    gallery_id,
-                    _c["post_no"],
-                    gallery_type,
-                    e_s_n_o=str(_snapshot.get("e_s_n_o") or ""),
-                )[:5]
+                _known_ai_posts = database.get_ai_post_nos(gallery_id)
             except Exception:
-                pass
-            _inline = list(_snapshot.get("comments") or [])
-            _merged_cmts: list[str] = []
-            for _comment in _inline + _cmts:
-                _text = str(_comment or "").strip()
-                if _text and _text not in _merged_cmts:
-                    _merged_cmts.append(_text)
-            _enriched_pool.append({
-                "post_no":           _c["post_no"],
-                "title":             _snapshot.get("source_title") or _c["title"],
-                "content":           _snapshot.get("content") or "",
-                "existing_comments": _merged_cmts[:5],
-                "is_ai_post":        bool(_c.get("is_ai_post")),
-                "simulation_only":   bool(_c.get("comment_simulation_only")),
-            })
+                _known_ai_posts = set()
+            _candidates = comment_targets.select_comment_target_rows(
+                _raw_list,
+                known_ai_posts=_known_ai_posts,
+                limit=3,
+                ai_limit=1,
+                include_ai=True,
+            )
+            for _c in _candidates:
+                _snapshot: dict = {}
+                _cmts: list[str] = []
+                try:
+                    _snapshot = _ts.fetch_post_snapshot(gallery_id, _c["post_no"], gallery_type)
+                    _cmts = _ts.fetch_comments_ajax(
+                        gallery_id,
+                        _c["post_no"],
+                        gallery_type,
+                        e_s_n_o=str(_snapshot.get("e_s_n_o") or ""),
+                    )[:_TS.MAX_SOURCE_COMMENTS_PER_POST]
+                except Exception:
+                    pass
+                if _ts.source_access_report().get("status") != "ok":
+                    break
+                _inline = list(_snapshot.get("comments") or [])
+                _merged_cmts: list[str] = []
+                for _comment in _inline + _cmts:
+                    _text = str(_comment or "").strip()
+                    if _text and _text not in _merged_cmts:
+                        _merged_cmts.append(_text)
+                _enriched_pool.append({
+                    "post_no":           _c["post_no"],
+                    "title":             _snapshot.get("source_title") or _c["title"],
+                    "content":           _snapshot.get("content") or "",
+                    "existing_comments": _merged_cmts[:_TS.MAX_SOURCE_COMMENTS_PER_POST],
+                    "is_ai_post":        bool(_c.get("is_ai_post")),
+                    "simulation_only":   bool(_c.get("comment_simulation_only")),
+                })
         q_log(f"[SWARM] 📋 댓글 타겟 풀: {len(_enriched_pool)}개 (사람 글 맥락 프리패치 완료)")
     except Exception as _te:
         q_log(f"[SWARM] ⚠️ 댓글 타겟 수집 실패 (SWARM 계속): {str(_te)[:80]}")
@@ -929,15 +939,25 @@ def _intel_worker(
         log_q.put(worker_contracts.worker_message(worker_contracts.MSG_INTEL_DONE))
         return
 
-    _log(f"🔍 [{gallery_id}] 트렌드 수집 시작 (AJAX 모드, {pages} 페이지)")
+    _log(f"🔍 [{gallery_id}] 트렌드 수집 시작 (브라우저 보호 모드, {pages} 페이지)")
     try:
-        scraper  = TrendScraper()
+        scraper  = TrendScraper(purpose="intel")
         raw_data = scraper.collect_trending(
             gallery_id=gallery_id, gallery_type=gallery_type,
             pages=pages,
-            source_detail_limit=min(max(int(pages), 1) * 30, 120),
+            source_detail_limit=TrendScraper.MAX_SOURCE_DETAILS,
+            source_comments_per_post=TrendScraper.MAX_SOURCE_COMMENTS_PER_POST,
             progress_callback=_log,
         )
+        source_access = raw_data.get("source_access") or {}
+        if source_access.get("status") != "ok":
+            _log(
+                "⛔ 수집 접근 중단 — "
+                f"{source_access.get('reason') or 'unknown'}; "
+                "원본 로그 확인 전 분석·자동 초안을 실행하지 않습니다"
+            )
+            log_q.put(worker_contracts.worker_message(worker_contracts.MSG_INTEL_DONE))
+            return
         _record_ai_comments_from_raw_posts(
             raw_data.get("raw_posts", []),
             gallery_id=gallery_id,
@@ -1486,9 +1506,16 @@ def _batch_gen_worker(
             _scrape_pages = 3 if (_mem_cycle % 3 == 0) else 2
             if _scrape_pages > 2:
                 q_log(f"[AUTO-REFRESH] 🌐 사이클 {_mem_cycle} — 외부 자극 강화 ({_scrape_pages}페이지 스크래핑)")
-            _ar_raw = _AR_TS().collect_trending(
+            _ar_raw = _AR_TS(purpose="infinite_refresh").collect_trending(
                 gallery_id=gallery_id, gallery_type=gallery_type, pages=_scrape_pages,
             )
+            _ar_access = _ar_raw.get("source_access") or {}
+            if _ar_access.get("status") != "ok":
+                q_log(
+                    "[AUTO-REFRESH] ⛔ 수집 접근 중단 — "
+                    f"{_ar_access.get('reason') or 'unknown'}; 기존 토픽 유지"
+                )
+                _ar_raw["titles"] = []
             # 봇 점유율 경고 — 사람 글이 부족하면 추가 스캔
             _ar_bot_cnt = _ar_raw.get("ai_post_count", 0)
             _ar_total   = _ar_raw.get("total_post_count", 1)
@@ -1622,48 +1649,50 @@ def _batch_gen_worker(
     try:
         def _collect_pool() -> list[dict]:
             from ghost_protocol.scraper import TrendScraper as _TS
-            _ts = _TS()
-            _raw_list = _ts.fetch_post_list(gallery_id, gallery_type, page=1)
-            try:
-                _known_ai_posts = database.get_ai_post_nos(gallery_id)
-            except Exception:
-                _known_ai_posts = set()
-            _candidates = comment_targets.select_comment_target_rows(
-                _raw_list,
-                known_ai_posts=_known_ai_posts,
-                limit=15,
-                ai_limit=3,
-                include_ai=True,
-            )
-            _pool: list[dict] = []
-            for _c in _candidates:
-                _snapshot: dict = {}
-                _cmts: list[str] = []
+            with _TS(purpose="batch_context") as _ts:
+                _raw_list = _ts.fetch_post_list(gallery_id, gallery_type, page=1)
                 try:
-                    _snapshot = _ts.fetch_post_snapshot(gallery_id, _c["post_no"], gallery_type)
-                    _cmts = _ts.fetch_comments_ajax(
-                        gallery_id,
-                        _c["post_no"],
-                        gallery_type,
-                        e_s_n_o=str(_snapshot.get("e_s_n_o") or ""),
-                    )[:5]
+                    _known_ai_posts = database.get_ai_post_nos(gallery_id)
                 except Exception:
-                    pass
-                _inline = list(_snapshot.get("comments") or [])
-                _merged_cmts: list[str] = []
-                for _comment in _inline + _cmts:
-                    _text = str(_comment or "").strip()
-                    if _text and _text not in _merged_cmts:
-                        _merged_cmts.append(_text)
-                _pool.append({
-                    "post_no":           _c["post_no"],
-                    "title":             _snapshot.get("source_title") or _c["title"],
-                    "content":           _snapshot.get("content") or "",
-                    "existing_comments": _merged_cmts[:5],
-                    "is_ai_post":        bool(_c.get("is_ai_post")),
-                    "simulation_only":   bool(_c.get("comment_simulation_only")),
-                })
-            return _pool
+                    _known_ai_posts = set()
+                _candidates = comment_targets.select_comment_target_rows(
+                    _raw_list,
+                    known_ai_posts=_known_ai_posts,
+                    limit=3,
+                    ai_limit=1,
+                    include_ai=True,
+                )
+                _pool: list[dict] = []
+                for _c in _candidates:
+                    _snapshot: dict = {}
+                    _cmts: list[str] = []
+                    try:
+                        _snapshot = _ts.fetch_post_snapshot(gallery_id, _c["post_no"], gallery_type)
+                        _cmts = _ts.fetch_comments_ajax(
+                            gallery_id,
+                            _c["post_no"],
+                            gallery_type,
+                            e_s_n_o=str(_snapshot.get("e_s_n_o") or ""),
+                        )[:_TS.MAX_SOURCE_COMMENTS_PER_POST]
+                    except Exception:
+                        pass
+                    if _ts.source_access_report().get("status") != "ok":
+                        break
+                    _inline = list(_snapshot.get("comments") or [])
+                    _merged_cmts: list[str] = []
+                    for _comment in _inline + _cmts:
+                        _text = str(_comment or "").strip()
+                        if _text and _text not in _merged_cmts:
+                            _merged_cmts.append(_text)
+                    _pool.append({
+                        "post_no":           _c["post_no"],
+                        "title":             _snapshot.get("source_title") or _c["title"],
+                        "content":           _snapshot.get("content") or "",
+                        "existing_comments": _merged_cmts[:_TS.MAX_SOURCE_COMMENTS_PER_POST],
+                        "is_ai_post":        bool(_c.get("is_ai_post")),
+                        "simulation_only":   bool(_c.get("comment_simulation_only")),
+                    })
+                return _pool
 
         _enriched_pool = _timed(_collect_pool, _timeout=30.0)
         q_log(f"[BATCH] 📋 댓글 타겟 풀: {len(_enriched_pool)}개 (맥락 프리패치 완료)")
@@ -3771,7 +3800,9 @@ def _start_next_batch(
             cfg,
             log_q=_bgq,
             stop_ev=_bgev,
-            auto_refresh=(not is_rehearsal) if auto_refresh is None else auto_refresh,
+            auto_refresh=(bool(cfg.get("infinite")) and not is_rehearsal)
+            if auto_refresh is None
+            else auto_refresh,
         ),
         daemon=True,
     ).start()

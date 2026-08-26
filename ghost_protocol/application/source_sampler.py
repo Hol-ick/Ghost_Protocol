@@ -172,11 +172,11 @@ def collect_samples(
         scraper_factory = TrendScraper
 
     pages = max(1, min(int(pages or 1), 5))
-    comments_per_post = max(0, min(int(comments_per_post or 0), 10))
+    comments_per_post = max(0, min(int(comments_per_post or 0), 3))
     detail_limit = (
-        max(1, int(detail_limit_per_gallery))
+        min(6, max(1, int(detail_limit_per_gallery)))
         if detail_limit_per_gallery is not None
-        else min(pages * 30, 150)
+        else min(pages * 2, 6)
     )
 
     bundle = {

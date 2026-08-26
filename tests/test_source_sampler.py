@@ -85,8 +85,8 @@ def test_collect_samples_uses_each_gallery_spec() -> None:
     )
 
     assert calls == [
-        ("universe", "mgallery", 2, 60, 4),
-        ("boardgame", "board", 2, 60, 4),
+        ("universe", "mgallery", 2, 4, 3),
+        ("boardgame", "board", 2, 4, 3),
     ]
     assert [item["ok"] for item in bundle["items"]] == [True, True]
     assert "fake page done" in bundle["items"][0]["logs"]

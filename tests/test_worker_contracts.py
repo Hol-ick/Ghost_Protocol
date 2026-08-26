@@ -53,7 +53,7 @@ class WorkerContractsTest(unittest.TestCase):
         self.assertEqual(kwargs["topic"], "x")
         self.assertEqual(kwargs["log_q"], "queue")
         self.assertEqual(kwargs["stop_ev"], "event")
-        self.assertTrue(kwargs["auto_refresh"])
+        self.assertFalse(kwargs["auto_refresh"])
         self.assertLessEqual(set(kwargs) - {"log_q", "stop_ev", "auto_refresh"}, BATCH_GEN_PARAMS)
 
     def test_worker_message_validates_type(self):

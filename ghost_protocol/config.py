@@ -86,11 +86,11 @@ USER_AGENTS = [
 # ──────────────────────────────────────────────
 # Nitro Boost: Parallel Crawling (v1.5)
 # ──────────────────────────────────────────────
-PARALLEL_WORKERS = 15               # 동시 탭 수 (Semaphore) — v1.0: 5 → v1.5: 15
-PARALLEL_DELAY_MIN = 0.1            # Smart Jitter: 최소 (초)
-PARALLEL_DELAY_MAX = 0.3            # Smart Jitter: 최대 (초) — 기계적 패턴 분산
-BATCH_COOLDOWN_MIN = 0.5            # 배치 간 쿨다운 (초) — v1.0: 1.0 → 0.5
-BATCH_COOLDOWN_MAX = 1.0            # v1.0: 2.0 → 1.0
+PARALLEL_WORKERS = 1                # legacy full scraper도 단일 브라우저 탭만 허용
+PARALLEL_DELAY_MIN = 1.2            # 상세 요청 사이 최소 간격(초)
+PARALLEL_DELAY_MAX = 1.8            # 상세 요청 사이 최대 간격(초)
+BATCH_COOLDOWN_MIN = 1.2            # 배치 간 쿨다운(초)
+BATCH_COOLDOWN_MAX = 2.0
 
 # Fail-Fast: 타임아웃 (ms)
 PAGE_TIMEOUT = 10000                # 10초 — v1.0: 15s → v1.5: 10s

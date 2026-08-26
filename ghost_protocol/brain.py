@@ -1718,6 +1718,7 @@ class GhostBrain:
         }
         # 원본 게시글 목록 pass-through (UI 디버깅용, analyze_trend에서 가공 안 함)
         result["raw_posts"] = raw_data.get("raw_posts", [])
+        result["source_access"] = dict(raw_data.get("source_access") or {})
 
         return result
 

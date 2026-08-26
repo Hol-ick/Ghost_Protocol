@@ -70,7 +70,7 @@ def build_batch_gen_worker_kwargs(
     *,
     log_q: Any,
     stop_ev: Any,
-    auto_refresh: bool = True,
+    auto_refresh: bool = False,
 ) -> dict[str, Any]:
     """Build the exact kwargs payload for `_batch_gen_worker`."""
     return {
