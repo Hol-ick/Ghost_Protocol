@@ -31,7 +31,7 @@ from .content_filter import (
     sanitize_user_drama_text,
     sensitive_generation_violations,
 )
-from .application import llm_throttle, llm_usage, trend_cache
+from .application import intel_result, llm_throttle, llm_usage, trend_cache
 from .application.draft_quality import grounded_fallback, review_draft
 from .application.draft_pipeline import (
     DraftCard,
@@ -1454,19 +1454,40 @@ class GhostBrain:
 
         gallery_id = raw_data.get("gallery_id", "알 수 없음")
 
-        prompt_template = pm.load("trend_analysis.txt")
-        prompt = pm.render(
-            "trend_analysis.txt",
-            gallery_id=gallery_id,
-            gallery_identity_context=gallery_purpose.analysis_context(gallery_id),
-            rehearsal_analysis_notes=str(raw_data.get("rehearsal_analysis_notes") or ""),
-            top_k_count=min(len(top_keywords), 20),
-            kw_text=kw_text,
-            titles_text=titles_text,
-            comments_text=comments_text,
-            author_stats=author_stats,
-            ai_share=ai_share,
+        # GTX 1660 SUPER에서 운용하는 3B 모델은 긴 안전/문체 지시와
+        # 대량 원문을 함께 받으면 출력 형식의 표기를 계속 이어 쓰는 경향이
+        # 있다. 분석 전용 경량 계약은 원본 확인과 안전 경계를 유지하면서
+        # 입력과 응답을 작게 제한한다. 7B 이상은 기존의 풍부한 분석 지시를
+        # 유지하되, 어느 경로에서든 모델은 레이블 없는 topic_slots만 낸다.
+        use_compact_contract = _env_bool(
+            "LLM_TREND_COMPACT_MODE",
+            default=not _model_prefers_full_prompt(
+                str(getattr(self, "model_name", MODEL_NAME) or MODEL_NAME)
+            ),
         )
+        if use_compact_contract:
+            prompt_template = pm.load("trend_analysis_compact.txt")
+            prompt = pm.render(
+                "trend_analysis_compact.txt",
+                gallery_id=gallery_id,
+                kw_text=", ".join(top_keywords[:12]),
+                titles_text="\n".join(f"- {t[:80]}" for t in titles[:12]),
+                comments_text="\n".join(f"- {c[:60]}" for c in comments[:8]),
+            )
+        else:
+            prompt_template = pm.load("trend_analysis.txt")
+            prompt = pm.render(
+                "trend_analysis.txt",
+                gallery_id=gallery_id,
+                gallery_identity_context=gallery_purpose.analysis_context(gallery_id),
+                rehearsal_analysis_notes=str(raw_data.get("rehearsal_analysis_notes") or ""),
+                top_k_count=min(len(top_keywords), 20),
+                kw_text=kw_text,
+                titles_text=titles_text,
+                comments_text=comments_text,
+                author_stats=author_stats,
+                ai_share=ai_share,
+            )
         cache_key = trend_cache.build_key(
             gallery_id=str(gallery_id),
             titles=titles,
@@ -1484,21 +1505,28 @@ class GhostBrain:
             "properties": {
                 "hot_topics": {
                     "type": "array",
-                    "items": {"type": "string"},
+                    "items": {"type": "string", "maxLength": 72},
+                    "minItems": 1,
+                    "maxItems": 4,
                     "description": "현재 글과 댓글에서 반복적으로 보이는 소재 2~4개",
                 },
                 "sentiment": {
                     "type": "string",
+                    "maxLength": 24,
                     "description": "전반적인 갤러리 감성. 불만/냉소/혼란/기대/무관심/장난/과열 중 가까운 단어",
                 },
                 "memes": {
                     "type": "array",
-                    "items": {"type": "string"},
+                    "items": {"type": "string", "maxLength": 72},
+                    "maxItems": 4,
                     "description": "반복되는 표현, 짧은 드립, 질문 패턴",
                 },
-                "summary": {
-                    "type": "string",
-                    "description": "[A: 메인 떡밥] / [B: 서브 떡밥] / [C: 파생 각도] 형식의 짧은 소재 팔레트",
+                "topic_slots": {
+                    "type": "array",
+                    "items": {"type": "string", "maxLength": 48},
+                    "minItems": 3,
+                    "maxItems": 3,
+                    "description": "후속 초안 소재가 되는 짧은 명사구 3개. 라벨이나 번호는 넣지 않는다.",
                 },
                 "ai_analysis": {
                     "type": "string",
@@ -1513,7 +1541,7 @@ class GhostBrain:
                     "description": "후속 초안 생성 모델에게 전달할 별도 작문 지시. 금지사항과 안전한 접근 각도를 포함한다.",
                 },
             },
-            "required": ["hot_topics", "sentiment", "memes", "summary", "ai_analysis", "generation_guidance"],
+            "required": ["hot_topics", "sentiment", "memes", "topic_slots", "ai_analysis", "generation_guidance"],
         }
         raw_text = ""
         cached_result = trend_cache.get(cache_key)
@@ -1530,15 +1558,22 @@ class GhostBrain:
             try:
                 # ── 로그: 로컬 LLM에 보내는 프롬프트 전문 기록 ──────────────────
                 _api_logger.debug(
-                    "analyze_trend PROMPT ▶ gallery=%s\n%s\n%s",
-                    gallery_id, "─" * 60, prompt,
+                    "analyze_trend PROMPT ▶ gallery=%s contract=%s\n%s\n%s",
+                    gallery_id,
+                    "compact" if use_compact_contract else "full",
+                    "─" * 60,
+                    prompt,
                 )
 
                 response = self._generate_content_paced(
                     label="analyze_trend",
                     prompt=prompt,
                     json_schema=_TREND_SCHEMA,
-                    max_output_tokens=3072 if _env_bool("LLM_COST_SAVER_MODE") else 4096,
+                    max_output_tokens=(
+                        768
+                        if use_compact_contract
+                        else (3072 if _env_bool("LLM_COST_SAVER_MODE") else 4096)
+                    ),
                     temperature=0.3,
                 )
                 raw_text = response.text.strip()
@@ -1555,12 +1590,18 @@ class GhostBrain:
                         "analyze_trend NON-STOP finish_reason=%s — 응답 잘림 또는 필터링 가능성",
                         _finish_reason,
                     )
+                    raise intel_result.TrendPayloadError(
+                        f"analysis response stopped with {_finish_reason}",
+                        reason="truncated_response",
+                    )
 
                 # 강화된 JSON 파싱 (마크다운 펜스 + 앞뒤 산문 제거)
-                result = _parse_json_robust(raw_text)
+                result = intel_result.normalize_trend_payload(
+                    _parse_json_robust(raw_text)
+                )
                 trend_cache.set(cache_key, result)
 
-            except json.JSONDecodeError as _exc:
+            except (json.JSONDecodeError, intel_result.TrendPayloadError) as _exc:
                 # ── 로그: 파싱 실패 상세 기록 ────────────────────────────────
                 _api_logger.error(
                     "analyze_trend PARSE ERROR ▶ %s\nRAW RESPONSE (len=%d):\n%s\n%s",
@@ -1581,6 +1622,7 @@ class GhostBrain:
                     "ai_analysis":   "⚠️ API 응답 파싱 실패 — logs/api_debug.log 를 확인하세요.",
                     "generation_guidance": "파싱 실패 상태에서는 자동 초안 생성을 진행하지 말고 원본 로그를 먼저 확인하세요.",
                     "_parse_error":  True,
+                    "_failure_reason": getattr(_exc, "reason", "invalid_json"),
                     "_raw_response": raw_text,
                 }
             except Exception as e:
@@ -1625,13 +1667,18 @@ class GhostBrain:
         # preserves the board's durable subject across rehearsal cycles.
         identity = gallery_purpose.identity_metadata(gallery_id)
         if identity:
-            prefix = gallery_purpose.briefing_prefix(gallery_id)
+            result["gallery_identity"] = identity
+        if identity and not intel_result.is_parse_failed(result):
             analysis_text = gallery_purpose.strip_identity_echo(
                 str(result.get("ai_analysis") or "").strip(),
                 gallery_id,
             )
-            if prefix and not analysis_text.startswith(prefix):
-                result["ai_analysis"] = f"{prefix} {analysis_text}".strip()
+            # The inferred subject is durable metadata, not evidence from the
+            # current scrape.  Keep it out of the trend briefing so a later
+            # draft cannot mistake an ID-derived baseline for a live topic.
+            # The separate generation instruction still reserves the small
+            # purpose share required by the gallery profile.
+            result["ai_analysis"] = analysis_text
             instruction = gallery_purpose.generation_instruction(gallery_id)
             guidance_text = str(result.get("generation_guidance") or "").strip()
             topic_label = str(identity.get("topic_label") or "").strip()
@@ -1643,7 +1690,6 @@ class GhostBrain:
                 result["generation_guidance"] = (
                     f"{guidance_text}\n\n{instruction}".strip()
                 )
-            result["gallery_identity"] = identity
 
         # ── 7. 공통 메타데이터 주입 ─────────────────────────
         result["top_keywords"] = top_keywords

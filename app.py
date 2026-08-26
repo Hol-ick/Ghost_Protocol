@@ -58,6 +58,7 @@ from ghost_protocol import database
 from ghost_protocol import prompt_manager as pm
 from ghost_protocol.application import ai_post_monitor
 from ghost_protocol.application import draft_generation
+from ghost_protocol.application import intel_result
 from ghost_protocol.application import llm_usage
 from ghost_protocol.application import llm_throttle
 from ghost_protocol.application.ollama_client import OllamaClient
@@ -1512,7 +1513,7 @@ def _batch_gen_worker(
                 except Exception as _ar_inner_e:
                     q_log(f"[AUTO-REFRESH] ⚠️ AI 분석 실패: {str(_ar_inner_e)[:80]}")
 
-                if _ar_result:
+                if _ar_result and intel_result.can_seed_generation(_ar_result):
                     _fresh_ai      = (_ar_result.get("ai_analysis") or "").strip()
                     _fresh_summary = (_ar_result.get("summary") or "").strip()
                     _fresh_guidance = (_ar_result.get("generation_guidance") or "").strip()
@@ -1601,6 +1602,12 @@ def _batch_gen_worker(
                         _rl.flush()
                     except Exception:
                         pass
+                elif _ar_result:
+                    _reason = str(_ar_result.get("_failure_reason") or "analysis_failed")
+                    q_log(
+                        "[AUTO-REFRESH] ⚠️ 분석 결과 파싱 실패 "
+                        f"({_reason}) — 원본 응답 확인 전 기존 토픽 유지"
+                    )
             else:
                 q_log("[AUTO-REFRESH] ⚠️ 수집 데이터 없음 — 기존 토픽 유지")
         except Exception as _ar_e:
@@ -3154,46 +3161,54 @@ def _batch_gen_worker(
                     anchor_topic=rehearsal_anchor_topic,
                 )
             )
-            rehearsal_intel = rehearsal_flow.normalize_cycle_intel(
-                rehearsal_intel,
-                scripts,
-                gallery_id=gallery_id,
-                anchor_posts=rehearsal_anchor_posts or (),
-                anchor_topic=rehearsal_anchor_topic,
-            )
-            rehearsal_next_topic = rehearsal_flow.build_next_topic(
-                rehearsal_intel,
-                scripts,
-                gallery_id=gallery_id,
-                anchor_posts=rehearsal_anchor_posts or (),
-                anchor_topic=rehearsal_anchor_topic,
-            )
-            _hot_topics = rehearsal_intel.get("hot_topics") or []
-            _hot_topic_text = " / ".join(str(item).strip() for item in _hot_topics[:4] if str(item).strip())
-            _guidance_preview = re.sub(
-                r"\s+",
-                " ",
-                str(rehearsal_intel.get("generation_guidance") or "").strip(),
-            )[:160]
-            q_log(
-                f"[REHEARSAL] 사이클 {rehearsal_cycle}/{cycle_limit} 분석 완료"
-            )
-            _fallback_used = rehearsal_intel.get("rehearsal_fallback_used") or []
-            if _fallback_used:
+            if intel_result.is_parse_failed(rehearsal_intel):
+                _reason = str(rehearsal_intel.get("_failure_reason") or "analysis_failed")
                 q_log(
-                    f"[REHEARSAL] 사이클 {rehearsal_cycle}/{cycle_limit} 분석 폴백 적용: "
-                    f"{', '.join(str(item) for item in _fallback_used)}"
+                    f"[REHEARSAL] 분석 파싱 실패 ({_reason}) — "
+                    "원본 응답 확인 전 다음 초안 주제를 갱신하지 않음"
                 )
-            if _hot_topic_text:
+                rehearsal_intel = {}
+            else:
+                rehearsal_intel = rehearsal_flow.normalize_cycle_intel(
+                    rehearsal_intel,
+                    scripts,
+                    gallery_id=gallery_id,
+                    anchor_posts=rehearsal_anchor_posts or (),
+                    anchor_topic=rehearsal_anchor_topic,
+                )
+                rehearsal_next_topic = rehearsal_flow.build_next_topic(
+                    rehearsal_intel,
+                    scripts,
+                    gallery_id=gallery_id,
+                    anchor_posts=rehearsal_anchor_posts or (),
+                    anchor_topic=rehearsal_anchor_topic,
+                )
+                _hot_topics = rehearsal_intel.get("hot_topics") or []
+                _hot_topic_text = " / ".join(str(item).strip() for item in _hot_topics[:4] if str(item).strip())
+                _guidance_preview = re.sub(
+                    r"\s+",
+                    " ",
+                    str(rehearsal_intel.get("generation_guidance") or "").strip(),
+                )[:160]
                 q_log(
-                    f"[REHEARSAL] 사이클 {rehearsal_cycle}/{cycle_limit} 다음 주제: "
-                    f"{_hot_topic_text}"
+                    f"[REHEARSAL] 사이클 {rehearsal_cycle}/{cycle_limit} 분석 완료"
                 )
-            if _guidance_preview:
-                q_log(
-                    f"[REHEARSAL] 사이클 {rehearsal_cycle}/{cycle_limit} 작문 지시 갱신: "
-                    f"{_guidance_preview}"
-                )
+                _fallback_used = rehearsal_intel.get("rehearsal_fallback_used") or []
+                if _fallback_used:
+                    q_log(
+                        f"[REHEARSAL] 사이클 {rehearsal_cycle}/{cycle_limit} 분석 폴백 적용: "
+                        f"{', '.join(str(item) for item in _fallback_used)}"
+                    )
+                if _hot_topic_text:
+                    q_log(
+                        f"[REHEARSAL] 사이클 {rehearsal_cycle}/{cycle_limit} 다음 주제: "
+                        f"{_hot_topic_text}"
+                    )
+                if _guidance_preview:
+                    q_log(
+                        f"[REHEARSAL] 사이클 {rehearsal_cycle}/{cycle_limit} 작문 지시 갱신: "
+                        f"{_guidance_preview}"
+                    )
         except Exception as exc:
             rehearsal_intel = rehearsal_flow.normalize_cycle_intel(
                 {},
@@ -4167,10 +4182,14 @@ def _build_intel_fig(ir: dict):
 
 
 def _build_ai_briefing_topic(ir: dict) -> str:
+    if not intel_result.can_seed_generation(ir):
+        return ""
     return ui_formatters.build_briefing_topic(ir)
 
 
 def _build_ai_generation_guidance(ir: dict) -> str:
+    if not intel_result.can_seed_generation(ir):
+        return ""
     summary_for_topic = (ir.get("summary") or "").strip()
     slot_warning = (
         _validate_slot_diversity(summary_for_topic)
@@ -4183,6 +4202,8 @@ def _build_ai_generation_guidance(ir: dict) -> str:
 
 
 def _queue_ai_briefing_topic(ir: dict) -> None:
+    if not intel_result.can_seed_generation(ir):
+        return
     queue_pending_ai_briefing_topic(
         st.session_state,
         topic=_build_ai_briefing_topic(ir),

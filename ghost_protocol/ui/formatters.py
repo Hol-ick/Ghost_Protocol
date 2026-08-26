@@ -10,6 +10,7 @@ from pathlib import Path
 import plotly.graph_objects as go
 
 from ghost_protocol import cycle_memory
+from ghost_protocol.application import intel_result
 from ghost_protocol.domain import board_rhythm
 from ghost_protocol.domain import gallery_style
 from ghost_protocol.domain import writing_enrichment
@@ -741,6 +742,8 @@ def build_briefing_topic(
 
 def build_generation_guidance(ir: dict, *, slot_warning: str | None = None) -> str:
     """Build the separate writing-guidance text injected next to the briefing."""
+    if intel_result.is_parse_failed(ir):
+        return ""
     guidance = (ir.get("generation_guidance") or "").strip()
     parts = [guidance] if guidance else []
     style_block = gallery_style.prompt_block(ir.get("style_profile"))
@@ -811,13 +814,7 @@ def format_intel_markdown(
 
 def has_briefing_topic_source(ir: dict) -> bool:
     """Return True when the Intel result has text usable as a topic seed."""
-    return bool(
-        (
-            (ir.get("ai_analysis") or "")
-            + (ir.get("generation_guidance") or "")
-            + (ir.get("summary") or "")
-        ).strip()
-    )
+    return intel_result.can_seed_generation(ir)
 
 
 def render_situation_summary(summary_text: str, ai_analysis_text: str) -> str:

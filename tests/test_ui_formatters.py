@@ -241,6 +241,18 @@ class UiFormattersTest(unittest.TestCase):
             "지시",
         )
 
+    def test_parse_failure_has_no_generation_guidance_or_topic_seed(self):
+        failed = {
+            "_parse_error": True,
+            "ai_analysis": "파싱 실패",
+            "generation_guidance": "원본 로그 확인",
+            "summary": "N/A",
+            "style_profile": {"gallery_name": "우주갤", "rules": ["문체 지시"]},
+        }
+
+        self.assertEqual(build_generation_guidance(failed), "")
+        self.assertFalse(has_briefing_topic_source(failed))
+
     def test_build_generation_guidance_appends_slot_warning(self):
         text = build_generation_guidance(
             {"generation_guidance": "지시"},
