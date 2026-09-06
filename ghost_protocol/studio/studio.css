@@ -18,6 +18,8 @@ div[data-testid="stForm"] { background:var(--paper); border:1px solid var(--line
 input,textarea,[data-baseweb="select"] { color:var(--ink)!important; font-size:15px!important; }
 button[kind="primary"], button[kind="primaryFormSubmit"] { background:var(--iris)!important; border-color:var(--iris)!important; color:white!important; }
 button[kind="primary"] p, button[kind="primaryFormSubmit"] p { color:white!important; }
+button:disabled, button:disabled:hover { background:#e2e8f0!important; border-color:#cbd5e1!important; color:#64748b!important; opacity:1!important; cursor:not-allowed!important; }
+button:disabled p { color:#64748b!important; }
 [data-testid="stAppDeployButton"] { display:none; }
 button[kind="secondary"], button[kind="tertiary"] { color:var(--ink); background:var(--paper); border-color:var(--line); }
 button { min-height:40px!important; border-radius:8px!important; }

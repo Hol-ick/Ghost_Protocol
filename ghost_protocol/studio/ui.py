@@ -270,13 +270,20 @@ def analysis_page(service, work):
         empty('수집 필요')
         return
     a = work['analysis']
+    active = service.busy()
+    analysis_running = bool(active and active.get('workspace_id') == work['id'] and active.get('action') == 'analyze')
+    blocked_elsewhere = bool(active and not analysis_running)
     analyze, confirm_col = st.columns(2)
-    if analyze.button('자료 분석' if not a else '분석 다시 실행',disabled=bool(service.busy()),width='stretch'):
+    analyze_label = '분석 중…' if analysis_running else ('다른 작업 진행 중' if blocked_elsewhere else ('자료 분석' if not a else '분석 다시 실행'))
+    if analyze.button(analyze_label,disabled=bool(active),width='stretch'):
         launch(service,work,'analyze',{})
     def confirm():
         if run_action(lambda:(service.confirm_analysis(work['id']),True)[1]):
             st.session_state['studio_stage_focus_'+work['id']] = 'draft'
-    confirm_col.button('분석 확인 · 원고 제작으로',type='primary',disabled=bool(service.busy()) or not analysis_ready(a),on_click=confirm,width='stretch')
+    confirm_label = ('분석 완료 대기' if analysis_running else
+                     ('다른 작업 진행 중' if blocked_elsewhere else
+                      ('분석 확인 · 원고 제작으로' if analysis_ready(a) else '분석 결과 대기')))
+    confirm_col.button(confirm_label,type='primary',disabled=bool(active) or not analysis_ready(a),on_click=confirm,width='stretch')
     left,right = st.columns([1,1.35],gap='medium')
     with left:
         st.subheader('수집 근거')

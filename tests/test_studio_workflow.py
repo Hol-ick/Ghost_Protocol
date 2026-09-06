@@ -67,6 +67,32 @@ def test_same_name_work_selection_survives_updates_and_full_workflow(tmp_path, m
     assert refreshed.query_params['work']==[selected]
 
 
+def test_analysis_controls_name_the_running_state_then_enable_confirmation(tmp_path, monkeypatch):
+    entered, release = threading.Event(), threading.Event()
+
+    class SlowAnalysisBackend(WorkflowBackend):
+        def analyze(self, *args):
+            entered.set()
+            assert release.wait(5)
+            return super().analyze(*args)
+
+    service = StudioService(tmp_path, SlowAnalysisBackend())
+    work = service.create_workspace('분석 진행 표시', 'universe')
+    service.wait(service.start(work['id'], 'collect', {}))
+    monkeypatch.setattr(ui, 'get_service', lambda *args: service)
+    app = AppTest.from_file('app.py')
+    app.query_params['work'] = work['id']
+    app.run()
+    next(button for button in app.button if button.label == '자료 분석').click().run()
+    assert entered.wait(3)
+    assert next(button for button in app.button if button.label == '분석 중…').disabled
+    assert next(button for button in app.button if button.label == '분석 완료 대기').disabled
+    release.set()
+    service.wait(service.jobs()[0]['id'])
+    app.run()
+    assert not next(button for button in app.button if button.label == '분석 확인 · 원고 제작으로').disabled
+
+
 def test_detailed_failure_and_operator_events_survive_restart(tmp_path,monkeypatch):
     class BrokenBackend(WorkflowBackend):
         def analyze(self,*args):
