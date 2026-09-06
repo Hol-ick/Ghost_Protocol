@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 import streamlit as st
 from ghost_protocol import prompt_manager as pm
-from .policy import MODELS, STAGES, analysis_ready
+from .policy import MODELS, analysis_ready
 from .opinion_packet import is_board_collection
 from .service import StudioService
 from .presentation import is_approved, resume_step
@@ -26,18 +26,6 @@ def esc(value):
 
 def empty(label):
     st.info(label)
-
-
-def move_to(work, step):
-    st.session_state['next_step_'+work['id']] = step
-
-
-def step_button(work, step, label):
-    def open_step():
-        move_to(work,step)
-        st.session_state['studio_view'] = '작업실'
-        st.session_state['studio_next_work'] = work['id']
-    st.button(label,on_click=open_step)
 
 
 def paper(title, body, meta=''):
@@ -144,9 +132,8 @@ def source_page(service, work):
             st.info('이전 원고 작업입니다. 새 수집부터 시작하세요.')
     with st.container(border=True):
         pages = st.number_input('목록 페이지',1,3,service.settings()['pages'])
-        consent = st.checkbox('게시판 수집 동의')
         label = '다시 수집' if collected else '수집 시작'
-        if st.button(label,type='primary',disabled=bool(service.busy()) or not consent):
+        if st.button(label,type='primary',disabled=bool(service.busy())):
             launch(service,work,'collect',{'pages':pages})
     if collected:
         st.caption(f"글 {len(raw.get('titles', []))} · 댓글 {len(raw.get('comments', []))} · 수집 결과만 분석에 사용")
@@ -161,7 +148,6 @@ def source_page(service, work):
 def analysis_page(service, work):
     if not is_board_collection(work['source']):
         empty('수집 필요')
-        step_button(work,'source','수집으로')
         return
     left,right = st.columns([1,1.35],gap='large')
     with left:
@@ -187,40 +173,32 @@ def analysis_page(service, work):
                     st.write(a['generation_guidance'])
                 def confirm():
                     if run_action(lambda:(service.confirm_analysis(work['id']),True)[1]):
-                        move_to(work,'draft')
+                        return
                 st.button('분석 확인 · 원고 제작으로',type='primary',disabled=bool(service.busy()),on_click=confirm)
-        consent = st.checkbox('Google API 전송·과금 동의',key='analysis_consent')
-        if st.button('자료 분석' if not a else '분석 다시 실행',disabled=not consent or bool(service.busy())):
+        if st.button('자료 분석' if not a else '분석 다시 실행',disabled=bool(service.busy())):
             launch(service,work,'analyze',{})
 
 
 def draft_controls(service, work, compare=False):
     if not is_board_collection(work['source']) or not analysis_ready(work['analysis']):
         empty('분석 필요')
-        step_button(work,resume_step(work),'자료·분석 확인')
         return
     if not work['analysis'].get('confirmed'):
         st.info('분석 확인 필요')
-        step_button(work,'analysis','분석 확인')
         return
     names = {p['key']:p['name'] for p in pm.load_json('personas.json')}
     with st.form('draft_controls_'+str(compare)):
         tones = st.multiselect('사용할 페르소나',list(names),default=['cynical','neutral','analytical'],format_func=lambda k:names[k])
         count = st.number_input('모델당 원고 수' if compare else '만들 원고 수',1,service.settings()['max_drafts'],min(3,service.settings()['max_drafts']))
-        paid = st.checkbox('Google API 전송·과금 동의')
         go = st.form_submit_button('두 모델 비교 실행' if compare else '원고 생성',type='primary',disabled=bool(service.busy()))
         if go:
-            if not paid:
-                st.error('API 사용량 동의를 확인하세요.')
-            else:
-                launch(service,work,'compare' if compare else 'generate',{'tones':tones,'count':count})
+            launch(service,work,'compare' if compare else 'generate',{'tones':tones,'count':count})
 
 
 def review_page(service, work):
     drafts = work['drafts']
     if not drafts:
         empty('원고 없음')
-        step_button(work,resume_step(work),'원고 준비')
         return
     selection, filters = st.columns([1.65,1],gap='medium',vertical_alignment='bottom')
     approved_count = sum(is_approved(d) for d in drafts)
@@ -234,8 +212,6 @@ def review_page(service, work):
     drafts = [d for d in drafts if filt=='전체' or is_approved(d)==(filt=='승인됨')]
     if not drafts:
         st.info('원고 없음')
-        if counts['승인됨']:
-            step_button(work,'approval','승인 원고 보기')
         return
     names = {p['key']:p['name'] for p in pm.load_json('personas.json')}
     ids = [d['id'] for d in drafts]
@@ -271,7 +247,6 @@ def review_page(service, work):
             if ok and is_approved(d):
                 st.session_state[filter_key] = '검토 대기'
                 select_draft(d['id'])
-                move_to(work,'review')
         with st.container(border=True,key='draft_editor'):
             title = st.text_input('제목 수정',value=buffer['title'],key=title_key,on_change=buffer_change)
             content = st.text_area('본문 수정',value=buffer['content'],height=150,key=body_key,on_change=buffer_change)
@@ -290,9 +265,6 @@ def review_page(service, work):
                     if pending:
                         st.session_state['review_filter_'+work['id']] = '검토 대기'
                         select_draft(pending['id'])
-                        move_to(work,'review')
-                    else:
-                        move_to(work,'approval')
             save,approve_col = st.columns(2)
             save.button('수정 저장',disabled=not dirty or bool(service.busy()),on_click=save_edit,width='stretch')
             approve_col.button('승인·다음',type='primary',disabled=dirty or not checked or bool(service.busy()) or d.get('failed',False) or d.get('stale_source',False) or is_approved(d),on_click=approve,width='stretch')
@@ -320,7 +292,6 @@ def approval_page(service, work):
         packet = service.export_approved(work['id'])
     except ValueError:
         empty('승인 원고 없음')
-        step_button(work,resume_step(work),'원고 검토' if work['drafts'] else '원고 준비')
         return
     st.subheader(f"승인한 원고 {len(packet['drafts'])}개")
     st.info('승인됨 · 미게시')
@@ -334,28 +305,41 @@ def approval_page(service, work):
     st.link_button('게시판 글쓰기 직접 열기',get_write_url(work['gallery_type'],work['gallery']))
 
 
+FLOW = (
+    ('source', '수집'),
+    ('analysis', '분석'),
+    ('draft', '원고'),
+    ('review', '검토'),
+    ('approval', '승인'),
+)
+
+
+def flow_summary(stage, work):
+    source, analysis, drafts = work['source'], work['analysis'], work['drafts']
+    if stage == 'source':
+        return f"글 {len(source.get('titles', []))} · 댓글 {len(source.get('comments', []))}"
+    if stage == 'analysis':
+        return str(analysis.get('summary') or '분석 대기')[:80]
+    if stage == 'draft':
+        return f"원고 {len(drafts)}개"
+    if stage == 'review':
+        return f"검토 대기 {sum(not is_approved(d) for d in drafts)}개"
+    return f"승인 {sum(is_approved(d) for d in drafts)}개"
+
+
 def workbench(service):
     work = choose_work(service)
     if not work:
         return
     st.markdown(f'<div class="studio-context"><span>게시판 <strong>{esc(work["gallery"])}</strong></span><span>모델 <strong>{esc(service.settings()["model"])}</strong></span><span>비용 <strong>{money(service.calls(work["id"]))}</strong></span></div>',unsafe_allow_html=True)
-    stage_keys = list(STAGES)
-    label_map = {key:f'{i+1} {value}' for i,(key,value) in enumerate(STAGES.items())}
-    key = 'step_'+work['id']
-    seen_key = 'stage_seen_'+work['id']
-    last_key = 'last_step_'+work['id']
     ready = resume_step(work)
-    state = (work['stage'],ready)
-    if st.session_state.get(seen_key) != state:
-        st.session_state[key] = ready
-        st.session_state[seen_key] = state
-    elif not st.session_state.get(key):
-        st.session_state[key] = st.session_state.get(last_key,ready)
-    if 'next_step_'+work['id'] in st.session_state:
-        st.session_state[key] = st.session_state.pop('next_step_'+work['id'])
-    step = st.radio('작업 단계',stage_keys,index=None,format_func=label_map.get,horizontal=True,key=key,label_visibility='collapsed')
-    st.session_state[last_key] = step
-    {'source':source_page,'analysis':analysis_page,'draft':draft_controls,'review':review_page,'approval':approval_page}[step](service,work)
+    renderers = {'source':source_page,'analysis':analysis_page,'draft':draft_controls,'review':review_page,'approval':approval_page}
+    active_index = next(index for index, (stage, _) in enumerate(FLOW) if stage == ready)
+    for index, (stage, label) in enumerate(FLOW[:active_index + 1], start=1):
+        current = stage == ready
+        title = f"{index}. {label}" if current else f"{index}. {label} · {flow_summary(stage, work)}"
+        with st.expander(title, expanded=current):
+            renderers[stage](service, work)
 
 
 def personas(service):

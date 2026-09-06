@@ -44,7 +44,10 @@ button:focus-visible,input:focus-visible,textarea:focus-visible { outline:3px so
 .studio-paper .meta { color:var(--muted); font:12px Consolas,'Malgun Gothic',monospace; }
 [data-testid="stMetricValue"] { font:1.3rem Consolas,monospace; color:var(--ink); }
 [data-testid="stMetricLabel"] p { color:var(--muted); font-size:.85rem; }
-[data-testid="stExpander"] { background:white; border-color:var(--line); }
+[data-testid="stExpander"] { background:white; border-color:var(--line); border-radius:10px; margin:.55rem 0; }
+[data-testid="stExpander"] details summary { min-height:46px; display:flex; align-items:center; font-weight:650; letter-spacing:-.015em; }
+[data-testid="stExpander"] details[open] { border-left:3px solid var(--iris); }
+[data-testid="stExpander"] details[open] summary { color:var(--iris); }
 [data-testid="stNotification"] { border-radius:8px; }
 @media(max-width:700px) {
  [data-testid="stMainBlockContainer"] { padding:1.2rem 1rem 3rem; }
