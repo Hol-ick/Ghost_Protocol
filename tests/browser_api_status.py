@@ -15,7 +15,7 @@ def main():
         page = browser.new_page(viewport={'width': 1440, 'height': 1000})
         errors = []
         page.on('pageerror', lambda error: errors.append(str(error)))
-        page.goto(f'http://127.0.0.1:{args.port}', wait_until='domcontentloaded')
+        page.goto(f'http://127.0.0.1:{args.port}/?legacy=1', wait_until='domcontentloaded')
         if not args.missing:
             page.get_by_role('button', name='최근/관리 열기').click(timeout=30000)
             page.get_by_role('button', name='고급', exact=True).click()
