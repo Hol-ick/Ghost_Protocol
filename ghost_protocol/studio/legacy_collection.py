@@ -3,11 +3,28 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from datetime import datetime
 from typing import Callable
 
 from ghost_protocol.content_filter import classify_noise_text
 from ghost_protocol.scraper import CrawlerBlockedError, GalleryScraper
+
+
+def run_legacy_collection_loop(coroutine):
+    """Run Playwright collection in a subprocess-capable loop on Windows.
+
+    Streamlit/Tornado selects ``WindowsSelectorEventLoopPolicy``.  That loop
+    cannot create the Playwright driver subprocess and raises
+    ``NotImplementedError`` before the collector can log a request.
+    """
+    if sys.platform != 'win32':
+        return asyncio.run(coroutine)
+    loop = asyncio.ProactorEventLoop()
+    try:
+        return loop.run_until_complete(coroutine)
+    finally:
+        loop.close()
 
 
 def collect_legacy_board(
@@ -19,7 +36,7 @@ def collect_legacy_board(
     scraper_factory=GalleryScraper,
 ) -> dict:
     """Run the original browser list/detail collector without its DB writers."""
-    return asyncio.run(
+    return run_legacy_collection_loop(
         _collect(
             gallery_id=gallery_id,
             gallery_type=gallery_type,

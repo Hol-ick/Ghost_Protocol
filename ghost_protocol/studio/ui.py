@@ -1,5 +1,6 @@
 """Five-space editorial UI. User actions cross StudioService; rendering is read-only."""
 from decimal import Decimal
+import hashlib
 import html
 import json
 import os
@@ -16,8 +17,23 @@ ROOT = Path(__file__).resolve().parents[2]
 NAV = ['작업실','페르소나·규칙','실험실','운영 기록','설정']
 
 
+def service_dependency_revision(paths=None):
+    """Change the Streamlit resource key when a cached worker implementation changes."""
+    dependencies = paths or (
+        Path(__file__).with_name('adapters.py'),
+        Path(__file__).with_name('legacy_collection.py'),
+        Path(__file__).with_name('service.py'),
+    )
+    digest = hashlib.sha256()
+    for dependency in dependencies:
+        path = Path(dependency)
+        digest.update(path.name.encode('utf-8'))
+        digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
 @st.cache_resource
-def get_service(directory):
+def get_service(directory, implementation_revision):
     return StudioService(directory)
 
 
@@ -497,7 +513,10 @@ def settings_page(service):
 def render_studio():
     st.set_page_config(page_title='Ghost Protocol · Studio',page_icon='◌',layout='wide',initial_sidebar_state='collapsed')
     st.markdown('<style>'+Path(__file__).with_name('studio.css').read_text(encoding='utf-8')+'</style>',unsafe_allow_html=True)
-    service = get_service(os.getenv('STUDIO_DATA_DIR',str(ROOT/'data/studio')))
+    service = get_service(
+        os.getenv('STUDIO_DATA_DIR',str(ROOT/'data/studio')),
+        service_dependency_revision(),
+    )
     st.markdown('<header class="studio-mast"><div class="studio-brand">Ghost Protocol</div></header>',unsafe_allow_html=True)
     initial = st.query_params.get('view','작업실')
     if 'studio_next_view' in st.session_state:

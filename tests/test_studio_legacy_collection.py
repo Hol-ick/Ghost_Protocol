@@ -1,5 +1,27 @@
 from ghost_protocol.scraper import ScrapeResult
-from ghost_protocol.studio.legacy_collection import collect_legacy_board
+import asyncio
+
+from ghost_protocol.studio.legacy_collection import collect_legacy_board, run_legacy_collection_loop
+
+
+def test_legacy_collection_uses_proactor_loop_on_windows(monkeypatch):
+    calls = []
+
+    class Loop:
+        def run_until_complete(self, coroutine):
+            calls.append('run')
+            return asyncio.run(coroutine)
+
+        def close(self):
+            calls.append('close')
+
+    monkeypatch.setattr(asyncio, 'ProactorEventLoop', lambda: Loop())
+
+    async def value():
+        return 'ok'
+
+    assert run_legacy_collection_loop(value()) == 'ok'
+    assert calls == ['run', 'close']
 
 
 def test_studio_uses_original_list_and_detail_collector_without_db_writes():
