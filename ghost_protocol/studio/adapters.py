@@ -11,11 +11,14 @@ class StudioBackend:
 
     def collect(self, work, payload, log):
         self._allow_external()
-        from ghost_protocol.scraper import TrendScraper
-        with TrendScraper(purpose='studio_read') as scraper:
-            source = scraper.collect_trending(gallery_id=work['gallery'], gallery_type=work['gallery_type'],
-                pages=payload['pages'], source_detail_limit=6, source_comments_per_post=3, progress_callback=log)
-        source.update(source_kind='board_collection', origin='게시판 ID 보호 수집')
+        from .legacy_collection import collect_legacy_board
+        source = collect_legacy_board(
+            gallery_id=work['gallery'],
+            gallery_type=work['gallery_type'],
+            pages=payload['pages'],
+            log=log,
+        )
+        source.update(source_kind='board_collection', origin='기존 Ghost Protocol 브라우저 수집')
         return source
 
     def _brain(self, model, meter):

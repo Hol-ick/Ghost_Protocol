@@ -149,3 +149,20 @@ def test_event_detail_strips_exception_url_and_query(tmp_path) -> None:
     event = access.report()["events"][0]
     assert event["detail"] == "Timeout at [url]"
     assert "private" not in (tmp_path / "source_access.jsonl").read_text(encoding="utf-8")
+
+
+def test_ordinary_wait_phrase_does_not_trigger_a_block_stop(tmp_path) -> None:
+    transport = _FakeTransport(
+        [BoardReadResponse(status=200, body="<html><body>잠시 후 다시 보면 된다</body></html>", url="https://example.test/list")]
+    )
+    access = GuardedBoardAccess(
+        transport=transport,
+        purpose="test",
+        min_interval_seconds=0,
+        ledger_path=tmp_path / "source_access.jsonl",
+    )
+
+    response = access.get_html("https://example.test/list", kind="list")
+
+    assert not response.blocked
+    assert access.report()["status"] == "ok"
