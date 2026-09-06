@@ -29,6 +29,15 @@ button:focus-visible,input:focus-visible,textarea:focus-visible { outline:3px so
 .studio-brand { font-family:Georgia,serif; font-size:1.15rem; letter-spacing:-.04em; color:var(--ink); }
 .studio-context { display:flex; flex-wrap:wrap; gap:.6rem 1.5rem; padding:.65rem 0; border-bottom:1px solid var(--line); margin-bottom:.35rem; color:var(--muted); font-size:.87rem; }
 .studio-context strong { color:var(--ink); font-weight:600; }
+.studio-draft-meta { color:var(--muted); font-size:.85rem; margin:.25rem 0 .8rem; overflow-wrap:anywhere; }
+.studio-unsaved { color:#946200; font-size:.85rem; }
+.st-key-draft_editor [data-testid="stVerticalBlock"] { gap:.6rem; }
+.st-key-work_toolbar [data-testid="stHorizontalBlock"],
+.st-key-review_picker [data-testid="stHorizontalBlock"] { flex-wrap:nowrap; gap:.65rem; }
+.st-key-work_toolbar [data-testid="stColumn"],
+.st-key-review_picker [data-testid="stColumn"] { min-width:0!important; }
+.st-key-work_toolbar [data-testid="stColumn"]:last-child { min-width:86px!important; }
+.st-key-review_picker [data-testid="stColumn"]:not(:first-child) { min-width:58px!important; }
 .studio-paper { padding:1.5rem 1.7rem; background:var(--paper); border:1px solid var(--line); border-left:4px solid var(--iris); border-radius:0 10px 10px 0; margin:.5rem 0 1rem; min-height:165px; }
 .studio-paper h3 { font-size:1.22rem!important; line-height:1.5; margin:.5rem 0 .8rem; overflow-wrap:anywhere; }
 .studio-paper p { white-space:pre-wrap; font-size:1rem; }
