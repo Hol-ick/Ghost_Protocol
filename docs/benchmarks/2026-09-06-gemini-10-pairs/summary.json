@@ -1,0 +1,42 @@
+{
+  "models": {
+    "gemini-2.5-flash": {
+      "attempts": 10,
+      "ready": 10,
+      "api_seconds": 26.256,
+      "input_tokens": 68276,
+      "output_tokens": 583,
+      "thinking_tokens": 0,
+      "cached_tokens": 1906,
+      "usage_missing_calls": 0,
+      "cost_usd": "0.02142568"
+    },
+    "gemini-3.1-flash-lite": {
+      "attempts": 10,
+      "ready": 10,
+      "api_seconds": 24.843,
+      "input_tokens": 68276,
+      "output_tokens": 1062,
+      "thinking_tokens": 0,
+      "cached_tokens": 0,
+      "usage_missing_calls": 0,
+      "cost_usd": "0.01866200"
+    }
+  },
+  "total_cost_usd": "0.04008768",
+  "wall_seconds": 87.01,
+  "pricing_date": "2026-09-06",
+  "rates_per_million_usd": {
+    "gemini-2.5-flash": [
+      "0.30",
+      "2.50",
+      "0.03"
+    ],
+    "gemini-3.1-flash-lite": [
+      "0.25",
+      "1.50",
+      "0.025"
+    ]
+  },
+  "billing_note": "API usage x standard paid rates; not an invoice. Free tier, credits, taxes excluded. Missing usage is unknown, not zero."
+}
