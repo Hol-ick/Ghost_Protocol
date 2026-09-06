@@ -3,7 +3,7 @@
 html { color-scheme:light; }
 .stApp { background:var(--canvas); color:var(--ink); }
 [data-testid="stHeader"] { background:transparent; }
-[data-testid="stMainBlockContainer"] { max-width:1260px; padding:2.4rem 2.6rem 4rem; }
+[data-testid="stMainBlockContainer"] { max-width:1260px; padding:1.2rem 2.6rem 3rem; }
 .stApp, input, textarea, button { font-family:'Segoe UI','Malgun Gothic',sans-serif; }
 h1,h2,h3,p,label { color:var(--ink); }
 h1 { font-size:2rem!important; letter-spacing:-.045em; line-height:1.25!important; }
@@ -16,8 +16,8 @@ p { line-height:1.65; overflow-wrap:break-word; }
 div[data-testid="stForm"] { background:var(--paper); border:1px solid var(--line); padding:1.35rem; }
 [data-baseweb="input"], [data-baseweb="textarea"], [data-baseweb="select"]>div { background:white!important; border-color:#c9d1de!important; color:var(--ink)!important; }
 input,textarea,[data-baseweb="select"] { color:var(--ink)!important; font-size:15px!important; }
-button[kind="primary"], [data-testid="stFormSubmitButton"] button[kind="primary"] { background:var(--iris)!important; border-color:var(--iris)!important; color:white!important; }
-button[kind="primary"] p { color:white!important; }
+button[kind="primary"], button[kind="primaryFormSubmit"] { background:var(--iris)!important; border-color:var(--iris)!important; color:white!important; }
+button[kind="primary"] p, button[kind="primaryFormSubmit"] p { color:white!important; }
 [data-testid="stAppDeployButton"] { display:none; }
 button[kind="secondary"], button[kind="tertiary"] { color:var(--ink); background:var(--paper); border-color:var(--line); }
 button { min-height:40px!important; border-radius:8px!important; }
@@ -25,22 +25,14 @@ button:focus-visible,input:focus-visible,textarea:focus-visible { outline:3px so
 [role="radiogroup"] { gap:.55rem!important; flex-wrap:wrap!important; }
 [role="radiogroup"] label { padding:.4rem .7rem; border-radius:7px; background:white; border:1px solid var(--line); }
 [role="radiogroup"] label:has(input:checked) { background:#eeebfa; border-color:var(--iris); }
-.studio-mast { display:flex; justify-content:space-between; gap:1rem; align-items:center; padding-bottom:1.25rem; border-bottom:1px solid var(--line); margin-bottom:.5rem; }
-.studio-brand { font-family:Georgia,serif; font-size:1.48rem; letter-spacing:-.04em; color:var(--ink); }
-.studio-brand small { font:600 .68rem 'Segoe UI',sans-serif; display:block; color:var(--iris); letter-spacing:.16em; margin-top:.25rem; }
-.studio-local { color:var(--muted); font-size:.8rem; text-align:right; }
-.studio-local b { color:#35715a; font-weight:600; }
+.studio-mast { padding-bottom:.4rem; border-bottom:1px solid var(--line); }
+.studio-brand { font-family:Georgia,serif; font-size:1.15rem; letter-spacing:-.04em; color:var(--ink); }
 .studio-context { display:flex; flex-wrap:wrap; gap:.6rem 1.5rem; padding:.65rem 0; border-bottom:1px solid var(--line); margin-bottom:.35rem; color:var(--muted); font-size:.87rem; }
 .studio-context strong { color:var(--ink); font-weight:600; }
-.studio-kicker { color:var(--iris); font-size:.78rem; font-weight:700; letter-spacing:.09em; margin:1rem 0 .55rem; }
 .studio-paper { padding:1.5rem 1.7rem; background:var(--paper); border:1px solid var(--line); border-left:4px solid var(--iris); border-radius:0 10px 10px 0; margin:.5rem 0 1rem; min-height:165px; }
 .studio-paper h3 { font-size:1.22rem!important; line-height:1.5; margin:.5rem 0 .8rem; overflow-wrap:anywhere; }
 .studio-paper p { white-space:pre-wrap; font-size:1rem; }
 .studio-paper .meta { color:var(--muted); font:12px Consolas,'Malgun Gothic',monospace; }
-.studio-empty { background:white; border:1px solid var(--line); padding:2rem; border-radius:12px; margin:.8rem 0; }
-.studio-empty h3 { font-size:1.25rem!important; }
-.studio-empty p { color:var(--muted); max-width:650px; }
-.studio-step-note { color:var(--muted); font-size:.87rem; padding:0 0 .8rem; }
 [data-testid="stMetricValue"] { font:1.3rem Consolas,monospace; color:var(--ink); }
 [data-testid="stMetricLabel"] p { color:var(--muted); font-size:.85rem; }
 [data-testid="stExpander"] { background:white; border-color:var(--line); }
@@ -48,9 +40,7 @@ button:focus-visible,input:focus-visible,textarea:focus-visible { outline:3px so
 @media(max-width:700px) {
  [data-testid="stMainBlockContainer"] { padding:1.2rem 1rem 3rem; }
  .studio-brand { font-size:1.15rem; }
- .studio-local { font-size:.72rem; }
  .studio-paper { padding:1rem; }
- .studio-empty { padding:1.2rem; }
  [role="radiogroup"] { gap:.3rem!important; }
  [role="radiogroup"] label { padding:.3rem .45rem; }
  h1 { font-size:1.6rem!important; }
