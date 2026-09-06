@@ -6,7 +6,14 @@ from ghost_protocol.studio.policy import cost
 
 class FakeBackend:
     def collect(self, work, payload, log):
-        return {'titles': [], 'source_access': {'status': 'blocked', 'reason': 'empty_body'}}
+        return {
+            'source_kind': 'board_collection',
+            'gallery_id': work['gallery'],
+            'titles': ['달의 명암 경계가 보인다'],
+            'comments': ['경계가 선명하네'],
+            'raw_posts': [{'title':'달의 명암 경계가 보인다', 'content':'망원경으로 달 가장자리를 봄', 'comments':['경계가 선명하네']}],
+            'source_access': {'status': 'ok'},
+        }
 
     def analyze(self, work, model, meter):
         return {'summary': '달의 명암 관찰', 'hot_topics': ['달 그림자']}
@@ -25,21 +32,25 @@ def test_workspace_survives_restart(tmp_path):
 
 
 def test_blocked_source_cannot_start_analysis(tmp_path):
-    studio = StudioService(tmp_path, FakeBackend())
+    class BlockedBackend(FakeBackend):
+        def collect(self, work, payload, log):
+            return {'source_kind':'board_collection','titles': [], 'comments': [],
+                    'source_access': {'status':'blocked','reason':'empty_body'}}
+    studio = StudioService(tmp_path, BlockedBackend())
     work = studio.create_workspace('차단', 'universe')
     job = studio.start(work['id'], 'collect', {})
     studio.wait(job)
     assert studio.job(job)['status'] == 'failed'
-    with pytest.raises(ValueError, match='자료'):
+    with pytest.raises(ValueError, match='게시판 수집'):
         studio.start(work['id'], 'analyze', {})
 
 
 def test_edit_revokes_approval_and_exports_no_invented_comments(tmp_path):
     studio = StudioService(tmp_path, FakeBackend())
     work = studio.create_workspace('검토', 'universe')
-    studio.save_source(work['id'], '달의 명암 경계가 보인다')
+    studio.wait(studio.start(work['id'], 'collect', {}))
     studio.wait(studio.start(work['id'], 'analyze', {}))
-    studio.confirm_analysis(work['id'], '달의 명암 관찰', '관측 장면만 쓴다')
+    studio.confirm_analysis(work['id'])
     studio.wait(studio.start(work['id'], 'generate', {'tones':['neutral'], 'count':1}))
     draft = studio.workspace(work['id'])['drafts'][0]
     assert draft['target_comments'] == []
@@ -63,16 +74,16 @@ def test_cost_accounts_for_cache_and_thinking():
 def prepared(tmp_path, backend=None):
     studio = StudioService(tmp_path, backend or FakeBackend())
     work = studio.create_workspace('안전 검증', 'universe')
-    studio.save_source(work['id'], '달의 명암 경계가 보인다')
+    studio.wait(studio.start(work['id'], 'collect', {}))
     studio.wait(studio.start(work['id'], 'analyze', {}))
-    studio.confirm_analysis(work['id'], '명암 경계', '관측 사실만 쓴다')
+    studio.confirm_analysis(work['id'])
     return studio, work['id']
 
 
 def test_generation_requires_analysis_confirmation(tmp_path):
     studio = StudioService(tmp_path, FakeBackend())
     work = studio.create_workspace('미확인', 'universe')
-    studio.save_source(work['id'], '달')
+    studio.wait(studio.start(work['id'], 'collect', {}))
     studio.wait(studio.start(work['id'], 'analyze', {}))
     with pytest.raises(ValueError, match='먼저 확인'):
         studio.start(work['id'], 'generate', {'tones':['neutral']})
@@ -84,7 +95,7 @@ def test_model_cannot_confirm_its_own_analysis(tmp_path):
             return {'summary':'분석 결과', 'confirmed':True}
     studio = StudioService(tmp_path,SelfConfirmedBackend())
     wid = studio.create_workspace('확인 주체', 'universe')['id']
-    studio.save_source(wid,'달')
+    studio.wait(studio.start(wid,'collect',{}))
     studio.wait(studio.start(wid,'analyze',{}))
     assert studio.workspace(wid)['analysis']['confirmed'] is False
 
@@ -94,7 +105,7 @@ def test_source_change_invalidates_analysis_and_approved_drafts(tmp_path):
     studio.wait(studio.start(wid, 'generate', {'tones':['neutral']}))
     d = studio.workspace(wid)['drafts'][0]
     studio.approve_draft(wid, d['id'], checked=True, expected_revision=1)
-    studio.save_source(wid, '새 소재: 목성')
+    studio.wait(studio.start(wid, 'collect', {}))
     assert studio.workspace(wid)['analysis'] == {}
     assert studio.workspace(wid)['drafts'][0]['stale_source']
     assert len(studio.store.list('source_revision')) == 1
@@ -128,7 +139,7 @@ def test_cancel_preserves_partial_result_and_blocks_duplicate_jobs(tmp_path):
         with pytest.raises(ValueError, match='진행 중'):
             studio.start(wid, 'generate', {'tones':['neutral']})
         with pytest.raises(ValueError):
-            studio.save_source(wid, '동시 수정')
+            studio.start(wid, 'collect', {})
         studio.cancel(job)
     finally:
         release.set()
@@ -168,11 +179,12 @@ def test_comparison_has_identical_inputs_and_selected_persona(tmp_path):
             return super().generate(work,model,tone,topic,rules,meter)
     studio, wid = prepared(tmp_path, CaptureBackend())
     studio.save_settings({'rules':'공통 규칙', 'persona_notes':{'neutral':'차분히'}})
-    studio.wait(studio.start(wid,'compare',{'tones':['neutral'],'count':1,'topic':'달 그림자'}))
+    studio.wait(studio.start(wid,'compare',{'tones':['neutral'],'count':1}))
     assert len(received) == 2
     assert received[0][0] != received[1][0]
     assert received[0][1:] == received[1][1:]
     assert received[0][1] == 'neutral' and received[0][3] == '공통 규칙\n차분히'
+    assert '[게시판 여론 패킷]' in received[0][2]
 
 
 def test_import_is_idempotent_and_settings_survive_restart(tmp_path):
@@ -196,8 +208,20 @@ def test_offline_mode_blocks_collect_and_paid_calls(tmp_path, monkeypatch):
     studio.wait(job)
     assert studio.job(job)['status'] == 'failed'
     assert '오프라인' in studio.job(job)['error']
-    studio.save_source(wid,'달')
-    job = studio.start(wid,'analyze',{})
-    studio.wait(job)
-    assert studio.job(job)['status'] == 'failed'
+    with pytest.raises(ValueError, match='게시판 수집'):
+        studio.start(wid,'analyze',{})
     assert studio.calls() == []
+
+
+def test_generation_uses_collected_board_opinion_packet(tmp_path):
+    captured = []
+    class CaptureBackend(FakeBackend):
+        def generate(self, work, model, tone, topic, rules, meter):
+            captured.append(topic)
+            return super().generate(work, model, tone, topic, rules, meter)
+    studio, wid = prepared(tmp_path, CaptureBackend())
+    studio.wait(studio.start(wid, 'generate', {'tones':['neutral'], 'count':1}))
+    assert '[게시판 여론 패킷]' in captured[0]
+    assert '원본 글: 달의 명암 경계가 보인다' in captured[0]
+    assert '원본 댓글: 경계가 선명하네' in captured[0]
+    assert '달의 명암 관찰' in captured[0]

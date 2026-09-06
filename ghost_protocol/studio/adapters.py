@@ -2,7 +2,6 @@
 from dataclasses import asdict
 import os
 import time
-import sqlite3
 
 
 class StudioBackend:
@@ -14,21 +13,10 @@ class StudioBackend:
         self._allow_external()
         from ghost_protocol.scraper import TrendScraper
         with TrendScraper(purpose='studio_read') as scraper:
-            return scraper.collect_trending(gallery_id=work['gallery'], gallery_type=work['gallery_type'],
+            source = scraper.collect_trending(gallery_id=work['gallery'], gallery_type=work['gallery_type'],
                 pages=payload['pages'], source_detail_limit=6, source_comments_per_post=3, progress_callback=log)
-
-    def stored(self, work, payload, log):
-        from ghost_protocol.config import DB_PATH
-        # Read-only URI: no schema edits, no init_db side effects.
-        from pathlib import Path
-        if not Path(DB_PATH).exists():
-            raise ValueError('기존 DB가 없습니다. 직접 자료를 입력하세요.')
-        with sqlite3.connect(Path(DB_PATH).as_uri()+'?mode=ro', uri=True) as conn:
-            conn.row_factory = sqlite3.Row
-            posts = [dict(r) for r in conn.execute('SELECT post_id,title,content,created_at FROM posts WHERE gallery_id=? ORDER BY scraped_at DESC LIMIT 30', (work['gallery'],))]
-        log(f'기존 DB에서 {len(posts)}개 읽음 — 새 수집 없음')
-        return {'titles':[p['title'] for p in posts if p['title']], 'comments':[], 'raw_posts':posts,
-                'gallery_id':work['gallery'],'origin':'기존 DB (과거 자료)', 'source_access':{'status':'ok'}}
+        source.update(source_kind='board_collection', origin='게시판 ID 보호 수집')
+        return source
 
     def _brain(self, model, meter):
         self._allow_external()
@@ -52,7 +40,7 @@ class StudioBackend:
         return brain
 
     def analyze(self, work, model, meter):
-        return self._brain(model, meter).analyze_trend(work['source'])
+        return self._brain(model, meter).analyze_trend(work['source'], include_gallery_identity=False)
 
     def generate(self, work, model, tone, topic, rules, meter):
         if rules.strip():

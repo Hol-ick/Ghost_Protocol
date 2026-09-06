@@ -2,7 +2,7 @@ from ghost_protocol.studio.presentation import resume_step
 
 
 def work(drafts=None, **updates):
-    return {'source':{'titles':['달'], 'source_access':{'status':'ok'}},
+    return {'source':{'source_kind':'board_collection','titles':['달'], 'source_access':{'status':'ok'}},
             'analysis':{'summary':'달 관찰', 'confirmed':True},
             'drafts':drafts or [], 'stage':'approval', **updates}
 

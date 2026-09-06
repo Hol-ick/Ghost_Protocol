@@ -37,3 +37,16 @@ def test_real_adapter_preserves_entire_master_prompt_and_persona(model, monkeypa
     assert telemetry[0][0] == model
     assert telemetry[0][1]['prompt'] == captured[0].prompt
     assert 'not-a-real-key' not in json.dumps(telemetry[0][1])
+
+
+def test_studio_analysis_disables_id_derived_identity_context(monkeypatch):
+    received = {}
+    class Brain:
+        def analyze_trend(self, source, **kwargs):
+            received.update(source=source, **kwargs)
+            return {'summary':'관측된 반응'}
+    backend = StudioBackend()
+    monkeypatch.setattr(backend, '_brain', lambda *args: Brain())
+    source = {'gallery_id':'universe','titles':['실제 수집 글'], 'comments':[]}
+    assert backend.analyze({'source':source}, 'gemini-3.1-flash-lite', lambda *args:None) == {'summary':'관측된 반응'}
+    assert received == {'source':source, 'include_gallery_identity':False}

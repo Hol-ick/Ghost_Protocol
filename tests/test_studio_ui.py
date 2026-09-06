@@ -55,9 +55,8 @@ def test_unsaved_edit_survives_navigation_and_blocks_approval(app):
 
 def test_create_second_workspace_selects_new_work(app):
     import_fixture(app)
-    assert not any(t.label=='작업 이름' for t in app.text_input)
     next(b for b in app.button if b.label=='새 작업').click().run()
-    next(t for t in app.text_input if t.label=='작업 이름').set_value('두 번째 작업')
+    next(t for t in app.text_input if t.label=='게시판 ID').set_value('space')
     next(b for b in app.button if b.label=='작업 만들기').click().run()
     assert not app.exception
     assert next(r for r in app.radio if r.label=='작업 단계').value=='source'
@@ -71,16 +70,15 @@ def test_minimum_batch_setting_does_not_break_generation_screen(app):
     app.radio(key='studio_view').set_value('작업실').run()
     next(r for r in app.radio if r.label=='작업 단계').set_value('draft').run()
     assert not app.exception
-    assert next(n for n in app.number_input if n.label=='만들 원고 수').value==1
+    assert not any(t.label=='소재' for t in app.text_area)
 
 
-def test_source_save_advances_and_keeps_work_after_reload(app):
-    next(t for t in app.text_input if t.label=='작업 이름').set_value('자료 테스트')
+def test_source_page_has_no_direct_input_or_stored_database_path(app):
     next(b for b in app.button if b.label=='작업 만들기').click().run()
-    next(t for t in app.text_area if t.label=='원본 자료').set_value('달 그림자 관측')
-    next(b for b in app.button if b.label=='자료 저장').click().run()
     assert not app.exception
-    assert next(r for r in app.radio if r.label=='작업 단계').value=='analysis'
+    assert any(b.label=='수집 시작' for b in app.button)
+    assert not any(t.label in ('원본 자료','작업 이름','소재') for t in list(app.text_area) + list(app.text_input))
+    assert not any('DB 자료' in b.label for b in app.button)
 
 
 def test_panels_have_no_static_explanations(app):
@@ -97,24 +95,12 @@ def test_panels_have_no_static_explanations(app):
     assert not any('안전 규칙' in s.value for s in app.subheader)
 
 
-def test_compact_generation_keeps_explicit_paid_consent(app):
-    import_fixture(app)
-    next(r for r in app.radio if r.label=='작업 단계').set_value('draft').run()
-    consent = next(c for c in app.checkbox if c.label=='Google API 전송·과금 동의')
-    assert consent.value is False
-    next(b for b in app.button if b.label=='원고 생성').click().run()
-    assert not app.exception
-    assert any('API 사용량 동의' in e.value for e in app.error)
-
-
-def test_source_input_survives_navigation_without_saving(app):
-    next(t for t in app.text_input if t.label=='작업 이름').set_value('입력 보존')
+def test_source_page_requires_consent_before_collection(app):
     next(b for b in app.button if b.label=='작업 만들기').click().run()
-    next(t for t in app.text_area if t.label=='원본 자료').set_value('저장 전 관측 메모').run()
-    app.radio(key='studio_view').set_value('설정').run()
-    app.radio(key='studio_view').set_value('작업실').run()
-    assert not app.exception
-    assert next(t for t in app.text_area if t.label=='원본 자료').value=='저장 전 관측 메모'
+    collect = next(b for b in app.button if b.label=='수집 시작')
+    assert collect.disabled
+    next(c for c in app.checkbox if c.label=='게시판 수집 동의').check().run()
+    assert not next(b for b in app.button if b.label=='수집 시작').disabled
 
 
 def test_review_next_previous_preserves_unsaved_edit(app):
@@ -132,20 +118,17 @@ def test_modal_cancel_keeps_current_work(app):
     import_fixture(app)
     wid = app.query_params['work'][0]
     next(b for b in app.button if b.label=='새 작업').click().run()
-    next(t for t in app.text_input if t.label=='작업 이름').set_value('취소할 작업')
     next(b for b in app.button if b.label=='취소').click().run()
     assert not app.exception
     assert app.query_params['work'][0] == wid
-    assert not any(t.label=='작업 이름' for t in app.text_input)
+    assert not any(t.label=='게시판 ID' for t in app.text_input)
 
 
-def test_analysis_edits_survive_navigation(app):
+def test_analysis_fixture_cannot_bypass_board_collection(app):
     import_fixture(app)
     next(r for r in app.radio if r.label=='작업 단계').set_value('analysis').run()
-    next(t for t in app.text_area if t.label=='이번 작문 지시').set_value('저장 전 작문 지시').run()
-    app.radio(key='studio_view').set_value('설정').run()
-    app.radio(key='studio_view').set_value('작업실').run()
-    assert next(t for t in app.text_area if t.label=='이번 작문 지시').value=='저장 전 작문 지시'
+    assert any('수집 필요' in info.value for info in app.info)
+    assert not any(t.label=='이번 작문 지시' for t in app.text_area)
 
 
 def test_last_approval_exports_and_edit_returns_to_review(app):
@@ -178,19 +161,7 @@ def test_approval_does_not_resume_to_export_while_pending_drafts_remain(app):
     assert next(s for s in refreshed.selectbox if s.label=='검토할 원고').value != first_id
 
 
-def test_saved_analysis_uses_current_buffer(app):
-    import_fixture(app)
-    next(r for r in app.radio if r.label=='작업 단계').set_value('analysis').run()
-    next(t for t in app.text_area if t.label=='이번 작문 지시').set_value('관측 장면으로 시작').run()
-    next(b for b in app.button if b.label=='분석 확인 · 원고 제작으로').click().run()
-    assert not app.exception
-    assert next(r for r in app.radio if r.label=='작업 단계').value=='draft'
-    next(r for r in app.radio if r.label=='작업 단계').set_value('analysis').run()
-    assert next(t for t in app.text_area if t.label=='이번 작문 지시').value=='관측 장면으로 시작'
-
-
 def test_lab_missing_source_link_opens_the_correct_work(app):
-    next(t for t in app.text_input if t.label=='작업 이름').set_value('실험 준비')
     next(b for b in app.button if b.label=='작업 만들기').click().run()
     app.radio(key='studio_view').set_value('실험실').run()
     next(b for b in app.button if b.label=='자료·분석 확인').click().run()

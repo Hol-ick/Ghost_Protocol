@@ -7,7 +7,8 @@ import json
 import random
 import threading
 import time
-from .policy import MODELS, source_ready, analysis_ready, cost, draft_warnings
+from .policy import MODELS, analysis_ready, cost, draft_warnings
+from .opinion_packet import build_opinion_packet, is_board_collection
 from .store import StudioStore, now
 
 
@@ -28,7 +29,7 @@ class StudioService:
 
     def create_workspace(self, name, gallery, gallery_type='board'):
         if not name.strip() or not re.fullmatch(r'[A-Za-z0-9_]+', gallery):
-            raise ValueError('작업 이름과 영문/숫자/밑줄 게시판 ID를 입력하세요.')
+            raise ValueError('영문/숫자/밑줄 게시판 ID를 입력하세요.')
         if gallery_type not in ('board', 'mgallery', 'mini'):
             raise ValueError('게시판 종류를 확인하세요.')
         work = {'id': uuid4().hex, 'name': name.strip()[:120], 'gallery': gallery, 'gallery_type': gallery_type,
@@ -83,37 +84,24 @@ class StudioService:
         if self.busy():
             raise ValueError('진행 중인 작업이 있습니다. 완료 또는 중단 후 수정하세요.')
 
-    def save_source(self, id, text):
-        if not text.strip() or len(text) > 100000:
-            raise ValueError('자료를 1~100,000자로 입력하세요.')
-        source = {'titles': [s.strip() for s in text.splitlines() if s.strip()], 'comments':[],
-                  'source_access':{'status':'ok'}, 'origin':'직접 입력', 'collected_at':now()}
-        with self._lock:
-            self._editable()
-            work = self.workspace(id)
-            source.update(gallery_id=work['gallery'])
-            self._set_source(work, source)
-
     def _set_source(self, work, source):
         if work['source']:
             self.store.put('source_revision', uuid4().hex, {'workspace_id':work['id'], 'source':work['source'], 'analysis':work['analysis']})
         work['source'] = source
         work['analysis'] = {}
-        work['stage'] = 'analysis' if source_ready(source) else 'source'
+        work['stage'] = 'analysis' if is_board_collection(source) else 'source'
         for d in work['drafts']:
             d['approved_revision'] = None
             d['stale_source'] = True
         self._save(work)
 
-    def confirm_analysis(self, id, summary, guidance):
+    def confirm_analysis(self, id):
         with self._lock:
             self._editable()
             work = self.workspace(id)
-            if not source_ready(work['source']) or not analysis_ready(work['analysis']):
-                raise ValueError('정상 자료와 분석이 먼저 필요합니다.')
-            if not summary.strip():
-                raise ValueError('분석 요약을 입력하세요.')
-            work['analysis'].update(summary=summary, generation_guidance=guidance, confirmed=True)
+            if not is_board_collection(work['source']) or not analysis_ready(work['analysis']):
+                raise ValueError('정상 게시판 수집과 분석이 먼저 필요합니다.')
+            work['analysis']['confirmed'] = True
             work['stage'] = 'draft'
             self._save(work)
 
@@ -154,18 +142,20 @@ class StudioService:
                     {k:d[k] for k in ('id','title','content','tone','revision','approved_at')} for d in drafts]}
 
     def start(self, id, action, payload):
-        if action not in ('collect','analyze','generate','compare','stored'):
+        if action not in ('collect','analyze','generate','compare'):
             raise ValueError('지원하지 않는 작업입니다.')
         with self._lock:
             self._editable()
             work = self.workspace(id)
-            if action in ('analyze','generate','compare') and not source_ready(work['source']):
-                raise ValueError('정상 수집 또는 직접 입력한 자료가 필요합니다.')
+            if action in ('analyze','generate','compare') and not is_board_collection(work['source']):
+                raise ValueError('정상 게시판 수집 결과가 필요합니다.')
             if action in ('generate','compare') and not analysis_ready(work['analysis']):
                 raise ValueError('분석 실패를 먼저 해결하세요. 자동 초안은 중단합니다.')
             if action in ('generate','compare') and not work['analysis'].get('confirmed'):
                 raise ValueError('분석 요약과 작문 지시를 먼저 확인하세요.')
             if action in ('generate','compare'):
+                if str(payload.get('topic') or '').strip():
+                    raise ValueError('소재를 직접 입력할 수 없습니다. 수집된 게시판 여론으로만 생성합니다.')
                 from ghost_protocol import prompt_manager as pm
                 keys = {p['key'] for p in pm.load_json('personas.json')}
                 if not payload.get('tones') or any(t not in keys for t in payload['tones']):
@@ -207,11 +197,11 @@ class StudioService:
         log('작업 시작 — ' + job['action'])
         start = time.perf_counter()
         try:
-            if job['action'] in ('collect','stored'):
-                source = getattr(self.backend, job['action'])(work, payload, log)
+            if job['action'] == 'collect':
+                source = self.backend.collect(work, payload, log)
                 with self._lock:
                     self._set_source(work, source)
-                if not source_ready(source):
+                if not is_board_collection(source):
                     raise ValueError('수집 중단: ' + str(source.get('source_access',{}).get('reason') or '자료 없음'))
             elif job['action'] == 'analyze':
                 analysis = self.backend.analyze(work, settings['model'], meter)
@@ -226,18 +216,16 @@ class StudioService:
                 models = MODELS if job['action']=='compare' else (settings['model'],)
                 for index in range(payload['count']):
                     tone = payload['tones'][index % len(payload['tones'])]
-                    source_titles = work['source'].get('titles',[])
-                    topic = payload.get('topic','').strip() or source_titles[index % len(source_titles)]
-                    topic = '\n\n'.join([topic, str(work['analysis'].get('generation_guidance',''))])
+                    opinion_packet = build_opinion_packet(work['source'], work['analysis'], index)
                     rules = '\n'.join(filter(None, [settings['rules'],settings['persona_notes'].get(tone,'')]))
                     for model in models:
                         if event.is_set():
                             break
                         random.seed(index+20260906)
-                        result = self.backend.generate(work, model, tone, topic, rules, meter)
+                        result = self.backend.generate(work, model, tone, opinion_packet, rules, meter)
                         draft = {'id':uuid4().hex, 'title':result.get('title',''), 'content':result.get('content',''),
-                                 'target_comments':[], 'tone':tone, 'model':model, 'source_topic':topic,
-                                 'warnings':draft_warnings(result, topic), 'raw':result, 'revision':1,
+                                 'target_comments':[], 'tone':tone, 'model':model, 'source_topic':opinion_packet,
+                                 'warnings':draft_warnings(result, opinion_packet), 'raw':result, 'revision':1,
                                  'approved_revision':None, 'failed':bool(result.get('_parse_error') or not result.get('title')),
                                  'job_id':job['id'], 'pair':index+1}
                         work['drafts'].append(draft)

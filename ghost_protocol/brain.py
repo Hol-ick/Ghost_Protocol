@@ -1349,6 +1349,8 @@ class GhostBrain:
         self,
         raw_data: dict,
         top_k: int = 30,
+        *,
+        include_gallery_identity: bool = True,
     ) -> dict:
         """수집된 Raw 데이터로 갤러리 트렌드를 분석하여 JSON 반환.
 
@@ -1470,7 +1472,7 @@ class GhostBrain:
             prompt = pm.render(
                 "trend_analysis.txt",
                 gallery_id=gallery_id,
-                gallery_identity_context=gallery_purpose.analysis_context(gallery_id),
+                gallery_identity_context=(gallery_purpose.analysis_context(gallery_id) if include_gallery_identity else ""),
                 rehearsal_analysis_notes=str(raw_data.get("rehearsal_analysis_notes") or ""),
                 top_k_count=min(len(top_keywords), 20),
                 kw_text=kw_text,
@@ -1654,9 +1656,9 @@ class GhostBrain:
             source_text=_sensitive_source,
         )
 
-        # Current scrape data describes the moment. The ID-derived profile
-        # preserves the board's durable subject across rehearsal cycles.
-        identity = gallery_purpose.identity_metadata(gallery_id)
+        # Studio analysis is grounded only in the current collection.  Legacy
+        # callers may still opt into a durable gallery identity for rehearsal.
+        identity = gallery_purpose.identity_metadata(gallery_id) if include_gallery_identity else None
         if identity:
             result["gallery_identity"] = identity
         if identity and not intel_result.is_parse_failed(result):

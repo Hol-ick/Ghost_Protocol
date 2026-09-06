@@ -15,11 +15,14 @@ from ghost_protocol.studio.service import StudioService
 
 
 class OfflineBackend:
-    def collect(self, *args):
-        raise ValueError('UI 검증용: 외부 수집 차단')
-
-    def stored(self, *args):
-        raise ValueError('UI 검증용: 운영 DB 접근 차단')
+    def collect(self, work, *args):
+        return {
+            'source_kind':'board_collection', 'gallery_id':work['gallery'],
+            'origin':'UI 검증용 합성 수집', 'source_access':{'status':'ok'},
+            'titles':['달의 명암 경계가 보인다'], 'comments':['경계가 선명하네'],
+            'raw_posts':[{'title':'달의 명암 경계가 보인다','content':'망원경으로 가장자리를 봄',
+                          'comments':['경계가 선명하네']}],
+        }
 
     def analyze(self, work, model, meter):
         return {'summary':'UI 검증용 합성 분석: 달의 명암 경계 관찰',

@@ -1,13 +1,13 @@
 """Five-space editorial UI. User actions cross StudioService; rendering is read-only."""
 from decimal import Decimal
-import hashlib
 import html
 import json
 import os
 from pathlib import Path
 import streamlit as st
 from ghost_protocol import prompt_manager as pm
-from .policy import MODELS, STAGES, source_ready, analysis_ready
+from .policy import MODELS, STAGES, analysis_ready
+from .opinion_packet import is_board_collection
 from .service import StudioService
 from .presentation import is_approved, resume_step
 
@@ -38,19 +38,6 @@ def step_button(work, step, label):
         st.session_state['studio_view'] = '작업실'
         st.session_state['studio_next_work'] = work['id']
     st.button(label,on_click=open_step)
-
-
-def fingerprint(value):
-    return hashlib.sha256(json.dumps(value,ensure_ascii=False,sort_keys=True).encode()).hexdigest()[:16]
-
-
-def buffered_area(label, value, scope, **kwargs):
-    # Widget keys are cleaned up when a page disappears; the buffer is not.
-    buffer_key, widget_key = 'buffer_'+scope, 'input_'+scope
-    saved = st.session_state.setdefault(buffer_key,value)
-    def remember():
-        st.session_state[buffer_key] = st.session_state[widget_key]
-    return st.text_area(label,value=saved,key=widget_key,on_change=remember,**kwargs)
 
 
 def paper(title, body, meta=''):
@@ -103,14 +90,13 @@ def new_work_form(service, *, cancel=False):
     if st.session_state.get('studio_next_work'):
         st.rerun()  # A dialog fragment hands the newly created work to the full page.
     def create_work():
-        w = run_action(lambda:service.create_workspace(st.session_state['new_work_name'],
-            st.session_state['new_work_gallery'],st.session_state['new_work_kind']))
+        gallery = st.session_state['new_work_gallery']
+        w = run_action(lambda:service.create_workspace(gallery, gallery, st.session_state['new_work_kind']))
         if w:
             st.session_state['studio_work'] = w['id']
             st.session_state['studio_next_work'] = w['id']
             st.query_params['work'] = w['id']
     with st.form('new_workspace'):
-        st.text_input('작업 이름',placeholder='예: 우주 갤러리 · 저녁 원고',key='new_work_name')
         a,b = st.columns([3,2])
         a.text_input('게시판 ID',value='universe',key='new_work_gallery')
         b.selectbox('게시판 종류',['board','mgallery','mini'],key='new_work_kind',format_func=lambda s:{'board':'정규','mgallery':'마이너','mini':'미니'}[s])
@@ -149,40 +135,38 @@ def choose_work(service):
 
 def source_page(service, work):
     raw = work['source']
-    if raw and not source_ready(raw):
-        st.error('수집 중단 · ' + str(raw.get('source_access',{}).get('reason','자료 없음')) + ' — 원본 확인 전 분석하지 않습니다.')
+    collected = is_board_collection(raw)
+    if raw and not collected:
+        reason = str(raw.get('source_access',{}).get('reason','')).strip()
+        if reason:
+            st.error('수집 중단 · ' + reason + ' — 원본 확인 전 분석하지 않습니다.')
+        else:
+            st.info('이전 원고 작업입니다. 새 수집부터 시작하세요.')
     with st.container(border=True):
-        scope = 'source_'+work['id']+'_'+fingerprint(raw)
-        text = buffered_area('원본 자료','\n'.join(raw.get('titles',[])),
-                            scope,height=220,
-                            placeholder='한 줄에 한 소재',help='개인정보 제외 · 자료 교체 시 이전 승인 해제')
-        if text != '\n'.join(raw.get('titles',[])):
-            st.markdown('<div class="studio-unsaved">미저장</div>',unsafe_allow_html=True)
-        def save_source():
-            if run_action(lambda:(service.save_source(work['id'],st.session_state['input_'+scope]),True)[1]):
-                move_to(work,'analysis')
-        st.button('자료 저장',type='primary',disabled=bool(service.busy()),on_click=save_source)
-    with st.expander('저장된 자료 / 보호 수집'):
-        if st.button('기존 DB 자료 불러오기',disabled=bool(service.busy())):
-            launch(service,work,'stored',{})
         pages = st.number_input('목록 페이지',1,3,service.settings()['pages'])
         consent = st.checkbox('게시판 수집 동의')
-        if st.button('보호 수집 시작',disabled=bool(service.busy()) or not consent):
+        label = '다시 수집' if collected else '수집 시작'
+        if st.button(label,type='primary',disabled=bool(service.busy()) or not consent):
             launch(service,work,'collect',{'pages':pages})
-    if raw:
-        with st.expander('원본 스냅샷 확인'):
+    if collected:
+        st.caption(f"글 {len(raw.get('titles', []))} · 댓글 {len(raw.get('comments', []))} · 수집 결과만 분석에 사용")
+        with st.expander('수집 결과'):
+            st.json({'titles':raw.get('titles', []), 'comments':raw.get('comments', []),
+                     'raw_posts':raw.get('raw_posts', [])})
+    elif raw:
+        with st.expander('수집 원본 로그'):
             st.json(raw)
 
 
 def analysis_page(service, work):
-    if not source_ready(work['source']):
-        empty('자료 없음')
-        step_button(work,'source','자료 입력')
+    if not is_board_collection(work['source']):
+        empty('수집 필요')
+        step_button(work,'source','수집으로')
         return
     left,right = st.columns([1,1.35],gap='large')
     with left:
         st.subheader('수집 근거')
-        st.caption(work['source'].get('origin','보호 수집 자료') + ' · ' + str(len(work['source']['titles']))+'개 소재')
+        st.caption(work['source'].get('origin','게시판 ID 보호 수집') + ' · ' + str(len(work['source']['titles']))+'개 소재')
         with st.container(height=min(390,max(110,len(work['source']['titles'])*85)),border=True):
             for line in work['source']['titles'][:60]:
                 st.write(line)
@@ -196,12 +180,13 @@ def analysis_page(service, work):
                 st.code(a.get('_raw_response','응답 없음'),language=None)
         if analysis_ready(a):
             with st.container(border=True):
-                scope = 'analysis_'+work['id']+'_'+fingerprint(a)
-                summary = buffered_area('분석 요약',a.get('summary',''),scope+'_summary',height=125)
-                guidance = buffered_area('이번 작문 지시',a.get('generation_guidance',''),scope+'_guidance',height=165)
+                st.write(a.get('summary',''))
+                if a.get('ai_analysis'):
+                    st.write(a['ai_analysis'])
+                if a.get('generation_guidance'):
+                    st.write(a['generation_guidance'])
                 def confirm():
-                    if run_action(lambda:(service.confirm_analysis(work['id'],
-                        st.session_state['input_'+scope+'_summary'],st.session_state['input_'+scope+'_guidance']),True)[1]):
+                    if run_action(lambda:(service.confirm_analysis(work['id']),True)[1]):
                         move_to(work,'draft')
                 st.button('분석 확인 · 원고 제작으로',type='primary',disabled=bool(service.busy()),on_click=confirm)
         consent = st.checkbox('Google API 전송·과금 동의',key='analysis_consent')
@@ -210,7 +195,7 @@ def analysis_page(service, work):
 
 
 def draft_controls(service, work, compare=False):
-    if not analysis_ready(work['analysis']):
+    if not is_board_collection(work['source']) or not analysis_ready(work['analysis']):
         empty('분석 필요')
         step_button(work,resume_step(work),'자료·분석 확인')
         return
@@ -221,7 +206,6 @@ def draft_controls(service, work, compare=False):
     names = {p['key']:p['name'] for p in pm.load_json('personas.json')}
     with st.form('draft_controls_'+str(compare)):
         tones = st.multiselect('사용할 페르소나',list(names),default=['cynical','neutral','analytical'],format_func=lambda k:names[k])
-        topic = st.text_area('소재',placeholder='자동 선택',height=95)
         count = st.number_input('모델당 원고 수' if compare else '만들 원고 수',1,service.settings()['max_drafts'],min(3,service.settings()['max_drafts']))
         paid = st.checkbox('Google API 전송·과금 동의')
         go = st.form_submit_button('두 모델 비교 실행' if compare else '원고 생성',type='primary',disabled=bool(service.busy()))
@@ -229,7 +213,7 @@ def draft_controls(service, work, compare=False):
             if not paid:
                 st.error('API 사용량 동의를 확인하세요.')
             else:
-                launch(service,work,'compare' if compare else 'generate',{'tones':tones,'count':count,'topic':topic})
+                launch(service,work,'compare' if compare else 'generate',{'tones':tones,'count':count})
 
 
 def review_page(service, work):
