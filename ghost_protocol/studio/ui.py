@@ -91,6 +91,26 @@ def collection_error_dialog(diagnostic, job):
     st.subheader('수집 진행 로그')
     lines = collection_job_log_lines(job)
     st.code('\n'.join(lines) if lines else (job or {}).get('error') or '진행 로그 없음', language=None)
+    if (job or {}).get('exception'):
+        st.json(job['exception'])
+
+
+def timeline_text(service, workspace_id):
+    lines = [(e['at'], e['message']) for e in service.events(workspace_id)]
+    for job in service.job_timeline(workspace_id):
+        lines += [(entry['at'], f'[{job["action"]} {job["id"][:8]}] {entry["message"]}')
+                  for entry in job.get('logs', [])]
+        if job.get('exception'):
+            lines.append((job['created'], json.dumps(job['exception'],ensure_ascii=False)))
+    return '\n'.join(f'{at} {message}' for at,message in sorted(lines,key=lambda x:x[0]))
+
+
+@st.dialog('작업 로그',width='large')
+def work_log_dialog(service, workspace_id):
+    text = timeline_text(service, workspace_id)
+    st.download_button('전체 로그 저장', text, file_name=f'studio-{workspace_id[:8]}.log',mime='text/plain')
+    with st.container(height=360):
+        st.code(text or '실행 기록 없음',language=None)
 
 
 def job_record_rows(jobs):
@@ -109,13 +129,11 @@ def job_record_rows(jobs):
 
 def active_stage(work, state, workspace_id):
     ready = resume_step(work)
-    focused = state.get('studio_stage_focus_'+workspace_id)
-    # A Streamlit session can outlive a completed background job.  Never let a
-    # stale focus value send the operator back to an earlier card.
-    if focused == ready:
-        return focused
-    state.pop('studio_stage_focus_'+workspace_id, None)
-    return ready
+    focus_key, seen_key = 'studio_stage_focus_'+workspace_id, 'studio_phase_seen_'+workspace_id
+    if state.get(seen_key) != ready:
+        state[seen_key] = ready
+        state.pop(focus_key, None)
+    return state.get(focus_key, ready)
 
 
 def render_live_job(service, workspace_id):
@@ -123,7 +141,7 @@ def render_live_job(service, workspace_id):
     if not job or job.get('workspace_id') != workspace_id:
         return
     st.progress(job['progress']/max(1,job['total']), text=f"{job['action']} · {job['progress']}/{job['total']} 진행 중")
-    with st.container(height=240, border=True):
+    with st.container(height=140, border=True):
         st.code('\n'.join(collection_job_log_lines(job)[-60:]) or '작업을 시작했습니다.', language=None)
     if st.button('현재 작업 중단', key='studio_cancel',help='현재 요청이 끝난 뒤 중단'):
         service.cancel(job['id'])
@@ -179,20 +197,30 @@ def new_work_dialog(service):
 
 
 def choose_work(service):
-    works = service.workspaces()
+    # Widget options must not reorder when a worker saves its result. Labels
+    # must also be unique: Streamlit serializes selectbox values as labels.
+    works = sorted(service.workspaces(), key=lambda w:(w['created'],w['id']))
     if not works:
         new_work_form(service)
         return None
     by_id = {w['id']:w for w in works}
     if pending := st.session_state.pop('studio_next_work',None):
-        st.session_state['studio_work_selector'] = pending
+        st.session_state['studio_work'] = pending
         st.query_params['work'] = pending
     selected = st.query_params.get('work') or st.session_state.get('studio_work')
-    selected = selected if selected in by_id else works[0]['id']
+    selected = selected if selected in by_id else max(works,key=lambda w:w['updated'])['id']
+    st.session_state['studio_work_selector'] = selected
+    def remember_work():
+        chosen = st.session_state['studio_work_selector'] or selected
+        st.session_state['studio_work_selector'] = chosen
+        st.session_state['studio_work'] = chosen
+        st.query_params['work'] = chosen
+        service.record_event(chosen, 'workspace_selected', '작업 선택')
     with st.container(key='work_toolbar'):
         picker,creator = st.columns([6,1],vertical_alignment='bottom')
-        selected = picker.selectbox('현재 작업',list(by_id),index=list(by_id).index(selected),
-            format_func=lambda id:by_id[id]['name'],key='studio_work_selector')
+        selected = picker.selectbox('현재 작업',list(by_id),index=None,
+            format_func=lambda id:f"{by_id[id]['name']} · {id[:8]}",
+            key='studio_work_selector', on_change=remember_work)
         if creator.button('새 작업',width='stretch'):
             new_work_dialog(service)
     st.session_state['studio_work'] = selected
@@ -241,34 +269,33 @@ def analysis_page(service, work):
     if not is_board_collection(work['source']):
         empty('수집 필요')
         return
-    left,right = st.columns([1,1.35],gap='large')
+    a = work['analysis']
+    analyze, confirm_col = st.columns(2)
+    if analyze.button('자료 분석' if not a else '분석 다시 실행',disabled=bool(service.busy()),width='stretch'):
+        launch(service,work,'analyze',{})
+    def confirm():
+        if run_action(lambda:(service.confirm_analysis(work['id']),True)[1]):
+            st.session_state['studio_stage_focus_'+work['id']] = 'draft'
+    confirm_col.button('분석 확인 · 원고 제작으로',type='primary',disabled=bool(service.busy()) or not analysis_ready(a),on_click=confirm,width='stretch')
+    left,right = st.columns([1,1.35],gap='medium')
     with left:
         st.subheader('수집 근거')
-        st.caption(work['source'].get('origin','게시판 ID 보호 수집') + ' · ' + str(len(work['source']['titles']))+'개 소재')
-        with st.container(height=min(390,max(110,len(work['source']['titles'])*85)),border=True):
+        with st.container(height=260,border=True):
             for line in work['source']['titles'][:60]:
                 st.write(line)
-                st.divider()
     with right:
         st.subheader('분석')
-        a = work['analysis']
         if a.get('_parse_error'):
             st.error('분석 파싱 실패 · 원본 응답 확인 필요')
             with st.expander('실패한 원본 응답'):
                 st.code(a.get('_raw_response','응답 없음'),language=None)
         if analysis_ready(a):
-            with st.container(border=True):
+            with st.container(height=260,border=True):
                 st.write(a.get('summary',''))
                 if a.get('ai_analysis'):
                     st.write(a['ai_analysis'])
                 if a.get('generation_guidance'):
                     st.write(a['generation_guidance'])
-                def confirm():
-                    if run_action(lambda:(service.confirm_analysis(work['id']),True)[1]):
-                        st.session_state['studio_stage_focus_'+work['id']] = 'draft'
-                st.button('분석 확인 · 원고 제작으로',type='primary',disabled=bool(service.busy()),on_click=confirm)
-        if st.button('자료 분석' if not a else '분석 다시 실행',disabled=bool(service.busy())):
-            launch(service,work,'analyze',{})
 
 
 def draft_controls(service, work, compare=False):
@@ -367,12 +394,15 @@ def review_page(service, work):
     with right:
         st.markdown(f'<div class="studio-draft-meta">{esc(names.get(d["tone"],d["tone"]))} · {esc(d["model"])} · v{d["revision"]}</div>',unsafe_allow_html=True)
         st.subheader('원본')
-        st.write(d.get('source_topic',''))
+        with st.container(height=160,border=True):
+            st.write(d.get('source_topic',''))
         with st.expander('페르소나'):
             st.write(names.get(d['tone'],d['tone']))
             st.write(pm.load_json('persona_profiles.json').get(d['tone'],{}).get('vocab_style',''))
-        for warning in d.get('warnings',[]):
-            st.warning(warning)
+        if d.get('warnings'):
+            with st.expander(f'확인 사항 {len(d["warnings"])}개'):
+                for warning in d['warnings']:
+                    st.warning(warning)
         if d.get('stale_source'):
             st.error('자료 변경 전 원고입니다. 새 자료로 다시 생성하세요.')
         with st.expander('생성 원문 / 제외된 댓글'):
@@ -387,14 +417,15 @@ def approval_page(service, work):
         return
     st.subheader(f"승인한 원고 {len(packet['drafts'])}개")
     st.info('승인됨 · 미게시')
-    for d in packet['drafts']:
-        paper(d['title'],d['content'],f"{work['gallery']} · v{d['revision']} · 승인됨")
     markdown = '\n\n---\n\n'.join(f"# {d['title']}\n\n{d['content']}" for d in packet['drafts'])
     a,b = st.columns(2)
     a.download_button('승인 원고 Markdown 저장',markdown,file_name='approved-drafts.md',mime='text/markdown')
     b.download_button('승인 패키지 JSON 저장',json.dumps(packet,ensure_ascii=False,indent=2),file_name='approved-drafts.json',mime='application/json')
     from ghost_protocol.config import get_write_url
     st.link_button('게시판 글쓰기 직접 열기',get_write_url(work['gallery_type'],work['gallery']))
+    with st.container(height=220,border=True):
+        for d in packet['drafts']:
+            paper(d['title'],d['content'],f"{work['gallery']} · v{d['revision']} · 승인됨")
 
 
 FLOW = (
@@ -423,15 +454,40 @@ def workbench(service, work=None):
     work = work or choose_work(service)
     if not work:
         return
-    st.markdown(f'<div class="studio-context"><span>게시판 <strong>{esc(work["gallery"])}</strong></span><span>모델 <strong>{esc(service.settings()["model"])}</strong></span><span>비용 <strong>{money(service.calls(work["id"]))}</strong></span></div>',unsafe_allow_html=True)
+    st.markdown(f'<div class="studio-context"><span>{esc(work["gallery"])} · {esc(service.settings()["model"])}</span><span>작업 비용 <strong>{money(service.calls(work["id"]))}</strong></span><span>누적 비용 <strong>{money(service.calls())}</strong></span></div>',unsafe_allow_html=True)
     ready = active_stage(work, st.session_state, work['id'])
     renderers = {'source':source_page,'analysis':analysis_page,'draft':draft_controls,'review':review_page,'approval':approval_page}
-    active_index = next(index for index, (stage, _) in enumerate(FLOW) if stage == ready)
-    for index, (stage, label) in enumerate(FLOW[:active_index + 1], start=1):
-        current = stage == ready
-        title = f"{index}. {label}" if current else f"{index}. {label} · {flow_summary(stage, work)}"
-        with st.expander(title, expanded=current):
-            renderers[stage](service, work)
+    enabled = {'source'}
+    if is_board_collection(work['source']):
+        enabled.add('analysis')
+        if analysis_ready(work['analysis']) and work['analysis'].get('confirmed'):
+            enabled.add('draft')
+    if work['drafts']:
+        enabled.add('review')
+    if any(is_approved(d) for d in work['drafts']):
+        enabled.add('approval')
+    if ready not in enabled:
+        ready = resume_step(work)
+    rail, canvas = st.columns([1,5],gap='medium')
+    def open_stage(stage):
+        st.session_state['studio_stage_focus_'+work['id']] = stage
+        service.record_event(work['id'], 'stage_opened', dict(FLOW)[stage]+' 화면 열기')
+    with rail.container(key='stage_rail'):
+        for stage,label in FLOW:
+            st.button(label,key='open_'+stage, type='primary' if stage==ready else 'secondary',
+                width='stretch',disabled=stage not in enabled,
+                on_click=open_stage,args=(stage,))
+        if st.button('작업 로그',width='stretch'):
+            work_log_dialog(service,work['id'])
+    with canvas.container(key='work_canvas',border=True):
+        progress(service, work['id'])
+        jobs = service.job_timeline(work['id'])
+        if jobs and jobs[0]['status'] in ('failed','interrupted','cancelled'):
+            last = jobs[0]
+            st.error((last.get('error') or '작업이 중단되었습니다.')[:180])
+            if st.button('실행 오류 상세'):
+                work_log_dialog(service,work['id'])
+        renderers[ready](service,work)
 
 
 def personas(service):
@@ -494,8 +550,10 @@ def lab(service):
         if not works:
             st.info('작업 없음')
         else:
-            wid = st.selectbox('비교 작업',[w['id'] for w in works],format_func=lambda id:next(w['name'] for w in works if w['id']==id))
+            works = sorted(works,key=lambda w:(w['created'],w['id']))
+            wid = st.selectbox('비교 작업',[w['id'] for w in works],format_func=lambda id:next(w['name'] for w in works if w['id']==id)+' · '+id[:8])
             draft_controls(service,service.workspace(wid),compare=True)
+            progress(service,wid)
     comparison_jobs = [j for j in service.jobs() if j['action']=='compare']
     if comparison_jobs:
         st.subheader('새 비교 결과')
@@ -515,20 +573,30 @@ def history(service):
     a.metric('저장된 작업',len(service.workspaces()))
     b.metric('API 응답 기록',len(calls))
     c.metric('계산 비용',money(calls))
-    st.caption('일반 유료 단가 기준 · 2026.09.06 · 과거 실험 비용 제외')
-    jobs = service.jobs()
+    works = service.workspaces()
+    choices = {'':'전체 작업', **{w['id']:w['name']+' · '+w['id'][:8] for w in works}}
+    wid = st.selectbox('기록할 작업',list(choices),format_func=choices.get)
+    jobs = service.job_timeline(wid) if wid else service.jobs()
     if not jobs:
         empty('실행 기록 없음')
     else:
         st.subheader('실행 이력')
         st.dataframe(job_record_rows(jobs), hide_index=True, width='stretch')
-    for j in jobs[:30]:
-        with st.expander(f"{j['created']} · {j['action']} · {j['status']} · 로그 {len(j.get('logs') or [])}"):
-            if j.get('error'):
-                st.error(j['error'])
-            st.code('\n'.join(collection_job_log_lines(j)) or '기록된 로그 없음', language=None)
+    if jobs:
+        jid = st.selectbox('실행 상세',[j['id'] for j in jobs],format_func=lambda id:next(f'{j["created"]} · {j["action"]} · {j["status"]} · {id[:8]}' for j in jobs if j['id']==id))
+        j = service.job(jid)
+        if j.get('error'):
+            st.error(j['error'])
+        text = timeline_text(service,j['workspace_id'])
+        st.download_button('전체 로그 저장',text,file_name=f'studio-{j["workspace_id"][:8]}.log',mime='text/plain')
+        with st.container(height=200):
+            st.code('\n'.join(collection_job_log_lines(j)),language=None)
+            if j.get('exception'):
+                st.json(j['exception'])
+    with st.expander('조작 기록'):
+        st.dataframe(service.events(wid or None),hide_index=True)
     with st.expander('호출별 사용량·실제 전달 프롬프트'):
-        for i,call in enumerate(calls[:50]):
+        for i,call in enumerate(service.calls(wid or None)):
             with st.expander(f"{i+1} · {call['model']} · {call['seconds']}초 · ${call.get('cost_usd') or '미확인'}"):
                 st.json(call)
     st.divider()
@@ -575,7 +643,7 @@ def render_studio():
     if view=='작업실':
         selected_work = choose_work(service)
         if selected_work:
-            progress(service, selected_work['id'])
             workbench(service, selected_work)
     else:
-        {'페르소나·규칙':personas,'실험실':lab,'운영 기록':history,'설정':settings_page}[view](service)
+        with st.container(key='auxiliary_canvas'):
+            {'페르소나·규칙':personas,'실험실':lab,'운영 기록':history,'설정':settings_page}[view](service)

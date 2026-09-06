@@ -7,7 +7,7 @@ from contextlib import contextmanager
 
 
 def now():
-    return datetime.now(timezone.utc).isoformat(timespec='seconds')
+    return datetime.now(timezone.utc).isoformat(timespec='microseconds')
 
 
 class StudioStore:

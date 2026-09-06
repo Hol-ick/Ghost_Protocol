@@ -10,6 +10,7 @@ import time
 from .policy import MODELS, analysis_ready, cost, draft_warnings
 from .opinion_packet import build_opinion_packet, is_board_collection
 from .store import StudioStore, now
+from .diagnostics import safe_message, exception_detail
 
 
 class StudioService:
@@ -25,6 +26,7 @@ class StudioService:
         for job in self.store.list('job'):
             if job['status'] in ('running', 'queued'):
                 job.update(status='interrupted', error='프로세스 재시작으로 중단됨. 자동 재실행하지 않았습니다.')
+                job.setdefault('logs', []).append({'at':now(), 'message':job['error']})
                 self.store.put('job', job['id'], job)
 
     def create_workspace(self, name, gallery, gallery_type='board'):
@@ -35,6 +37,7 @@ class StudioService:
         work = {'id': uuid4().hex, 'name': name.strip()[:120], 'gallery': gallery, 'gallery_type': gallery_type,
                 'stage': 'source', 'source': {}, 'analysis': {}, 'drafts': [], 'created': now(), 'updated': now()}
         self.store.put('workspace', work['id'], work)
+        self.record_event(work['id'], 'workspace_created', '작업 생성')
         return work
 
     def workspace(self, id):
@@ -63,6 +66,14 @@ class StudioService:
             current['max_drafts'] = max(1, min(10, int(current['max_drafts'])))
             self.store.put('settings_revision', uuid4().hex, {**current, 'saved':now()})
             self.store.put('settings', 'main', current)
+            self.record_event('', 'settings_saved', '모델·설정·작문 규칙 저장')
+
+    def record_event(self, workspace_id, action, message):
+        self.store.put('event', uuid4().hex, {'workspace_id':workspace_id,
+            'action':action, 'message':safe_message(message), 'at':now()})
+
+    def events(self, workspace_id=None):
+        return [e for e in self.store.list('event') if workspace_id is None or e['workspace_id']==workspace_id]
 
     def _save(self, work):
         work['updated'] = now()
@@ -108,6 +119,7 @@ class StudioService:
             work['analysis']['confirmed'] = True
             work['stage'] = 'draft'
             self._save(work)
+            self.record_event(id, 'analysis_confirmed', '분석 확인 · 원고 제작으로 이동')
 
     def save_draft(self, id, draft_id, title, content, *, expected_revision):
         with self._lock:
@@ -122,6 +134,7 @@ class StudioService:
             d.update(title=title.strip(), content=content, revision=d['revision']+1, approved_revision=None)
             d['warnings'] = draft_warnings(d, d.get('source_topic',''))
             self._save(work)
+            self.record_event(id, 'draft_saved', f'원고 {draft_id} 수정 저장 · v{d["revision"]}')
 
     def approve_draft(self, id, draft_id, *, checked=False, expected_revision):
         with self._lock:
@@ -135,6 +148,7 @@ class StudioService:
             d.update(approved_revision=d['revision'], approved_at=now())
             work['stage'] = 'approval'
             self._save(work)
+            self.record_event(id, 'draft_approved', f'원고 {draft_id} 승인 · v{d["revision"]}')
 
     def export_approved(self, id):
         work = self.workspace(id)
@@ -181,6 +195,8 @@ class StudioService:
     def cancel(self, id):
         if id in self._cancel:
             self._cancel[id].set()
+            job = self.job(id)
+            self.record_event(job['workspace_id'], 'cancel_requested', f'실행 {id} 중단 요청')
 
     def wait(self, id, timeout=15):
         self._threads[id].join(timeout)
@@ -190,13 +206,14 @@ class StudioService:
     def _run(self, job, work, payload, settings):
         event = self._cancel[job['id']]
         def log(message):
-            job['logs'].append({'at':now(), 'message':str(message)[:500]})
+            job['logs'].append({'at':now(), 'message':safe_message(message)})
             self.store.put('job', job['id'], job)
         def meter(model, request, response, seconds, error=''):
             usage = response.usage if response else {}
             self.store.put('call', uuid4().hex, {'job_id':job['id'], 'workspace_id':work['id'],
                 'model':model, 'usage':usage, 'cost_usd':cost(model,usage), 'seconds':seconds, 'created':now(),
                 'request':request, 'response':response.text if response else '', 'error':error})
+            log(f'API 응답 · {model} · {seconds}초 · 비용 ${cost(model,usage) or "미확인"}' + (f' · 오류 {error}' if error else ''))
         job['status'] = 'running'
         log('작업 시작 — ' + job['action'])
         start = time.perf_counter()
@@ -209,6 +226,7 @@ class StudioService:
                     reason = str(source.get('source_access',{}).get('reason') or '자료 없음')
                     raise ValueError('수집 중단: ' + reason + ' — 수집 카드의 접근 진단을 확인하세요.')
             elif job['action'] == 'analyze':
+                log(f'분석 요청 · {settings["model"]} · 글 {len(work["source"].get("titles",[]))}개')
                 analysis = self.backend.analyze(work, settings['model'], meter)
                 # Confirmation is an operator decision, never a model-provided field.
                 analysis['confirmed'] = False
@@ -217,6 +235,7 @@ class StudioService:
                 if not analysis_ready(analysis):
                     raise ValueError('분석 파싱 실패 — 원본 응답을 확인하세요.')
                 work['stage'] = 'analysis'
+                log('분석 저장 완료 · 분석 확인 대기')
             else:
                 models = MODELS if job['action']=='compare' else (settings['model'],)
                 for index in range(payload['count']):
@@ -227,6 +246,7 @@ class StudioService:
                         if event.is_set():
                             break
                         random.seed(index+20260906)
+                        log(f'원고 요청 {job["progress"]+1}/{job["total"]} · {model} · 페르소나 {tone}')
                         result = self.backend.generate(work, model, tone, opinion_packet, rules, meter)
                         draft = {'id':uuid4().hex, 'title':result.get('title',''), 'content':result.get('content',''),
                                  'target_comments':[], 'tone':tone, 'model':model, 'source_topic':opinion_packet,
@@ -258,7 +278,9 @@ class StudioService:
                 }.get(job['action'], '')
         except Exception as exc:
             job['status'] = 'failed'
-            job['error'] = str(exc)[:400] if isinstance(exc, ValueError) else f'{type(exc).__name__} — 연결/키/할당량을 확인하세요. 자동 재시도하지 않습니다.'
+            job['exception'] = exception_detail(exc)
+            job['error'] = f'{type(exc).__name__}: {safe_message(exc)}'
+            log(job['error'])
         finally:
             job['seconds'] = round(time.perf_counter()-start,3)
             log('작업 ' + job['status'])

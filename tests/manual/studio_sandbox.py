@@ -6,6 +6,8 @@ from pathlib import Path
 import os
 import sys
 import tempfile
+import time
+from types import SimpleNamespace
 
 import streamlit as st
 
@@ -16,6 +18,10 @@ from ghost_protocol.studio.service import StudioService
 
 class OfflineBackend:
     def collect(self, work, *args):
+        if len(args)>1 and callable(args[1]):
+            args[1]('검증용 목록 요청 시작')
+            time.sleep(1)
+            args[1]('검증용 목록 HTTP 200 · 파싱 중')
         if os.getenv('GHOST_STUDIO_SANDBOX_BLOCKED') == '1':
             if len(args) > 1 and callable(args[1]):
                 args[1]('목록 수집 중... (1/1 페이지)')
@@ -42,15 +48,21 @@ class OfflineBackend:
         }
 
     def analyze(self, work, model, meter):
+        time.sleep(1)
+        meter(model, {'test':'analysis'}, SimpleNamespace(text='합성 분석 응답',
+            usage={'prompt_token_count':1000,'candidates_token_count':100}),1)
         return {'summary':'UI 검증용 합성 분석: 달의 명암 경계 관찰',
                 'hot_topics':['달의 명암 경계'], 'generation_guidance':'입력한 관측 장면만 짧게 쓴다.'}
 
     def generate(self, work, model, tone, topic, rules, meter):
+        time.sleep(1)
+        meter(model, {'test':'generation'}, SimpleNamespace(text='합성 원고 응답',
+            usage={'prompt_token_count':1000,'candidates_token_count':100}),1)
         return {'title':'UI 검증용 원고 · 달의 경계', 'content':'밝은 면과 어두운 면의 경계가 보임'}
 
 
 @st.cache_resource
-def sandbox_service(_directory):
+def sandbox_service(_directory, _revision=None):
     name = os.getenv('GHOST_STUDIO_SANDBOX_NAME','')
     if name:
         if not name.startswith('ghost-studio-usability-') or Path(name).name != name:
@@ -60,6 +72,8 @@ def sandbox_service(_directory):
         directory = tempfile.mkdtemp(prefix='ghost-studio-usability-')
     service = StudioService(directory,OfflineBackend())
     service.import_benchmark()
+    for _ in range(3):
+        service.create_workspace('universe','universe')
     print('UI_SANDBOX_DIRECTORY='+directory,flush=True)
     return service
 

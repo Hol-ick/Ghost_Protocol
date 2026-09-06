@@ -141,6 +141,7 @@ def test_last_approval_exports_and_edit_returns_to_review(app):
         next(b for b in app.button if b.label=='승인·다음').click().run()
         assert not app.exception
     assert any(s.value=='승인한 원고 20개' for s in app.subheader)
+    app.button(key='open_review').click().run()
     next(r for r in app.radio if r.label=='원고 필터').set_value('승인됨').run()
     next(t for t in app.text_input if t.label=='제목 수정').set_value('승인 후 수정').run()
     next(b for b in app.button if b.label=='수정 저장').click().run()
