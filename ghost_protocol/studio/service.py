@@ -202,7 +202,8 @@ class StudioService:
                 with self._lock:
                     self._set_source(work, source)
                 if not is_board_collection(source):
-                    raise ValueError('수집 중단: ' + str(source.get('source_access',{}).get('reason') or '자료 없음'))
+                    reason = str(source.get('source_access',{}).get('reason') or '자료 없음')
+                    raise ValueError('수집 중단: ' + reason + ' — 수집 카드의 접근 진단을 확인하세요.')
             elif job['action'] == 'analyze':
                 analysis = self.backend.analyze(work, settings['model'], meter)
                 # Confirmation is an operator decision, never a model-provided field.

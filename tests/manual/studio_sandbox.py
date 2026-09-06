@@ -16,6 +16,23 @@ from ghost_protocol.studio.service import StudioService
 
 class OfflineBackend:
     def collect(self, work, *args):
+        if os.getenv('GHOST_STUDIO_SANDBOX_BLOCKED') == '1':
+            if len(args) > 1 and callable(args[1]):
+                args[1]('목록 수집 중... (1/1 페이지)')
+                args[1]('⛔ 1 페이지 수집 중단 — http_0; 추가 요청 없음')
+            return {
+                'source_kind':'board_collection', 'gallery_id':work['gallery'],
+                'origin':'UI 검증용 합성 실패', 'titles':[], 'comments':[],
+                'source_access':{
+                    'status':'blocked', 'reason':'http_0', 'request_count':1,
+                    'request_budget':20, 'purpose':'studio_read',
+                    'events':[{
+                        'at':'2026-09-06T10:00:00', 'method':'GET', 'kind':'board_list',
+                        'attempted':True, 'status':0, 'bytes':0, 'path':'/board/lists/',
+                        'reason':'http_0',
+                    }],
+                },
+            }
         return {
             'source_kind':'board_collection', 'gallery_id':work['gallery'],
             'origin':'UI 검증용 합성 수집', 'source_access':{'status':'ok'},

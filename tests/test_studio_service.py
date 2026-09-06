@@ -34,13 +34,22 @@ def test_workspace_survives_restart(tmp_path):
 def test_blocked_source_cannot_start_analysis(tmp_path):
     class BlockedBackend(FakeBackend):
         def collect(self, work, payload, log):
+            log('목록 수집 중... (1/1 페이지)')
             return {'source_kind':'board_collection','titles': [], 'comments': [],
-                    'source_access': {'status':'blocked','reason':'empty_body'}}
+                    'source_access': {
+                        'status':'blocked', 'reason':'http_0', 'request_count':1,
+                        'request_budget':20, 'purpose':'studio_read',
+                        'events':[{'at':'2026-09-06T10:00:00','method':'GET','kind':'board_list',
+                                   'attempted':True,'status':0,'bytes':0,'path':'/board/lists/',
+                                   'reason':'http_0'}],
+                    }}
     studio = StudioService(tmp_path, BlockedBackend())
     work = studio.create_workspace('차단', 'universe')
     job = studio.start(work['id'], 'collect', {})
     studio.wait(job)
     assert studio.job(job)['status'] == 'failed'
+    assert studio.workspace(work['id'])['source']['source_access']['events'][0]['reason'] == 'http_0'
+    assert '접근 진단' in studio.job(job)['error']
     with pytest.raises(ValueError, match='게시판 수집'):
         studio.start(work['id'], 'analyze', {})
 

@@ -10,6 +10,7 @@ from .policy import MODELS, analysis_ready
 from .opinion_packet import is_board_collection
 from .service import StudioService
 from .presentation import is_approved, resume_step
+from .source_diagnostics import collection_access_diagnostic, collection_job_log_lines
 
 ROOT = Path(__file__).resolve().parents[2]
 NAV = ['작업실','페르소나·규칙','실험실','운영 기록','설정']
@@ -68,6 +69,8 @@ def progress(service):
         if finished:
             if finished['status']=='done':
                 st.session_state['studio_notice'] = '작업 완료'
+            elif finished.get('action') == 'collect':
+                st.session_state['studio_notice'] = '수집 중단 · 수집 카드의 접근 진단을 확인하세요.'
             else:
                 st.session_state['studio_error'] = finished.get('error') or '작업 중단'
             st.session_state.pop('studio_step',None)
@@ -124,12 +127,39 @@ def choose_work(service):
 def source_page(service, work):
     raw = work['source']
     collected = is_board_collection(raw)
-    if raw and not collected:
-        reason = str(raw.get('source_access',{}).get('reason','')).strip()
-        if reason:
-            st.error('수집 중단 · ' + reason + ' — 원본 확인 전 분석하지 않습니다.')
-        else:
-            st.info('이전 원고 작업입니다. 새 수집부터 시작하세요.')
+    collection_jobs = [
+        job for job in service.jobs()
+        if job.get('workspace_id') == work['id'] and job.get('action') == 'collect'
+    ]
+    last_collection_job = collection_jobs[0] if collection_jobs else None
+    access_report = raw.get('source_access') if isinstance(raw, dict) else None
+    access_reason = str((access_report or {}).get('reason') or '').strip()
+    failed_collection = bool(last_collection_job and last_collection_job.get('status') == 'failed')
+    if raw and not collected and not access_reason:
+        st.info('이전 원고 작업입니다. 새 수집부터 시작하세요.')
+    if access_reason or failed_collection:
+        diagnostic = collection_access_diagnostic(access_report)
+        st.error('수집 중단 · ' + diagnostic['reason'] + ' — 원본 확인 전 분석하지 않습니다.')
+        st.caption(diagnostic['meaning'])
+        status, requests, purpose = st.columns(3)
+        status.metric('수집 상태', diagnostic['status'])
+        requests.metric('요청', diagnostic['request_label'])
+        purpose.metric('목적', diagnostic['purpose'])
+        with st.expander('접근 진단', expanded=True):
+            st.caption('안전 원장: logs/source_access.jsonl · URL 쿼리, 응답 본문, 쿠키, 세션은 기록하지 않습니다.')
+            events = diagnostic['events']
+            if events:
+                st.dataframe(events, hide_index=True, width='stretch')
+                st.caption('원장 전체 필드')
+                st.code(json.dumps(events, ensure_ascii=False, indent=2), language='json')
+            else:
+                st.info('접근 원장 이벤트가 없습니다. 수집기 시작 전 오류일 수 있으니 진행 로그를 확인하세요.')
+        log_lines = collection_job_log_lines(last_collection_job)
+        with st.expander('수집 진행 로그', expanded=True):
+            if log_lines:
+                st.code('\n'.join(log_lines), language=None)
+            else:
+                st.code((last_collection_job or {}).get('error') or '진행 로그 없음', language=None)
     with st.container(border=True):
         pages = st.number_input('목록 페이지',1,3,service.settings()['pages'])
         label = '다시 수집' if collected else '수집 시작'
