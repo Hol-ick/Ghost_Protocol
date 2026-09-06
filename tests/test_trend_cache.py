@@ -46,7 +46,7 @@ def test_analyze_trend_reuses_cached_llm_result(monkeypatch, tmp_path):
             candidates=[SimpleNamespace(finish_reason="FinishReason.STOP")],
         )
 
-    brain = GhostBrain.__new__(GhostBrain)
+    brain = GhostBrain(provider=SimpleNamespace(), model_name="qwen2.5:3b")
     brain._generate_content_paced = fake_generate_content
 
     raw_data = {

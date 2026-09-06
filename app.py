@@ -25,26 +25,8 @@ from dotenv import load_dotenv
 
 load_dotenv()  # .env 파일을 환경변수로 주입 (없어도 무해)
 
-# ── Local Ollama configuration: environment is the single source of truth ──
-_OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").strip()
-_OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "qwen2.5:3b").strip() or "qwen2.5:3b"
-_OLLAMA_FALLBACK_MODELS: tuple[str, ...] = tuple(
-    item.strip()
-    for item in os.getenv("OLLAMA_FALLBACK_MODELS", "qwen2.5:7b").split(",")
-    if item.strip()
-)
-_OLLAMA_TIMEOUT_SEC: float = max(1.0, float(os.getenv("OLLAMA_TIMEOUT_SEC", "120") or 120))
-_OLLAMA_NUM_CTX: int = max(
-    1,
-    int(
-        os.getenv(
-            "OLLAMA_NUM_CTX",
-            "8192" if any(marker in _OLLAMA_MODEL.lower() for marker in (":7b", ":8b", ":9b", ":14b", ":32b")) else "4096",
-        )
-        or 4096
-    ),
-)
-_OLLAMA_KEEP_ALIVE: str = os.getenv("OLLAMA_KEEP_ALIVE", "10m").strip() or "10m"
+# API model/key configuration is shared with GhostBrain.
+from ghost_protocol.application.provider_factory import create_provider
 
 if sys.platform.startswith("win"):
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
@@ -61,7 +43,6 @@ from ghost_protocol.application import draft_generation
 from ghost_protocol.application import intel_result
 from ghost_protocol.application import llm_usage
 from ghost_protocol.application import llm_throttle
-from ghost_protocol.application.ollama_client import OllamaClient
 from ghost_protocol.application.llm_provider import (
     LLMModelNotFoundError,
     LLMTimeoutError,
@@ -935,7 +916,7 @@ def _intel_worker(
     try:
         brain = GhostBrain()
     except Exception as e:
-        _log(f"❌ 로컬 LLM 초기화 실패: {str(e)[:100]}")
+        _log(f"❌ LLM 초기화 실패: {str(e)[:100]}")
         log_q.put(worker_contracts.worker_message(worker_contracts.MSG_INTEL_DONE))
         return
 
@@ -984,7 +965,7 @@ def _intel_worker(
         log_q.put(worker_contracts.worker_message(worker_contracts.MSG_INTEL_DONE))
         return
 
-    _log("🧠 Ollama 트렌드 분석 중...")
+    _log("🧠 API 트렌드 분석 중...")
     result = None
     for attempt in range(3):
         try:
@@ -992,7 +973,7 @@ def _intel_worker(
             break
         except llm_usage.LLMCostOrQuotaError as exc:
             detail = re.sub(r"\s+", " ", str(exc)).strip()[:220]
-            _log(f"⛔ 로컬 LLM 비용/쿼터 제한 — 분석 중단: {detail}")
+            _log(f"⛔ LLM 비용/쿼터 제한 — 분석 중단: {detail}")
             break
         except llm_usage.LLMBudgetExceededError as exc:
             _log(f"⛔ LLM 호출 예산 초과 — 분석 중단: {str(exc)[:180]}")
@@ -1007,7 +988,7 @@ def _intel_worker(
                     f"({attempt + 1}/3)"
                 )
                 time.sleep(backoff)
-                _log("🧠 Ollama 트렌드 분석 재시도 중...")
+                _log("🧠 API 트렌드 분석 재시도 중...")
                 continue
             detail = re.sub(r"\s+", " ", str(exc)).strip()[:220]
             _log(f"❌ Rate Limit (429) — 분석 재시도 한도 초과: {detail}")
@@ -1523,7 +1504,7 @@ def _batch_gen_worker(
             if _ar_bot_pct > 0.5:
                 q_log(f"[AUTO-REFRESH] ⚠️ 봇 점유율 {_ar_bot_pct:.0%} — 사람 글 부족, 외부 데이터 의존 필요")
             if _ar_raw.get("titles"):
-                # ── 로컬 LLM 분석 타임아웃 래퍼 ──────────────────────────────────
+                # ── LLM 분석 타임아웃 래퍼 ──────────────────────────────────
                 # brain.analyze_trend()는 동기 로컬 Ollama 호출이며,
                 # 서비스 지연 시 무한 대기(Hang)를 유발할 수 있다.
                 # → ThreadPoolExecutor + result(timeout=25)로 25초 이내로 제한.
@@ -2891,8 +2872,8 @@ def _batch_gen_worker(
                 stop_ev.set()
                 break
             except llm_usage.LLMCostOrQuotaError as e:
-                q_log(f"[BATCH] ⛔ [{wave}] 로컬 LLM 비용/쿼터 제한 — 배치 중단: {str(e)[:120]}")
-                _failure_reason = "로컬 LLM 비용/쿼터 제한으로 생성을 중단했습니다."
+                q_log(f"[BATCH] ⛔ [{wave}] LLM 비용/쿼터 제한 — 배치 중단: {str(e)[:120]}")
+                _failure_reason = "LLM 비용/쿼터 제한으로 생성을 중단했습니다."
                 _failure_stage = "llm_cost_or_quota"
                 _failure_detail = str(e)[:500]
                 gen_title, gen_content, _tc_list = draft_generation.invalidate_candidate_state(
@@ -2935,6 +2916,7 @@ def _batch_gen_worker(
         if (
             gen_title is None
             and not rehearsal
+            and not brain.is_api
             and not stop_ev.is_set()
             and _failure_stage not in {"llm_budget_exceeded", "llm_cost_or_quota"}
         ):
@@ -4799,7 +4781,7 @@ def _render_ops_resource_card() -> str:
         + '<div class="ops-head"><b>운영 리소스</b>'
         + f'<span class="ops-pill {_ops_status_class(status)}">{_html.escape(_ops_status_word(status))}</span></div>'
         + '<div class="ops-grid">'
-        + f'<div class="ops-metric"><span>Ollama LLM</span><b>{_html.escape(budget_label)}</b><em>{_html.escape(ratio_label)}</em></div>'
+        + f'<div class="ops-metric"><span>API LLM</span><b>{_html.escape(budget_label)}</b><em>{_html.escape(ratio_label)}</em></div>'
         + f'<div class="ops-metric"><span>작문/Judge</span><b>{int(summary.get("generate_calls") or 0)}/{int(summary.get("judge_calls") or 0)}</b><em>분석 {int(summary.get("analyze_calls") or 0)}</em></div>'
         + f'<div class="ops-metric"><span>{_html.escape(usage_label)}</span><b>{_html.escape(usage_main)}</b><em>{_html.escape(usage_sub)}</em></div>'
         + '</div>'
@@ -4845,7 +4827,7 @@ def _render_ops_diagnostics_panel() -> str:
     elif not findings:
         rows.append(
             '<div class="ops-row is-good"><i class="ops-dot"></i>'
-            '<p><b>Ollama/LLM 진단 이상 없음</b><small>로컬 로그 기준으로 치명 오류는 보이지 않습니다.</small></p></div>'
+            '<p><b>API/LLM 진단 이상 없음</b><small>로컬 로그 기준으로 치명 오류는 보이지 않습니다.</small></p></div>'
         )
     feedback = stability_report.get("feedback") or {}
     if int(feedback.get("total") or 0):
@@ -5560,22 +5542,16 @@ def _review_board_fragment() -> None:
 # ══════════════════════════════════════════════
 
 # ── 공통 변수 계산 ────────────────────────────────────────────────────────────
-def _read_ollama_health() -> dict:
-    """Read local Ollama service/model readiness without any remote fallback."""
+def _read_llm_health() -> dict:
+    """API configuration check is local; only explicit local mode probes Ollama."""
 
     try:
-        client = OllamaClient(
-            base_url=_OLLAMA_BASE_URL,
-            model=_OLLAMA_MODEL,
-            timeout_seconds=min(_OLLAMA_TIMEOUT_SEC, 5.0),
-            num_ctx=_OLLAMA_NUM_CTX,
-            keep_alive=_OLLAMA_KEEP_ALIVE,
-        )
+        client = create_provider()
         return client.health()
     except (LLMUnavailableError, LLMTimeoutError, LLMModelNotFoundError) as exc:
         return {
             "ok": False,
-            "model": _OLLAMA_MODEL,
+            "model": "",
             "models": [],
             "model_available": False,
             "error": str(exc),
@@ -5583,33 +5559,21 @@ def _read_ollama_health() -> dict:
     except Exception as exc:
         return {
             "ok": False,
-            "model": _OLLAMA_MODEL,
+            "model": "",
             "models": [],
             "model_available": False,
             "error": str(exc),
         }
 
 
-_OLLAMA_HEALTH = _read_ollama_health()
-_OLLAMA_SERVICE_READY = bool(_OLLAMA_HEALTH.get("ok"))
-_OLLAMA_MODEL_READY = bool(_OLLAMA_HEALTH.get("model_available"))
-has_llm = _OLLAMA_SERVICE_READY and _OLLAMA_MODEL_READY
+_LLM_HEALTH = _read_llm_health()
+_LLM_MODEL = str(_LLM_HEALTH.get("model") or "설정 오류")
+has_llm = bool(_LLM_HEALTH.get("ok")) and bool(_LLM_HEALTH.get("model_available"))
 
 # ── API Key 누락 시 전역 경고 배너 ─────────────────────────────────────────
 if not has_llm:
-    _ollama_error = str(_OLLAMA_HEALTH.get("error") or "")
-    if not _OLLAMA_SERVICE_READY:
-        _ollama_message = (
-            "Ollama가 실행 중인지 확인하세요. 앱은 로컬 127.0.0.1 연결만 사용합니다."
-            + (f" ({_ollama_error[:120]})" if _ollama_error else "")
-        )
-        _ollama_title = "OLLAMA 연결 안 됨 — 실행 불가"
-    else:
-        _ollama_message = (
-            f"설치된 모델에서 <code>{_html.escape(_OLLAMA_MODEL)}</code>을 찾지 못했습니다. "
-            "Ollama에서 해당 모델을 먼저 설치하세요."
-        )
-        _ollama_title = "OLLAMA 모델 없음 — 실행 불가"
+    _llm_message = _html.escape(str(_LLM_HEALTH.get("error") or "모델 설정을 확인하세요."))
+    _llm_title = "LLM 설정 필요 — 실행 불가"
     st.markdown(
         '<div style="background:rgba(255,75,75,0.08);border:1px solid rgba(255,75,75,0.35);'
         'border-left:4px solid #FF4B4B;border-radius:12px;padding:16px 22px;margin-bottom:18px;'
@@ -5617,11 +5581,11 @@ if not has_llm:
         '<span style="font-size:1.5rem">🔑</span>'
         '<div>'
         '<div style="font-weight:800;font-size:0.8rem;letter-spacing:2px;'
-        f'text-transform:uppercase;color:#FF4B4B;margin-bottom:4px">{_ollama_title}</div>'
+        f'text-transform:uppercase;color:#FF4B4B;margin-bottom:4px">{_llm_title}</div>'
         '<div style="font-size:0.82rem;color:#AAAAAA;line-height:1.6">'
-        f'{_ollama_message}<br>'
+        f'{_llm_message}<br>'
         '<span style="color:#666;font-size:0.75rem">설정: <code>.env.example</code>의 '
-        'OLLAMA_BASE_URL / OLLAMA_MODEL 항목을 확인하세요.</span>'
+        'LLM_PROVIDER / GEMINI_API_KEY / GEMINI_MODEL_NAME 항목을 확인하세요.</span>'
         '</div></div></div>',
         unsafe_allow_html=True,
     )
@@ -5630,9 +5594,9 @@ if not has_llm:
 # TOP STATUS — keep the chrome quiet so the composer stays first.
 # ══════════════════════════════════════════════
 _api_status_label = (
-    f"Ollama 연결됨 · {_OLLAMA_MODEL}"
+    f"LLM 설정됨 · {_LLM_MODEL} · 실행 시 연결 확인"
     if has_llm
-    else ("Ollama 연결됨 · 모델 없음" if _OLLAMA_SERVICE_READY else "Ollama 연결 필요")
+    else "LLM 설정 필요"
 )
 _api_status_class = "is-ready" if has_llm else "is-missing"
 
@@ -5883,30 +5847,22 @@ def _render_recent_manage_panel() -> None:
             help="발행 후 최근 AI 작성글 몇 개의 댓글을 재확인할지 정합니다.",
         )
         st.caption(
-            f"Ollama · {_OLLAMA_BASE_URL} · 기본 모델 {_OLLAMA_MODEL} · "
-            f"fallback {', '.join(_OLLAMA_FALLBACK_MODELS) or '없음'} · "
-            f"timeout {_OLLAMA_TIMEOUT_SEC:g}s · context {_OLLAMA_NUM_CTX} · "
-            f"keep-alive {_OLLAMA_KEEP_ALIVE}"
+            f"모델: {_LLM_MODEL} · API 모드에서는 전체 작문 프롬프트와 기존 페르소나 사용"
         )
-        _installed_ollama_models = ", ".join(
-            str(item) for item in (_OLLAMA_HEALTH.get("models") or [])
-        ) or "확인 불가"
-        st.caption(
-            f"상태: {_api_status_label} · 설치 모델: {_installed_ollama_models}"
-        )
+        st.caption(f"상태: {_api_status_label}")
         ollama_wait_cols = st.columns([1, 1], gap="small")
         with ollama_wait_cols[0]:
             st.number_input(
-                "로컬 LLM 간격(초)",
+                "LLM 간격(초)",
                 min_value=0.0,
                 max_value=30.0,
                 step=0.5,
                 key="llm_call_min_interval_sec",
-                help="Ollama 로컬 호출 사이에 최소로 띄울 시간입니다.",
+                help="LLM 호출 사이에 최소로 띄울 시간입니다.",
             )
         with ollama_wait_cols[1]:
             st.number_input(
-                "로컬 LLM 지터(초)",
+                "LLM 지터(초)",
                 min_value=0.0,
                 max_value=10.0,
                 step=0.25,
@@ -5914,7 +5870,7 @@ def _render_recent_manage_panel() -> None:
                 help="동시에 몰리는 호출을 흩어놓기 위한 추가 랜덤 대기입니다.",
             )
         st.toggle(
-            "로컬 LLM 절약 모드",
+            "LLM 절약 모드",
             key="llm_cost_saver_mode",
             help="출력 토큰 상한을 낮추고 LLM Judge를 샘플링해 호출량을 줄입니다.",
         )
@@ -5926,7 +5882,7 @@ def _render_recent_manage_panel() -> None:
                 max_value=1000,
                 step=10,
                 key="llm_max_calls_per_run",
-                help="0이면 제한 없음. 초과 시 현재 실행의 로컬 LLM 호출을 중단합니다.",
+                help="0이면 제한 없음. 초과 시 현재 실행의 LLM 호출을 중단합니다.",
             )
         with llm_budget_cols[1]:
             st.number_input(
@@ -5935,7 +5891,7 @@ def _render_recent_manage_panel() -> None:
                 max_value=86400,
                 step=60,
                 key="llm_trend_cache_ttl_sec",
-                help="같은 게시판 스냅샷의 로컬 LLM 분석을 재사용합니다. 0이면 비활성화.",
+                help="같은 게시판 스냅샷의 LLM 분석을 재사용합니다. 0이면 비활성화.",
             )
         st.number_input(
             "무한 보충 라운드",
@@ -6071,7 +6027,7 @@ else:
         _workbench_draft_label = "원고 만들기"
 
 if not has_llm:
-    _workbench_state_text = "Ollama 준비 필요"
+    _workbench_state_text = "LLM 설정 필요"
     _workbench_state_cls = "is-blocked"
 elif not _workbench_gallery_id:
     _workbench_state_text = "게시판 필요"
@@ -7013,7 +6969,7 @@ if fire_clicked:
     _composition_profile = (st.session_state.get("intel_result") or {}).get("composition_profile")
 
     if not has_llm:
-        st.error("⚠️ Ollama가 준비되지 않았습니다. Ollama 서비스와 OLLAMA_MODEL 설치 상태를 확인하세요.")
+        st.error("⚠️ LLM 설정을 확인하세요. API 모드는 GEMINI_API_KEY와 GEMINI_MODEL_NAME이 필요합니다.")
     elif not _topic:
         st.error("⚠️ 주제를 입력하세요.")
     elif not _gallery_id:
@@ -7124,7 +7080,7 @@ if _intel_fire:
     _igtype_now = ui_options.gallery_type_for_label(_igtype_label)
 
     if not has_llm:
-        st.error("⚠️ Ollama가 준비되지 않았습니다. Ollama 서비스와 OLLAMA_MODEL 설치 상태를 확인하세요.")
+        st.error("⚠️ LLM 설정을 확인하세요. API 모드는 GEMINI_API_KEY와 GEMINI_MODEL_NAME이 필요합니다.")
     elif not _igid:
         st.error("⚠️ 갤러리 ID를 입력하세요.")
     elif _icache_valid and _icached:

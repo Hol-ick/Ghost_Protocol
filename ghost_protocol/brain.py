@@ -1,14 +1,14 @@
-"""Ghost Protocol v5.0 — local Ollama-powered post generation.
+"""Ghost Protocol — Gemini API generation with an explicit optional local adapter.
 
 Pipeline:
-  local Ollama (Qwen) → provider-neutral LLM contract
+  Gemini API → provider-neutral LLM contract
   DB (winner posts)     → Few-shot examples (content ≤ 300 chars)
   DB (recent posts)     → Context injection ("gallery mood")
                               ↓
-  Qwen → structured JSON output {title, content, target_comments}
+  Full master prompt + persona → JSON {title, content, target_comments}
 
-Model: qwen2.5:3b (GTX 1660 SUPER 기본값; 환경변수로 변경 가능)
-Output: Ollama JSON mode + robust JSON parsing
+Default model: gemini-2.5-flash (GEMINI_MODEL_NAME)
+Output: JSON schema + robust JSON parsing
 """
 
 import json
@@ -39,11 +39,11 @@ from .application.draft_pipeline import (
     build_source_brief,
 )
 from .application.llm_provider import LLMProvider, LLMRequest
-from .application.ollama_client import OllamaClient
+from .application.provider_factory import configured_model, create_provider
 from .application.prompt_compiler import compile_post_prompt
 from .domain import gallery_purpose, gallery_style, naturalness, writing_enrichment
 
-# .env 에서 로컬 Ollama 설정 로딩
+# .env provider/API configuration
 load_dotenv()
 
 
@@ -99,9 +99,9 @@ def _parse_json_robust(text: str) -> dict:
     return json.loads(candidate)
 
 # ══════════════════════════════════════════════
-# 로컬 모델 기본값. 설치된 모델과 운영 목적에 맞게 .env에서 변경할 수 있다.
+# Provider/model defaults. Local fallback names apply only to explicit local mode.
 # ══════════════════════════════════════════════
-MODEL_NAME = os.getenv("OLLAMA_MODEL", "qwen2.5:3b").strip() or "qwen2.5:3b"
+MODEL_NAME = configured_model()
 FALLBACK_MODEL_NAMES = tuple(
     model
     for model in (
@@ -157,7 +157,7 @@ def _model_prefers_full_prompt(model_name: str) -> bool:
     """Return whether a model has enough capacity for the quality-first path."""
 
     value = str(model_name or "").strip().lower()
-    return any(marker in value for marker in (":7b", ":8b", ":9b", ":14b", ":32b"))
+    return value.startswith("gemini-") or any(marker in value for marker in (":7b", ":8b", ":9b", ":14b", ":32b"))
 
 # ══════════════════════════════════════════════
 # System prompt → prompts/system_base.txt
@@ -178,7 +178,7 @@ _COMMENT_LENGTH_RULES: list[str] = [
 
 
 class GhostBrain:
-    """DC Inside 스타일 게시글 생성기 -- local Ollama provider 기반."""
+    """기존 전체 작문 지시와 페르소나를 사용하는 API 기본 생성기."""
 
     def __init__(
         self,
@@ -186,22 +186,12 @@ class GhostBrain:
         *,
         model_name: str | None = None,
     ):
-        self.model_name = (model_name or MODEL_NAME).strip() or MODEL_NAME
+        self.model_name = (model_name or configured_model()).strip()
+        self.is_api = self.model_name.startswith("gemini-")
         self.fallback_model_names = tuple(
             model for model in FALLBACK_MODEL_NAMES if model != self.model_name
-        )
-        self.provider: LLMProvider = provider or OllamaClient(
-            base_url=os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434"),
-            model=self.model_name,
-            timeout_seconds=_env_float("OLLAMA_TIMEOUT_SEC", 120.0, lower=1.0),
-            # The full writing prompt is retained for 7B-class models.  An
-            # explicit OLLAMA_NUM_CTX still wins, so small-GPU users can cap it.
-            num_ctx=_env_int(
-                "OLLAMA_NUM_CTX",
-                8192 if _model_prefers_full_prompt(self.model_name) else 4096,
-            ),
-            keep_alive=os.getenv("OLLAMA_KEEP_ALIVE", "10m").strip() or "10m",
-        )
+        ) if not self.is_api else ()
+        self.provider: LLMProvider = provider or create_provider(self.model_name)
         self._provider = self.provider
 
     # ══════════════════════════════════════════════
@@ -346,11 +336,11 @@ class GhostBrain:
         max_output_tokens: int = 1024,
         **_legacy_kwargs,
     ):
-        """Send one request through the provider-neutral local LLM contract.
+        """Send one request through the provider-neutral LLM contract.
 
         ``contents`` remains accepted as a short-lived compatibility alias so
         test doubles and older callers can migrate without changing behavior.
-        No remote fallback is attempted: the worker must remain local.
+        No automatic provider fallback is attempted.
         """
         request_prompt = prompt if prompt is not None else (contents or "")
         request = LLMRequest(
@@ -376,7 +366,7 @@ class GhostBrain:
             if self._is_rate_limit_error(err):
                 llm_throttle.note_rate_limit_pause(5.0)
             _api_logger.warning(
-                "ollama request failed label=%s model=%s detail=%s",
+                "llm request failed label=%s model=%s detail=%s",
                 label,
                 self.model_name,
                 self._describe_exception(err),
@@ -384,7 +374,7 @@ class GhostBrain:
             raise
         llm_usage.record_success(call_record, response)
         _api_logger.debug(
-            "ollama response label=%s model=%s usage=%s",
+            "llm response label=%s model=%s usage=%s",
             label,
             getattr(response, "model", self.model_name),
             getattr(response, "usage", {}),
@@ -653,9 +643,8 @@ class GhostBrain:
             parts.append(_gal_ctx)
 
         # ── 최종 작성 터널 선택 ─────────────────────────────────────────────
-        # 기본은 구조화 카드다. 긴 원본 프롬프트를 그대로 쓰는 경로는
-        # 진단·비교용으로만 LLM_DRAFT_PIPELINE_MODE=legacy로 보존한다.
-        _pipeline_mode = os.getenv("LLM_DRAFT_PIPELINE_MODE", "structured").strip().lower()
+        # API는 전체 원본 템플릿을 사용한다. 구조화 카드는 명시적 로컬 모드에만 적용한다.
+        _pipeline_mode = "legacy" if self.is_api else os.getenv("LLM_DRAFT_PIPELINE_MODE", "structured").strip().lower()
         _draft_card: DraftCard | None = None
         if _pipeline_mode in {"structured", "card"}:
             _source_brief = build_source_brief(topic, gallery_id, expected_slot)
@@ -690,10 +679,10 @@ class GhostBrain:
                 comment_enrichment_block=comment_enrichment_block,
                 shared_writing_contract=shared_writing_contract,
             )
-            _prompt_mode = os.getenv("LLM_PROMPT_MODE", "auto").strip().lower()
+            _prompt_mode = "full" if self.is_api else os.getenv("LLM_PROMPT_MODE", "auto").strip().lower()
             if _prompt_mode == "auto":
                 _prompt_mode = "full" if _model_prefers_full_prompt(self.model_name) else "focused"
-            compiled_master_prompt = compile_post_prompt(
+            compiled_master_prompt = rendered_master_prompt if self.is_api else compile_post_prompt(
                 rendered_master_prompt,
                 include_comments=bool(recent_posts),
                 slot=expected_slot,
@@ -701,7 +690,7 @@ class GhostBrain:
             )
             prompt = "\n\n---\n\n".join([*parts, compiled_master_prompt])
 
-        # ── Ollama JSON 호출 ──
+        # ── Provider JSON 호출 ──
         # 모델은 게시글 필드만 생성한다. 슬롯·페르소나·QC 메타데이터는
         # 호출자가 결정해 모델이 내부 지시를 본문으로 복사하지 않게 한다.
         _POST_SCHEMA = {
@@ -709,9 +698,11 @@ class GhostBrain:
             "properties": {
                 "title": {"type": "string"},
                 "content": {"type": "string"},
-                # Keep the grammar small enough for a 6GB GPU.  The application
-                # parser performs the detailed post_no/comment validation.
-                "target_comments": {"type": "array"},
+                # API schemas require the array item contract as well.
+                "target_comments": {"type": "array", "items": {
+                    "type": "object", "properties": {
+                        "post_no": {"type": "string"}, "comment": {"type": "string"}},
+                    "required": ["post_no", "comment"]}},
             },
             "required": ["title", "content", "target_comments"],
         }
@@ -719,7 +710,7 @@ class GhostBrain:
         # Korean 7B runs.  Keep native JSON mode as the default and retain the
         # detailed schema as an explicit opt-in; the application parser still
         # validates every returned field and target comment.
-        _post_schema = _POST_SCHEMA if _env_bool("LLM_JSON_SCHEMA_MODE") else None
+        _post_schema = _POST_SCHEMA if self.is_api or _env_bool("LLM_JSON_SCHEMA_MODE") else None
         try:
             response = self._generate_content_paced(
                 label="generate_post",
@@ -736,7 +727,7 @@ class GhostBrain:
             if self._is_rate_limit_error(e):
                 detail = self._describe_exception(e)
                 raise RateLimitError(
-                    f"로컬 Ollama 요청 제한 또는 일시 오류: {detail}"
+                    f"LLM 요청 제한 또는 일시 오류: {detail}"
                 ) from e
             raise  # 다른 에러는 그대로 상위로 전파
 
@@ -1459,7 +1450,7 @@ class GhostBrain:
         # 있다. 분석 전용 경량 계약은 원본 확인과 안전 경계를 유지하면서
         # 입력과 응답을 작게 제한한다. 7B 이상은 기존의 풍부한 분석 지시를
         # 유지하되, 어느 경로에서든 모델은 레이블 없는 topic_slots만 낸다.
-        use_compact_contract = _env_bool(
+        use_compact_contract = False if self.is_api else _env_bool(
             "LLM_TREND_COMPACT_MODE",
             default=not _model_prefers_full_prompt(
                 str(getattr(self, "model_name", MODEL_NAME) or MODEL_NAME)
@@ -1629,7 +1620,7 @@ class GhostBrain:
                 if self._is_rate_limit_error(e):
                     detail = self._describe_exception(e)
                     raise RateLimitError(
-                        f"로컬 Ollama 요청 제한 또는 일시 오류: {detail}"
+                        f"LLM 요청 제한 또는 일시 오류: {detail}"
                     ) from e
                 raise
 

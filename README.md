@@ -21,15 +21,17 @@ The project combines a Streamlit control surface, prompt assets, board collectio
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-Copy-Item .env.example .env
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 ```
 
-Configure the local Ollama runtime in `.env`. No API key or remote inference is used.
+2026-09-06부터 기본 추론은 기존 Gemini API 방식입니다. 로컬 `.env`에 키를 설정합니다.
+기존 키가 있으면 보존하며, 키를 저장소나 로그에 넣지 않습니다.
 
 ```dotenv
-OLLAMA_BASE_URL=http://127.0.0.1:11434
-OLLAMA_MODEL=qwen2.5:3b
-OLLAMA_FALLBACK_MODELS=qwen2.5:7b
+LLM_PROVIDER=gemini
+GEMINI_API_KEY=your-key
+GEMINI_MODEL_NAME=gemini-2.5-flash
+GEMINI_TIMEOUT_SEC=90
 ```
 
 Run the app.
@@ -38,6 +40,16 @@ Run the app.
 streamlit run app.py
 ```
 
+API 모드에서는 기존 `prompts/generate_post.txt` 전체와 선택 페르소나를 전달합니다.
+로컬용 카드·축약 프롬프트·compact 재생성은 사용하지 않습니다. API 호출은 원문 분석
+자료와 작문 지시를 Google에 전송합니다. 수집 보호·로컬 DB·검토 후 게시 흐름은 유지합니다.
+화면의 '설정됨'은 키 존재 확인이며 연결·할당량 검증 성공을 뜻하지 않습니다.
+일반 화면 재실행은 API를 호출하지 않습니다.
+
+API 오류에 따른 모델·업체 자동 전환은 없습니다. 과거 Ollama 어댑터는
+`LLM_PROVIDER=ollama`로 명시한 경우에만 사용되며 설치 파일은 보존합니다.
+가격과 후보: [API 모델 비교](docs/api-model-shortlist.md).
+
 ## Project Shape
 
 ```text
@@ -45,7 +57,7 @@ ghost_protocol/
   application/      # Workers, exports, observability, stability policy
   domain/           # Draft guidance, naturalness, validation, board rhythm
   ui/               # Streamlit view helpers and session state
-  brain.py          # Ollama/Qwen-facing orchestration
+  brain.py          # Gemini API orchestration / explicit provider contract
   scraper.py        # Board collection utilities
   poster.py         # Publishing workflow automation
 prompts/            # Prompt assets, personas, gallery profiles
@@ -74,7 +86,7 @@ Ghost Protocol keeps runtime-sensitive data out of source control. Do not commit
 
 The app also includes operational guardrails:
 
-- Ollama health, model availability, and local LLM usage diagnostics.
+- API configuration checks, request budgets, and actual token usage diagnostics.
 - Publish failure thresholds.
 - Infinite-run cycle caps.
 - Empty-source detection.

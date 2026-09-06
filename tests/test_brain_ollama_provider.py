@@ -64,6 +64,7 @@ def test_ghost_brain_injects_provider_and_keeps_public_methods(monkeypatch):
 
 
 def test_ghost_brain_default_provider_is_loopback_ollama(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "ollama")
     monkeypatch.setenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
     monkeypatch.setenv("OLLAMA_MODEL", "qwen2.5:3b")
     monkeypatch.setenv("OLLAMA_TIMEOUT_SEC", "90")

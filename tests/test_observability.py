@@ -226,7 +226,7 @@ class ObservabilityTest(unittest.TestCase):
             intel_result={},
         )
 
-        self.assertIn("## Local LLM Usage Comparison", text)
+        self.assertIn("## LLM Usage Comparison", text)
         self.assertIn("Baseline", text)
 
     def test_ops_markdown_includes_actor_summary(self):

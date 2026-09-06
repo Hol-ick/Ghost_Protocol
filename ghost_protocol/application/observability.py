@@ -488,7 +488,7 @@ def format_ops_markdown(
             f"{int(actor_summary.get('skipped_comment_count') or 0)} comments skipped"
         ),
         (
-            "- Local LLM: "
+            "- LLM: "
             f"{llm_usage_snapshot['physical_calls']}"
             f"/{llm_usage_snapshot['max_calls_per_run'] or '∞'} calls · "
             f"labels {llm_usage_snapshot['by_label'] or {}} · "
@@ -509,12 +509,12 @@ def format_ops_markdown(
         for item in diagnostics:
             lines.append(f"- [{item['severity']}] {item['title']} — {item['action']}")
     else:
-        lines.append("- No critical local LLM/Ollama diagnostic detected.")
+        lines.append("- No critical LLM diagnostic detected in recorded logs.")
 
     if stability_markdown:
         lines.extend(["", stability_markdown.strip()])
 
-    lines.extend(["", "## Local LLM Usage Comparison"])
+    lines.extend(["", "## LLM Usage Comparison"])
     if llm_comparison.get("has_baseline"):
         def _fmt_number(value: object, *, digits: int = 1) -> str:
             try:
