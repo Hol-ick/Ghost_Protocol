@@ -234,3 +234,22 @@ def test_generation_uses_collected_board_opinion_packet(tmp_path):
     assert '원본 글: 달의 명암 경계가 보인다' in captured[0]
     assert '원본 댓글: 경계가 선명하네' in captured[0]
     assert '달의 명암 관찰' in captured[0]
+
+
+def test_job_timeline_keeps_workspace_actions_and_next_stage(tmp_path):
+    studio = StudioService(tmp_path, FakeBackend())
+    work = studio.create_workspace('실행 이력', 'universe')
+    job = studio.start(work['id'], 'collect', {})
+    studio.wait(job)
+
+    assert studio.job(job)['next_stage'] == 'analysis'
+    assert studio.job_timeline(work['id'])[0]['id'] == job
+
+
+def test_analysis_job_stays_on_analysis_until_operator_confirms(tmp_path):
+    studio, wid = prepared(tmp_path, FakeBackend())
+    job = studio.start(wid, 'analyze', {})
+    studio.wait(job)
+
+    assert studio.job(job)['status'] == 'done'
+    assert studio.job(job)['next_stage'] == 'analysis'

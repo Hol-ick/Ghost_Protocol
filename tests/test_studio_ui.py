@@ -1,5 +1,6 @@
 import pytest
 from streamlit.testing.v1 import AppTest
+from ghost_protocol.studio.ui import active_stage, job_record_rows
 
 
 @pytest.fixture
@@ -164,3 +165,24 @@ def test_lab_missing_source_link_opens_the_correct_work(app):
     app.radio(key='studio_view').set_value('실험실').run()
     assert not app.exception
     assert app.radio(key='studio_view').value=='실험실'
+
+
+def test_active_stage_keeps_the_explicit_transition_for_current_work():
+    work = {'source': {'source_kind':'board_collection', 'source_access': {'status': 'ok'}, 'titles': ['자료']},
+            'analysis': {'summary': '분석', 'confirmed': True}, 'drafts': []}
+    assert active_stage(work, {'studio_stage_focus_demo': 'draft'}, 'demo') == 'draft'
+
+
+def test_active_stage_discards_stale_source_focus_after_collection():
+    work = {'source': {'source_kind':'board_collection', 'source_access': {'status': 'ok'}, 'titles': ['자료']},
+            'analysis': {}, 'drafts': []}
+    state = {'studio_stage_focus_demo': 'source'}
+
+    assert active_stage(work, state, 'demo') == 'analysis'
+    assert 'studio_stage_focus_demo' not in state
+
+
+def test_job_record_rows_keep_status_duration_error_and_log_count():
+    row = job_record_rows([{'id':'a','action':'collect','status':'done','seconds':2.1,
+                            'error':'','logs':[{}, {}], 'progress':1,'total':1}])[0]
+    assert row == {'실행':'collect','상태':'done','진행':'1/1','시간':'2.1초','로그':2,'오류':''}

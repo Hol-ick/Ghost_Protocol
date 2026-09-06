@@ -68,6 +68,9 @@ def launch(service, work, action, payload):
     job = run_action(lambda:service.start(work['id'],action,payload))
     if job:
         st.session_state['studio_job'] = job
+        st.session_state['studio_stage_focus_'+work['id']] = {
+            'collect': 'source', 'analyze': 'analysis', 'generate': 'draft', 'compare': 'draft',
+        }.get(action, 'source')
         st.rerun()
 
 
@@ -90,26 +93,64 @@ def collection_error_dialog(diagnostic, job):
     st.code('\n'.join(lines) if lines else (job or {}).get('error') or '진행 로그 없음', language=None)
 
 
+def job_record_rows(jobs):
+    return [
+        {
+            '실행': job.get('action',''),
+            '상태': job.get('status',''),
+            '진행': f"{job.get('progress',0)}/{job.get('total',0)}",
+            '시간': f"{float(job.get('seconds') or 0):.1f}초" if job.get('seconds') is not None else '진행 중',
+            '로그': len(job.get('logs') or []),
+            '오류': str(job.get('error') or ''),
+        }
+        for job in jobs
+    ]
+
+
+def active_stage(work, state, workspace_id):
+    ready = resume_step(work)
+    focused = state.get('studio_stage_focus_'+workspace_id)
+    # A Streamlit session can outlive a completed background job.  Never let a
+    # stale focus value send the operator back to an earlier card.
+    if focused == ready:
+        return focused
+    state.pop('studio_stage_focus_'+workspace_id, None)
+    return ready
+
+
+def render_live_job(service, workspace_id):
+    job = service.busy()
+    if not job or job.get('workspace_id') != workspace_id:
+        return
+    st.progress(job['progress']/max(1,job['total']), text=f"{job['action']} · {job['progress']}/{job['total']} 진행 중")
+    with st.container(height=240, border=True):
+        st.code('\n'.join(collection_job_log_lines(job)[-60:]) or '작업을 시작했습니다.', language=None)
+    if st.button('현재 작업 중단', key='studio_cancel',help='현재 요청이 끝난 뒤 중단'):
+        service.cancel(job['id'])
+        st.info('중단 요청됨')
+
+
 @st.fragment(run_every=2)
-def progress(service):
+def progress(service, workspace_id):
     job = service.busy()
     if job:
-        st.progress(job['progress']/max(1,job['total']), text=f"{job['action']} · {job['progress']}/{job['total']} 진행 중")
-        if st.button('현재 작업 중단', key='studio_cancel',help='현재 요청이 끝난 뒤 중단'):
-            service.cancel(job['id'])
-            st.info('중단 요청됨')
+        render_live_job(service, workspace_id)
         st.session_state['studio_job'] = job['id']
     elif st.session_state.get('studio_job'):
         finished = service.job(st.session_state.pop('studio_job'))
         if finished:
+            if finished.get('next_stage'):
+                st.session_state['studio_stage_focus_'+finished['workspace_id']] = finished['next_stage']
             if finished['status']=='done':
                 st.session_state['studio_notice'] = '작업 완료'
             elif finished.get('action') == 'collect':
                 st.session_state['studio_notice'] = '수집 중단 · 수집 카드의 접근 진단을 확인하세요.'
             else:
                 st.session_state['studio_error'] = finished.get('error') or '작업 중단'
-            st.session_state.pop('studio_step',None)
-            st.rerun()
+            # The status fragment is the only component rerun on its timer.
+            # Promote the finished job to a full rerun so the next work card
+            # appears immediately instead of leaving the old source card open.
+            st.rerun(scope='app')
 
 
 def new_work_form(service, *, cancel=False):
@@ -224,7 +265,7 @@ def analysis_page(service, work):
                     st.write(a['generation_guidance'])
                 def confirm():
                     if run_action(lambda:(service.confirm_analysis(work['id']),True)[1]):
-                        return
+                        st.session_state['studio_stage_focus_'+work['id']] = 'draft'
                 st.button('분석 확인 · 원고 제작으로',type='primary',disabled=bool(service.busy()),on_click=confirm)
         if st.button('자료 분석' if not a else '분석 다시 실행',disabled=bool(service.busy())):
             launch(service,work,'analyze',{})
@@ -378,12 +419,12 @@ def flow_summary(stage, work):
     return f"승인 {sum(is_approved(d) for d in drafts)}개"
 
 
-def workbench(service):
-    work = choose_work(service)
+def workbench(service, work=None):
+    work = work or choose_work(service)
     if not work:
         return
     st.markdown(f'<div class="studio-context"><span>게시판 <strong>{esc(work["gallery"])}</strong></span><span>모델 <strong>{esc(service.settings()["model"])}</strong></span><span>비용 <strong>{money(service.calls(work["id"]))}</strong></span></div>',unsafe_allow_html=True)
-    ready = resume_step(work)
+    ready = active_stage(work, st.session_state, work['id'])
     renderers = {'source':source_page,'analysis':analysis_page,'draft':draft_controls,'review':review_page,'approval':approval_page}
     active_index = next(index for index, (stage, _) in enumerate(FLOW) if stage == ready)
     for index, (stage, label) in enumerate(FLOW[:active_index + 1], start=1):
@@ -478,12 +519,14 @@ def history(service):
     jobs = service.jobs()
     if not jobs:
         empty('실행 기록 없음')
+    else:
+        st.subheader('실행 이력')
+        st.dataframe(job_record_rows(jobs), hide_index=True, width='stretch')
     for j in jobs[:30]:
-        with st.expander(f"{j['created']} · {j['action']} · {j['status']} · {j['progress']}/{j['total']}"):
+        with st.expander(f"{j['created']} · {j['action']} · {j['status']} · 로그 {len(j.get('logs') or [])}"):
             if j.get('error'):
                 st.error(j['error'])
-            for log in j['logs']:
-                st.text(log['at']+' '+log['message'])
+            st.code('\n'.join(collection_job_log_lines(j)) or '기록된 로그 없음', language=None)
     with st.expander('호출별 사용량·실제 전달 프롬프트'):
         for i,call in enumerate(calls[:50]):
             with st.expander(f"{i+1} · {call['model']} · {call['seconds']}초 · ${call.get('cost_usd') or '미확인'}"):
@@ -529,8 +572,10 @@ def render_studio():
         st.toast(notice)
     if error := st.session_state.pop('studio_error',None):
         st.error(error)
-    progress(service)
     if view=='작업실':
-        workbench(service)
+        selected_work = choose_work(service)
+        if selected_work:
+            progress(service, selected_work['id'])
+            workbench(service, selected_work)
     else:
         {'페르소나·규칙':personas,'실험실':lab,'운영 기록':history,'설정':settings_page}[view](service)

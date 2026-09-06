@@ -74,6 +74,10 @@ class StudioService:
     def jobs(self):
         return self.store.list('job')
 
+    def job_timeline(self, workspace_id):
+        """Return the durable execution history for one Studio workspace."""
+        return [job for job in self.jobs() if job.get('workspace_id') == workspace_id]
+
     def job(self, id):
         return self.store.get('job', id)
 
@@ -166,7 +170,7 @@ class StudioService:
             payload['pages'] = max(1,min(3,int(payload.get('pages',settings['pages']))))
             job = {'id':uuid4().hex, 'workspace_id':id, 'action':action, 'status':'queued',
                    'progress':0, 'total':payload['count']*(2 if action=='compare' else 1) if action in ('generate','compare') else 1,
-                   'created':now(), 'logs':[], 'error':''}
+                   'created':now(), 'logs':[], 'error':'', 'next_stage':''}
             self.store.put('job', job['id'], job)
             self._cancel[job['id']] = threading.Event()
             thread = threading.Thread(target=self._run, args=(job, work, payload, settings), daemon=True)
@@ -244,6 +248,14 @@ class StudioService:
             job['status'] = 'cancelled' if event.is_set() else 'done'
             if job['status']=='done':
                 job['progress'] = job['total']
+                job['next_stage'] = {
+                    'collect': 'analysis',
+                    # Analysis remains visible until the operator explicitly
+                    # confirms it; jumping straight to draft hides that gate.
+                    'analyze': 'analysis',
+                    'generate': 'review',
+                    'compare': 'review',
+                }.get(job['action'], '')
         except Exception as exc:
             job['status'] = 'failed'
             job['error'] = str(exc)[:400] if isinstance(exc, ValueError) else f'{type(exc).__name__} — 연결/키/할당량을 확인하세요. 자동 재시도하지 않습니다.'
