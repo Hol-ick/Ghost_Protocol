@@ -13,6 +13,7 @@ from datetime import datetime
 import json
 from pathlib import Path
 import random
+import re
 import threading
 import time
 from typing import Protocol
@@ -29,6 +30,7 @@ class BoardReadResponse:
     body: str
     url: str
     error: str = ""
+    detail: str = ""
     blocked: bool = False
     reason: str = ""
 
@@ -121,9 +123,22 @@ class PlaywrightBoardTransport:
         page = self._ensure_page()
         try:
             response = page.goto(url, wait_until="domcontentloaded", timeout=self._timeout_ms)
+            if response is None:
+                final_path = urlsplit(str(page.url or url)).path or "/"
+                try:
+                    rendered_bytes = len(page.content().encode("utf-8", errors="replace"))
+                except Exception:
+                    rendered_bytes = 0
+                return BoardReadResponse(
+                    status=0,
+                    body="",
+                    url=page.url or url,
+                    error="navigation_response_missing",
+                    detail=f"final_path={final_path} | rendered_bytes={rendered_bytes}",
+                )
             raw_body = response.text() if response else ""
             return BoardReadResponse(
-                status=int(response.status) if response else 0,
+                status=int(response.status),
                 # ``page.content()`` fabricates an empty html/body shell even
                 # for an empty HTTP 200.  Preserve the actual response body so
                 # the guard can stop on the white-page condition.
@@ -131,7 +146,13 @@ class PlaywrightBoardTransport:
                 url=page.url or url,
             )
         except Exception as exc:  # browser-specific errors become diagnostics at the guarded seam
-            return BoardReadResponse(status=0, body="", url=url, error=str(exc)[:240])
+            return BoardReadResponse(
+                status=0,
+                body="",
+                url=page.url or url,
+                error="navigation_exception",
+                detail=f"{type(exc).__name__}: {str(exc)[:200]}",
+            )
 
     def post_form(
         self,
@@ -168,7 +189,13 @@ class PlaywrightBoardTransport:
                 url=str(result.get("url") or url),
             )
         except Exception as exc:  # browser-specific errors become diagnostics at the guarded seam
-            return BoardReadResponse(status=0, body="", url=url, error=str(exc)[:240])
+            return BoardReadResponse(
+                status=0,
+                body="",
+                url=page.url or url,
+                error="comment_request_exception",
+                detail=f"{type(exc).__name__}: {str(exc)[:200]}",
+            )
 
     def close(self) -> None:
         try:
@@ -241,6 +268,13 @@ class GuardedBoardAccess:
         parsed = urlsplit(str(url or ""))
         return parsed.path or "/"
 
+    @staticmethod
+    def _safe_detail(value: object) -> str:
+        """Keep error names while removing URLs, query strings, and line breaks."""
+        text = str(value or "").replace("\r", " ").replace("\n", " ")
+        text = re.sub(r"https?://[^\s'\"]+", "[url]", text)
+        return text[:240]
+
     def _append_event(
         self,
         *,
@@ -260,6 +294,7 @@ class GuardedBoardAccess:
             "bytes": response.byte_count,
             "path": self._path_only(response.url),
             "reason": str(reason or response.reason or "")[:120],
+            "detail": self._safe_detail(response.detail or response.error),
         }
         self._events.append(event)
         try:
@@ -313,21 +348,37 @@ class GuardedBoardAccess:
             self.stop("request_budget_exhausted", kind=kind)
             return BoardReadResponse(status=0, body="", url=url, blocked=True, reason=self._reason)
 
-        self._wait_for_global_slot()
-        self._request_count += 1
-        try:
-            if method == "GET":
-                response = self._transport.get_html(url)
-            else:
-                response = self._transport.post_form(url, payload or {}, headers or {})
-        except Exception as exc:  # a transport fault must still close the source read unit
-            response = BoardReadResponse(
-                status=0,
-                body="",
-                url=url,
-                error=str(exc)[:240],
-            )
+        def request_once() -> BoardReadResponse:
+            self._wait_for_global_slot()
+            self._request_count += 1
+            try:
+                if method == "GET":
+                    return self._transport.get_html(url)
+                return self._transport.post_form(url, payload or {}, headers or {})
+            except Exception as exc:  # a transport fault must still close the source read unit
+                return BoardReadResponse(
+                    status=0,
+                    body="",
+                    url=url,
+                    error="transport_exception",
+                    detail=f"{type(exc).__name__}: {str(exc)[:200]}",
+                )
+
+        response = request_once()
         reason = self._classify(response)
+        if (
+            method == "GET"
+            and response.error == "navigation_response_missing"
+            and self._request_count < self._request_budget
+        ):
+            self._append_event(
+                method=method,
+                kind=kind,
+                response=response,
+                reason="navigation_response_missing_retry",
+            )
+            response = request_once()
+            reason = self._classify(response)
         self._append_event(method=method, kind=kind, response=response, reason=reason)
         if reason:
             self._status = "blocked"

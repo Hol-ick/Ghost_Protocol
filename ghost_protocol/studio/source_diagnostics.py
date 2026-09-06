@@ -7,11 +7,10 @@ from urllib.parse import urlsplit
 
 _REASON_MEANINGS = {
     'http_0': (
-        'HTTP 상태를 받기 전에 요청이 끝났습니다. 브라우저 또는 전송 연결 문제, '
-        '응답 이전 차단 등 여러 경우가 가능하므로 이 코드만으로 차단을 확정하지 않습니다.'
+        '목록 요청이 HTTP 응답 없이 종료되었습니다. 원장의 상세 값에서 navigation 또는 전송 오류를 확인하세요.'
     ),
     'transport_error': (
-        '브라우저 또는 전송 계층에서 오류가 발생했습니다. HTTP 응답을 정상 수신하지 못한 상태입니다.'
+        '브라우저 navigation 또는 전송 계층에서 오류가 발생했습니다. 원장의 상세 값에 실패 코드와 상태를 기록했습니다.'
     ),
     'empty_body': (
         '응답은 도착했지만 본문이 비어 있습니다. 수집기는 빈 화면을 정상 자료로 해석하지 않고 중단했습니다.'
@@ -22,6 +21,14 @@ _REASON_MEANINGS = {
     'request_budget_exhausted': (
         '이번 수집의 요청 예산에 도달했습니다. 추가 요청 없이 수집을 중단했습니다.'
     ),
+}
+
+_REASON_HEADLINES = {
+    'http_0': '목록 응답 없음',
+    'transport_error': '브라우저 요청 오류',
+    'empty_body': '빈 응답',
+    'blocked_marker': '차단 표식 감지',
+    'request_budget_exhausted': '요청 예산 소진',
 }
 
 
@@ -61,12 +68,14 @@ def collection_access_diagnostic(report: dict | None) -> dict[str, object]:
                 '본문': f"{max(0, int(event.get('bytes') or 0))} B",
                 '경로': _safe_path(event.get('path')),
                 '판정': _text(event.get('reason'), fallback='정상'),
+                '상세': _text(event.get('detail'), fallback='—'),
             }
         )
     request_count = max(0, int(source.get('request_count') or 0))
     request_budget = max(0, int(source.get('request_budget') or 0))
     return {
         'reason': reason,
+        'headline': _REASON_HEADLINES.get(reason, reason),
         'status': _text(source.get('status'), fallback='unknown'),
         'purpose': _text(source.get('purpose'), fallback='studio_read'),
         'meaning': _reason_meaning(reason),

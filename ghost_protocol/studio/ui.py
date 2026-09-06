@@ -55,6 +55,25 @@ def launch(service, work, action, payload):
         st.rerun()
 
 
+@st.dialog('수집 오류 상세', width='large')
+def collection_error_dialog(diagnostic, job):
+    st.write(diagnostic['meaning'])
+    a, b, c = st.columns(3)
+    a.metric('수집 상태', diagnostic['status'])
+    b.metric('요청', diagnostic['request_label'])
+    c.metric('목적', diagnostic['purpose'])
+    st.subheader('요청 원장')
+    events = diagnostic['events']
+    if events:
+        st.dataframe(events, hide_index=True, width='stretch')
+        st.code(json.dumps(events, ensure_ascii=False, indent=2), language='json')
+    else:
+        st.info('수집기 시작 전 오류입니다. 아래 진행 로그를 확인하세요.')
+    st.subheader('수집 진행 로그')
+    lines = collection_job_log_lines(job)
+    st.code('\n'.join(lines) if lines else (job or {}).get('error') or '진행 로그 없음', language=None)
+
+
 @st.fragment(run_every=2)
 def progress(service):
     job = service.busy()
@@ -137,40 +156,26 @@ def source_page(service, work):
     failed_collection = bool(last_collection_job and last_collection_job.get('status') == 'failed')
     if raw and not collected and not access_reason:
         st.info('이전 원고 작업입니다. 새 수집부터 시작하세요.')
-    if access_reason or failed_collection:
-        diagnostic = collection_access_diagnostic(access_report)
-        st.error('수집 중단 · ' + diagnostic['reason'] + ' — 원본 확인 전 분석하지 않습니다.')
-        st.caption(diagnostic['meaning'])
-        status, requests, purpose = st.columns(3)
-        status.metric('수집 상태', diagnostic['status'])
-        requests.metric('요청', diagnostic['request_label'])
-        purpose.metric('목적', diagnostic['purpose'])
-        with st.expander('접근 진단', expanded=True):
-            st.caption('안전 원장: logs/source_access.jsonl · URL 쿼리, 응답 본문, 쿠키, 세션은 기록하지 않습니다.')
-            events = diagnostic['events']
-            if events:
-                st.dataframe(events, hide_index=True, width='stretch')
-                st.caption('원장 전체 필드')
-                st.code(json.dumps(events, ensure_ascii=False, indent=2), language='json')
-            else:
-                st.info('접근 원장 이벤트가 없습니다. 수집기 시작 전 오류일 수 있으니 진행 로그를 확인하세요.')
-        log_lines = collection_job_log_lines(last_collection_job)
-        with st.expander('수집 진행 로그', expanded=True):
-            if log_lines:
-                st.code('\n'.join(log_lines), language=None)
-            else:
-                st.code((last_collection_job or {}).get('error') or '진행 로그 없음', language=None)
     with st.container(border=True):
         pages = st.number_input('목록 페이지',1,3,service.settings()['pages'])
-        label = '다시 수집' if collected else '수집 시작'
-        if st.button(label,type='primary',disabled=bool(service.busy())):
+        failed = bool(access_reason or failed_collection)
+        label = '다시 수집' if collected or failed else '수집 시작'
+        action, details = st.columns([1, 1])
+        if action.button(label,type='primary',disabled=bool(service.busy()),width='stretch'):
             launch(service,work,'collect',{'pages':pages})
+        if failed:
+            diagnostic = collection_access_diagnostic(access_report)
+            if details.button('오류 상세', width='stretch'):
+                collection_error_dialog(diagnostic, last_collection_job)
+            st.error('수집 실패 · ' + diagnostic['headline'])
+        elif not collected:
+            st.info('수집 대기')
     if collected:
         st.caption(f"글 {len(raw.get('titles', []))} · 댓글 {len(raw.get('comments', []))} · 수집 결과만 분석에 사용")
         with st.expander('수집 결과'):
             st.json({'titles':raw.get('titles', []), 'comments':raw.get('comments', []),
                      'raw_posts':raw.get('raw_posts', [])})
-    elif raw:
+    elif raw and not (access_reason or failed_collection):
         with st.expander('수집 원본 로그'):
             st.json(raw)
 

@@ -97,3 +97,55 @@ def test_transport_exception_stops_access_and_preserves_diagnostic(tmp_path) -> 
     assert response.reason == "transport_error"
     assert access.report()["reason"] == "transport_error"
     assert access.report()["request_count"] == 1
+
+
+def test_missing_navigation_response_retries_once_and_records_each_attempt(tmp_path) -> None:
+    transport = _FakeTransport(
+        [
+            BoardReadResponse(
+                status=0,
+                body="",
+                url="https://example.test/list?private=1",
+                error="navigation_response_missing",
+                detail="final_path=/list | rendered_bytes=0",
+            ),
+            BoardReadResponse(status=200, body="<html>ok</html>", url="https://example.test/list"),
+        ]
+    )
+    access = GuardedBoardAccess(
+        transport=transport,
+        purpose="test",
+        request_budget=3,
+        min_interval_seconds=0,
+        ledger_path=tmp_path / "source_access.jsonl",
+    )
+
+    response = access.get_html("https://example.test/list?private=1", kind="list")
+
+    assert response.status == 200
+    assert not response.blocked
+    assert access.report()["request_count"] == 2
+    assert len(transport.calls) == 2
+    first, second = access.report()["events"]
+    assert first["reason"] == "navigation_response_missing_retry"
+    assert first["detail"] == "final_path=/list | rendered_bytes=0"
+    assert first["path"] == "/list"
+    assert second["reason"] == ""
+
+
+def test_event_detail_strips_exception_url_and_query(tmp_path) -> None:
+    transport = _FakeTransport(
+        [BoardReadResponse(status=0, body="", url="https://example.test/list?private=1", error="navigation_exception", detail="Timeout at https://example.test/list?private=1")]
+    )
+    access = GuardedBoardAccess(
+        transport=transport,
+        purpose="test",
+        min_interval_seconds=0,
+        ledger_path=tmp_path / "source_access.jsonl",
+    )
+
+    access.get_html("https://example.test/list?private=1", kind="list")
+
+    event = access.report()["events"][0]
+    assert event["detail"] == "Timeout at [url]"
+    assert "private" not in (tmp_path / "source_access.jsonl").read_text(encoding="utf-8")

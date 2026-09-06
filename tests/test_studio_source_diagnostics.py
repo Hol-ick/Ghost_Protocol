@@ -22,12 +22,14 @@ def test_http_zero_has_non_blocking_interpretation_and_safe_rows():
                     'bytes': 0,
                     'path': '/board/lists/?id=universe&no=private',
                     'reason': 'http_0',
+                    'detail': 'navigation_response_missing | final_path=/board/lists/ | rendered_bytes=0',
                 }
             ],
         }
     )
 
-    assert '차단을 확정' in diagnostic['meaning']
+    assert diagnostic['headline'] == '목록 응답 없음'
+    assert 'HTTP 응답 없이 종료' in diagnostic['meaning']
     assert diagnostic['request_label'] == '1 / 20 요청'
     assert diagnostic['events'] == [
         {
@@ -38,6 +40,7 @@ def test_http_zero_has_non_blocking_interpretation_and_safe_rows():
             '본문': '0 B',
             '경로': '/board/lists/',
             '판정': 'http_0',
+            '상세': 'navigation_response_missing | final_path=/board/lists/ | rendered_bytes=0',
         }
     ]
 
@@ -47,7 +50,7 @@ def test_known_stop_reasons_are_explained_and_job_logs_keep_time_order():
     transport = collection_access_diagnostic({'reason': 'transport_error', 'events': []})
 
     assert '본문이 비어' in empty['meaning']
-    assert '브라우저 또는 전송 계층' in transport['meaning']
+    assert '브라우저 navigation 또는 전송 계층' in transport['meaning']
     assert collection_job_log_lines(
         {
             'logs': [
